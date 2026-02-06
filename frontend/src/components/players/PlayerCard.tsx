@@ -73,7 +73,7 @@ export function PlayerCard({ player, onClick }: PlayerCardProps) {
       </div>
 
       {/* Info overlaid at bottom */}
-      <CardBody className="px-4 pb-4 pt-0 -mt-8 relative z-10">
+      <CardBody className="px-3 pb-3 pt-0 -mt-6 relative z-10">
         <h3 className="text-sm font-medium text-foreground truncate">
           {player.name}
         </h3>

@@ -46,9 +46,9 @@ export default function TeamsPage() {
   }
 
   return (
-    <div className="space-y-6">
+    <div className="space-y-4">
       <div>
-        <h1 className="text-lg font-light text-foreground">Teams</h1>
+        <h1 className="text-xl font-light text-foreground">Teams</h1>
         <p className="text-xs text-muted-foreground mt-0.5">
           Players grouped by team
         </p>
@@ -56,7 +56,7 @@ export default function TeamsPage() {
 
       {teamGroups.map(([teamName, members]) => (
         <div key={teamName}>
-          <div className="flex items-center gap-2 mb-3">
+          <div className="flex items-center gap-2 mb-2">
             <Users className="w-4 h-4 text-[#9B7B5B]" />
             <h2 className="text-sm font-medium text-foreground">{teamName}</h2>
             <span className="text-xs text-muted-foreground">
@@ -64,7 +64,7 @@ export default function TeamsPage() {
             </span>
           </div>
 
-          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3">
+          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-2">
             {members.map((player) => (
               <Link
                 key={player.id}
@@ -105,7 +105,7 @@ export default function TeamsPage() {
           </div>
 
           {/* Team aggregate */}
-          <div className="mt-2 flex items-center gap-4 text-xs text-muted-foreground">
+          <div className="mt-1.5 flex items-center gap-3 text-xs text-muted-foreground">
             <span>
               Total games:{" "}
               {members.reduce((sum, p) => sum + (p.game_count ?? 0), 0)}

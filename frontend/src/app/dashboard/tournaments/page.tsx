@@ -151,11 +151,11 @@ export default function TournamentsPage() {
   }
 
   return (
-    <div className="space-y-6">
+    <div className="space-y-4">
       {/* Header */}
-      <div className="flex items-center justify-between">
+      <div className="flex items-center justify-between gap-4">
         <div>
-          <h1 className="text-lg font-light text-foreground">Tournaments</h1>
+          <h1 className="text-xl font-light text-foreground">Tournaments</h1>
           <p className="text-xs text-muted-foreground mt-0.5">Track events, matchups, and results</p>
         </div>
         <div className="flex items-center gap-2">
@@ -179,8 +179,8 @@ export default function TournamentsPage() {
 
       {/* Stats Bar */}
       {stats && (
-        <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
-          <div className="rounded-xl bg-card border border-border p-3.5">
+        <div className="grid grid-cols-2 sm:grid-cols-4 gap-2">
+          <div className="rounded-xl bg-card border border-border p-3">
             <div className="flex items-center gap-2 mb-1.5">
               <Trophy className="w-3.5 h-3.5 text-[#9B7B5B]" />
               <span className="text-[10px] text-muted-foreground uppercase tracking-wider">Tournaments</span>
@@ -190,7 +190,7 @@ export default function TournamentsPage() {
               {stats.upcoming_tournaments} upcoming
             </p>
           </div>
-          <div className="rounded-xl bg-card border border-border p-3.5">
+          <div className="rounded-xl bg-card border border-border p-3">
             <div className="flex items-center gap-2 mb-1.5">
               <Swords className="w-3.5 h-3.5 text-[#9B7B5B]" />
               <span className="text-[10px] text-muted-foreground uppercase tracking-wider">Matches</span>
@@ -200,7 +200,7 @@ export default function TournamentsPage() {
               {stats.pending_matchups} pending
             </p>
           </div>
-          <div className="rounded-xl bg-card border border-border p-3.5">
+          <div className="rounded-xl bg-card border border-border p-3">
             <div className="flex items-center gap-2 mb-1.5">
               <TrendingUp className="w-3.5 h-3.5 text-green-400" />
               <span className="text-[10px] text-muted-foreground uppercase tracking-wider">Win Rate</span>
@@ -210,7 +210,7 @@ export default function TournamentsPage() {
               {stats.wins}W – {stats.losses}L
             </p>
           </div>
-          <div className="rounded-xl bg-card border border-border p-3.5">
+          <div className="rounded-xl bg-card border border-border p-3">
             <div className="flex items-center gap-2 mb-1.5">
               <Clock className="w-3.5 h-3.5 text-blue-400" />
               <span className="text-[10px] text-muted-foreground uppercase tracking-wider">Next Up</span>
@@ -226,7 +226,7 @@ export default function TournamentsPage() {
       )}
 
       {/* Tabs + Search */}
-      <div className="flex items-center gap-4">
+      <div className="flex items-center gap-3">
         <div className="flex items-center bg-card rounded-lg border border-border p-0.5">
           {(
             [
@@ -268,8 +268,8 @@ export default function TournamentsPage() {
           <Loader2 className="w-8 h-8 text-[#9B7B5B] animate-spin" />
         </div>
       ) : !filteredTournaments.length ? (
-        <div className="flex flex-col items-center justify-center py-16">
-          <div className="w-16 h-16 rounded-2xl bg-card flex items-center justify-center mb-4">
+        <div className="flex flex-col items-center justify-center py-12">
+          <div className="w-14 h-14 rounded-xl bg-card flex items-center justify-center mb-3">
             <Trophy className="w-8 h-8 text-[#9B7B5B]/40" />
           </div>
           <h3 className="text-base font-light text-foreground mb-1">
@@ -291,7 +291,7 @@ export default function TournamentsPage() {
           )}
         </div>
       ) : (
-        <div className="space-y-2">
+        <div className="space-y-1.5">
           {filteredTournaments.map((tournament, i) => (
             <motion.div
               key={tournament.id}
@@ -299,7 +299,7 @@ export default function TournamentsPage() {
               animate={{ opacity: 1, y: 0 }}
               transition={{ delay: i * 0.03 }}
               onClick={() => setSelectedTournament(tournament)}
-              className="rounded-xl bg-card border border-border hover:border-primary/30 p-4 cursor-pointer transition-all group"
+              className="rounded-xl bg-card border border-border hover:border-primary/30 p-3 cursor-pointer transition-all group"
             >
               <div className="flex items-center justify-between">
                 <div className="min-w-0 flex-1">

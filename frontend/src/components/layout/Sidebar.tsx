@@ -45,7 +45,7 @@ export function Sidebar({ isOpen, collapsed, onClose, onToggleCollapse }: Sideba
         )}
       >
         {/* Nav items */}
-        <nav className={cn("flex-1 space-y-1", collapsed ? "p-2" : "p-3")}>
+        <nav className={cn("flex-1 space-y-0.5", collapsed ? "p-2" : "p-2.5")}>
           {navigation.map((item) => {
             const isActive =
               item.href === "/dashboard"

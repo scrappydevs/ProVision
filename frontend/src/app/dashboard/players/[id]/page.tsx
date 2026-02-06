@@ -221,7 +221,7 @@ export default function PlayerProfilePage() {
   const ittfData = player.ittf_data;
 
   return (
-    <div className="-m-6 h-[calc(100vh-4rem)] relative overflow-hidden player-profile">
+    <div className="-m-4 md:-m-5 h-[calc(100vh-4rem)] relative overflow-hidden player-profile">
       {/* Full-bleed avatar background */}
       <div className="absolute inset-0">
         {player.avatar_url ? (
@@ -239,7 +239,7 @@ export default function PlayerProfilePage() {
       {/* Content overlay */}
       <div className="relative h-full flex flex-col">
         {/* Top nav bar */}
-        <div className="flex items-center justify-between px-8 pt-5">
+        <div className="flex items-center justify-between px-6 md:px-8 pt-4">
           <button
             className="flex items-center gap-1.5 text-sm text-foreground/80 dark:text-foreground/60 hover:text-foreground transition-colors"
             onClick={() => router.push("/dashboard")}
@@ -251,7 +251,7 @@ export default function PlayerProfilePage() {
         </div>
 
         {/* Center: large name overlay */}
-        <div className="flex-1 flex items-center px-8">
+        <div className="flex-1 flex items-center px-6 md:px-8">
           <div>
             <p className="text-sm text-foreground/70 dark:text-foreground/50 mb-1">{player.position || "Player"}</p>
             <h1 className="text-5xl md:text-7xl font-light text-foreground tracking-tight leading-[1.05]">
@@ -289,7 +289,7 @@ export default function PlayerProfilePage() {
         </div>
 
         {/* Bottom-left: floating glass stats card */}
-        <Card isBlurred className="player-stats-card absolute bottom-8 left-8 bg-content1/40 backdrop-blur-2xl min-w-[340px]">
+        <Card isBlurred className="player-stats-card absolute bottom-6 left-6 md:bottom-8 md:left-8 bg-content1/40 backdrop-blur-2xl min-w-[300px] md:min-w-[340px]">
           <div className="flex items-center gap-4">
             <div className="text-center">
               <span className="text-2xl font-light text-foreground">{gameCount}</span>
@@ -327,7 +327,7 @@ export default function PlayerProfilePage() {
 
         {/* ITTF Recent Matches - below stats card */}
         {ittfData?.recent_matches && ittfData.recent_matches.length > 0 && (
-          <div className="absolute bottom-28 left-8 z-20 min-w-[340px] max-w-[420px]">
+          <div className="absolute bottom-24 left-6 md:bottom-28 md:left-8 z-20 min-w-[280px] md:min-w-[340px] max-w-[420px]">
             <div className="bg-white/[0.07] dark:bg-white/[0.05] backdrop-blur-md rounded-2xl p-4 shadow-[0_2px_12px_rgba(0,0,0,0.08)]">
               <div className="flex items-center gap-2 mb-3">
                 <Globe className="w-3.5 h-3.5 text-primary/70" />
@@ -370,9 +370,9 @@ export default function PlayerProfilePage() {
         )}
 
         {/* Right: recordings — inline, no container panel, individual glass cards */}
-        <div className="absolute right-8 top-1/3 bottom-8 w-80 flex flex-col z-20">
+        <div className="absolute right-6 md:right-8 top-1/3 bottom-6 md:bottom-8 w-72 md:w-80 flex flex-col z-20">
           {/* Header — inline, no background */}
-          <div className="flex items-center justify-between mb-4">
+          <div className="flex items-center justify-between mb-3">
             <div className="flex items-center gap-2">
               <span className="text-sm font-medium text-foreground/80">Recordings</span>
               {recordings && recordings.length > 0 && (
@@ -397,7 +397,7 @@ export default function PlayerProfilePage() {
           </div>
 
           {/* Recording cards — each one is a floating glass card */}
-          <div className="flex-1 overflow-y-auto space-y-3 pr-1 scrollbar-thin">
+          <div className="flex-1 overflow-y-auto space-y-2 pr-1 scrollbar-thin">
             {recordingsLoading ? (
               <div className="flex items-center justify-center h-20">
                 <Loader2 className="w-4 h-4 text-primary animate-spin" />
