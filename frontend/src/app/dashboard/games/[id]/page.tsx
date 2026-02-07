@@ -17,6 +17,7 @@ import {
 import Link from "next/link";
 import dynamic from "next/dynamic";
 import { cn } from "@/lib/utils";
+import { appSettingKeys, readStrokeDebugModeSetting } from "@/lib/appSettings";
 import {
   TrajectoryPoint,
   detectBalls,
@@ -100,6 +101,7 @@ export default function GameViewerPage() {
   const [playbackRate, setPlaybackRate] = useState(1);
   const [panelWidth, setPanelWidth] = useState(320);
   const [videoDisplayWidth, setVideoDisplayWidth] = useState<number | null>(null);
+  const [videoBounds, setVideoBounds] = useState<{ top: number; right: number; width: number; height: number } | null>(null);
   const isResizing = useRef(false);
   const [activeTip, setActiveTip] = useState<VideoTip | null>(null);
   const [tipPausedVideo, setTipPausedVideo] = useState(false);
@@ -115,6 +117,16 @@ export default function GameViewerPage() {
   const [debugFlash, setDebugFlash] = useState<string | null>(null);
   const [debugCopied, setDebugCopied] = useState(false);
   const [isRecomputingAnalytics, setIsRecomputingAnalytics] = useState(false);
+
+  useEffect(() => {
+    setDebugMode(readStrokeDebugModeSetting());
+    const syncDebugSetting = (event: StorageEvent) => {
+      if (event.key && event.key !== appSettingKeys.strokeDebugMode) return;
+      setDebugMode(readStrokeDebugModeSetting());
+    };
+    window.addEventListener("storage", syncDebugSetting);
+    return () => window.removeEventListener("storage", syncDebugSetting);
+  }, []);
 
   const { data: session, isLoading } = useSession(gameId);
   const { data: poseData } = usePoseAnalysis(gameId);
@@ -425,7 +437,7 @@ export default function GameViewerPage() {
   const showCourt = activeTab === "court";
   const showAnalytics = activeTab === "analytics";
   const showSidePanel =
-    showTrack || showCourt || activeTab === "pose" || showAnalytics;
+    showCourt || activeTab === "pose" || showAnalytics;
 
   const updateVideoDisplayWidth = useCallback(() => {
     const viewport = videoViewportRef.current;
@@ -435,15 +447,34 @@ export default function GameViewerPage() {
     const containerWidth = viewport.clientWidth;
     const containerHeight = viewport.clientHeight;
     let nextWidth = containerWidth;
+    let nextHeight = containerHeight;
 
     if (video?.videoWidth && video?.videoHeight && containerHeight > 0) {
       const videoAspect = video.videoWidth / video.videoHeight;
       const containerAspect = containerWidth / containerHeight;
-      nextWidth = containerAspect > videoAspect ? containerHeight * videoAspect : containerWidth;
+      if (containerAspect > videoAspect) {
+        nextWidth = containerHeight * videoAspect;
+        nextHeight = containerHeight;
+      } else {
+        nextWidth = containerWidth;
+        nextHeight = containerWidth / videoAspect;
+      }
     }
 
     const rounded = Math.max(0, Math.round(nextWidth));
     setVideoDisplayWidth((prev) => (prev === rounded ? prev : rounded));
+
+    // Calculate video element bounds for overlay positioning
+    const viewportRect = viewport.getBoundingClientRect();
+    const videoLeft = viewportRect.left + (containerWidth - nextWidth) / 2;
+    const videoTop = viewportRect.top + (containerHeight - nextHeight) / 2;
+    
+    setVideoBounds({
+      top: videoTop,
+      right: videoLeft + nextWidth,
+      width: nextWidth,
+      height: nextHeight,
+    });
   }, []);
 
   useEffect(() => {
@@ -526,12 +557,6 @@ export default function GameViewerPage() {
     const handler = (e: KeyboardEvent) => {
       // Ignore if typing in an input/textarea
       if (e.target instanceof HTMLInputElement || e.target instanceof HTMLTextAreaElement) return;
-
-      if (e.key === "d" || e.key === "D") {
-        e.preventDefault();
-        setDebugMode(prev => !prev);
-        return;
-      }
 
       if (!debugMode) return;
 
@@ -617,6 +642,13 @@ export default function GameViewerPage() {
     };
   }, [videoUrl, frameFromTime]);
 
+  // Jump threshold: points further than 12% of video diagonal are tracking noise
+  const jumpThreshold = useMemo(() => {
+    const vw = videoRef.current?.videoWidth || 1920;
+    const vh = videoRef.current?.videoHeight || 1080;
+    return Math.sqrt(vw * vw + vh * vh) * 0.12;
+  }, [session?.trajectory_data]);
+
   // Draw ball tracking overlay (mask/bbox)
   useEffect(() => {
     const canvas = canvasRef.current;
@@ -629,10 +661,15 @@ export default function GameViewerPage() {
     ctx.clearRect(0, 0, vw, vh);
     if (!hasTrajectory || visibleTrajectoryPoints.length === 0) return;
 
-    // Trail: fading green line connecting recent positions
+    // Trail: fading green line connecting recent positions, breaking on jumps
     if (visibleTrajectoryPoints.length >= 2) {
       const recent = visibleTrajectoryPoints.slice(-40);
       for (let i = 1; i < recent.length; i++) {
+        const dx = recent[i].x - recent[i-1].x;
+        const dy = recent[i].y - recent[i-1].y;
+        const dist = Math.sqrt(dx * dx + dy * dy);
+        // Skip drawing segment if it's a tracking jump (noise)
+        if (dist > jumpThreshold) continue;
         const alpha = (i / recent.length) * 0.4;
         ctx.beginPath();
         ctx.strokeStyle = `rgba(34, 197, 94, ${alpha})`;
@@ -644,7 +681,6 @@ export default function GameViewerPage() {
     }
 
     // Lookup current frame's trajectory point — find closest match if no exact hit
-    // Exact match first, then closest within window
     let cp = trajectoryFrameMap.get(currentFrame);
     if (!cp && trajectoryFrameMap.size > 0) {
       let minDiff = Infinity;
@@ -656,6 +692,21 @@ export default function GameViewerPage() {
         }
       }
     }
+
+    // Validate the current point isn't a wild jump from recent trajectory
+    if (cp && visibleTrajectoryPoints.length >= 2) {
+      const prev = visibleTrajectoryPoints[visibleTrajectoryPoints.length - 1];
+      // If current point is the prev point itself, it's fine
+      if (prev.frame !== cp.frame) {
+        const dx = cp.x - prev.x;
+        const dy = cp.y - prev.y;
+        const dist = Math.sqrt(dx * dx + dy * dy);
+        if (dist > jumpThreshold) {
+          cp = undefined; // Suppress the jump — don't render this detection
+        }
+      }
+    }
+
     if (cp) {
       const bbox = (cp as TrajectoryPoint & { bbox?: number[] }).bbox;
 
@@ -691,7 +742,7 @@ export default function GameViewerPage() {
         ctx.stroke();
       }
     }
-  }, [visibleTrajectoryPoints, trajectoryFrameMap, currentFrame, hasTrajectory]);
+  }, [visibleTrajectoryPoints, trajectoryFrameMap, currentFrame, hasTrajectory, jumpThreshold]);
 
   // Draw player markers on video
   useEffect(() => {
@@ -967,25 +1018,6 @@ export default function GameViewerPage() {
     ctx.globalAlpha = 1.0;
   }, [detectedPersons, showPoseOverlay, selectedPersonIds, SKELETON_CONNECTIONS, PERSON_COLORS]);
 
-  const handleTrackNetTrack = useCallback(() => {
-    setIsTracking(true);
-    trackWithTrackNet(gameId)
-      .then((res) => {
-        const tracked = res.data.frames_tracked ?? 0;
-        if (tracked > 0) {
-          queryClient.invalidateQueries({ queryKey: sessionKeys.detail(gameId) });
-        } else {
-          // TrackNet found nothing — fall back to YOLO+SAM2
-          handleAutoDetect();
-        }
-      })
-      .catch(() => {
-        // TrackNet failed — fall back to YOLO+SAM2
-        handleAutoDetect();
-      })
-      .finally(() => setIsTracking(false));
-  }, [gameId, queryClient]);
-
   // Fallback: Auto-detect balls with YOLO (then user confirms for SAM2)
   const handleAutoDetect = useCallback(() => {
     setIsDetecting(true);
@@ -1004,6 +1036,28 @@ export default function GameViewerPage() {
       .finally(() => setIsDetecting(false));
   }, [gameId, currentFrame]);
 
+  const handleTrackNetTrack = useCallback(() => {
+    console.log("[Track] Starting ball tracking for session:", gameId);
+    setIsTracking(true);
+    trackWithTrackNet(gameId)
+      .then((res) => {
+        const tracked = res.data.frames_tracked ?? 0;
+        console.log("[Track] TrackNet result:", tracked, "frames tracked");
+        if (tracked > 0) {
+          queryClient.invalidateQueries({ queryKey: sessionKeys.detail(gameId) });
+        } else {
+          // TrackNet found nothing — fall back to YOLO+SAM2
+          handleAutoDetect();
+        }
+      })
+      .catch((err) => {
+        console.error("[Track] TrackNet failed, falling back:", err);
+        // TrackNet failed — fall back to YOLO+SAM2
+        handleAutoDetect();
+      })
+      .finally(() => setIsTracking(false));
+  }, [gameId, queryClient, handleAutoDetect]);
+
   // Confirm a YOLO detection and run SAM2 tracking with its bbox
   const handleConfirmDetection = useCallback((detection: BallDetection) => {
     setDetectionResult(null);
@@ -1021,6 +1075,15 @@ export default function GameViewerPage() {
   const handleSeek = useCallback((e: React.ChangeEvent<HTMLInputElement>) => { const t = parseFloat(e.target.value); if (videoRef.current) videoRef.current.currentTime = t; setCurrentTime(t); }, []);
   const skipFrames = useCallback((n: number) => { const t = Math.max(0, Math.min(duration, currentTime + n / fps)); if (videoRef.current) videoRef.current.currentTime = t; }, [duration, currentTime, fps]);
   const fmtTime = (t: number) => `${Math.floor(t / 60)}:${Math.floor(t % 60).toString().padStart(2, "0")}`;
+  const handleAnalyticsSeek = useCallback((targetTime: number) => {
+    const durationSafe = Number.isFinite(duration) && duration > 0 ? duration : targetTime;
+    const safeTime = Math.max(0, Math.min(durationSafe, targetTime));
+    if (videoRef.current) {
+      videoRef.current.currentTime = safeTime;
+    }
+    setCurrentTime(safeTime);
+    setCurrentFrame(frameFromTime(safeTime));
+  }, [duration, frameFromTime]);
   const handleTipSeek = useCallback((tip: VideoTip) => {
     if (!videoRef.current) return;
     const targetTime = tip.seekTime ?? tip.timestamp;
@@ -1038,7 +1101,7 @@ export default function GameViewerPage() {
       if (!showPoseOverlay) handleDetectPose(); // detect on first enable
     }
     if (tabId === "track" && !hasTrajectory) handleTrackNetTrack();
-  }, []);
+  }, [showPoseOverlay, handleDetectPose, hasTrajectory, handleTrackNetTrack]);
 
   // Auto-widen panel for court view and analytics
   useEffect(() => {
@@ -1068,26 +1131,31 @@ export default function GameViewerPage() {
 
   const firstPlayer = session.players?.[0];
   const detection = detectionResult;
+  const isAnalyticsView = activeTab === "analytics";
 
   return (
     <>
       <div className="h-[calc(100vh-7rem)] flex flex-col overflow-hidden">
-        {/* Breadcrumbs */}
-        <nav className="flex items-center gap-1.5 text-xs text-[#6A6865] mb-2 shrink-0">
-          <Link href="/dashboard" className="hover:text-[#E8E6E3] transition-colors">Players</Link>
-          <ChevronRight className="w-3 h-3" />
-          {firstPlayer && (<><Link href={`/dashboard/players/${firstPlayer.id}`} className="hover:text-[#E8E6E3] transition-colors">{firstPlayer.name}</Link><ChevronRight className="w-3 h-3" /></>)}
-          <span className="text-[#E8E6E3]">{session.name}</span>
-        </nav>
+        {!isAnalyticsView && (
+          <>
+            {/* Breadcrumbs */}
+            <nav className="flex items-center gap-1.5 text-xs text-[#6A6865] mb-2 shrink-0">
+              <Link href="/dashboard" className="hover:text-[#E8E6E3] transition-colors">Players</Link>
+              <ChevronRight className="w-3 h-3" />
+              {firstPlayer && (<><Link href={`/dashboard/players/${firstPlayer.id}`} className="hover:text-[#E8E6E3] transition-colors">{firstPlayer.name}</Link><ChevronRight className="w-3 h-3" /></>)}
+              <span className="text-[#E8E6E3]">{session.name}</span>
+            </nav>
 
-        {/* Header */}
-        <div className="flex items-center gap-3 mb-3 shrink-0">
-          <button onClick={() => router.back()} className="text-[#6A6865] hover:text-[#E8E6E3] transition-colors"><ArrowLeft className="w-5 h-5" /></button>
-          <div>
-            <h1 className="text-lg font-light text-[#E8E6E3]">{session.name}</h1>
-            <p className="text-xs text-[#6A6865]">{new Date(session.created_at).toLocaleDateString()}</p>
-          </div>
-        </div>
+            {/* Header */}
+            <div className="flex items-center gap-3 mb-3 shrink-0">
+              <button onClick={() => router.back()} className="text-[#6A6865] hover:text-[#E8E6E3] transition-colors"><ArrowLeft className="w-5 h-5" /></button>
+              <div>
+                <h1 className="text-lg font-light text-[#E8E6E3]">{session.name}</h1>
+                <p className="text-xs text-[#6A6865]">{new Date(session.created_at).toLocaleDateString()}</p>
+              </div>
+            </div>
+          </>
+        )}
 
         {/* Main area — stacks vertically when AI sidebar is open */}
         <div className={cn(
@@ -1137,26 +1205,111 @@ export default function GameViewerPage() {
                   tips={videoTips}
                   isPlaying={isPlaying}
                 />
+
+                {/* Tracking Statistics Overlay - Top Right */}
+                {(showPoseOverlay || showTrack || showCourt) && videoBounds && (
+                  <div 
+                    className="fixed z-30 flex flex-col gap-2 pointer-events-none"
+                    style={{
+                      top: `${videoBounds.top + 12}px`,
+                      right: `${window.innerWidth - videoBounds.right + 12}px`,
+                    }}
+                  >
+                    {/* Pose Track Status */}
+                    {showPoseOverlay && (
+                      <div className="rounded-lg bg-black/40 backdrop-blur-md border border-white/10 px-3 py-2 w-[160px]">
+                        <div className="relative z-10">
+                          <div className="flex items-center gap-2 mb-1">
+                            <Activity className="w-3 h-3 text-[#9B7B5B]" />
+                            <span className="text-[10px] font-medium text-[#E8E6E3]">Pose Track</span>
+                          </div>
+                          <div className="text-[10px] text-[#8A8885]">
+                            {hasPose ? (
+                              <>
+                                <div className="flex items-center gap-1">
+                                  <div className="w-1.5 h-1.5 rounded-full bg-[#6B8E6B]" />
+                                  <span>{selectedPersonIds.length} player{selectedPersonIds.length !== 1 ? 's' : ''}</span>
+                                </div>
+                                {hasStrokes && (
+                                  <div className="mt-0.5">{strokeSummary?.total_strokes ?? 0} strokes</div>
+                                )}
+                              </>
+                            ) : isPoseProcessing ? (
+                              <div className="flex items-center gap-1">
+                                <Loader2 className="w-2.5 h-2.5 animate-spin" />
+                                <span>Processing...</span>
+                              </div>
+                            ) : (
+                              <span className="text-[#6A6865]">Not active</span>
+                            )}
+                          </div>
+                        </div>
+                      </div>
+                    )}
+
+                    {/* Ball Track Status */}
+                    {showTrack && (
+                      <div className="rounded-lg bg-black/40 backdrop-blur-md border border-white/10 px-3 py-2 w-[160px]">
+                        <div className="relative z-10">
+                          <div className="flex items-center gap-2 mb-1">
+                            <Crosshair className="w-3 h-3 text-[#9B7B5B]" />
+                            <span className="text-[10px] font-medium text-[#E8E6E3]">Ball Track</span>
+                          </div>
+                          <div className="text-[10px] text-[#8A8885]">
+                            {hasTrajectory ? (
+                              <>
+                                <div className="flex items-center gap-1">
+                                  <div className="w-1.5 h-1.5 rounded-full bg-[#6B8E6B]" />
+                                  <span>{session.trajectory_data?.frames?.length} frames</span>
+                                </div>
+                                <div className="mt-0.5">
+                                  {session.trajectory_data?.velocity?.length ? (
+                                    `${(session.trajectory_data.velocity.reduce((a: number, b: number) => a + b, 0) / session.trajectory_data.velocity.length).toFixed(1)} px/f`
+                                  ) : (
+                                    "—"
+                                  )}
+                                </div>
+                              </>
+                            ) : isProcessing ? (
+                              <div className="flex items-center gap-1">
+                                <Loader2 className="w-2.5 h-2.5 animate-spin" />
+                                <span>Processing...</span>
+                              </div>
+                            ) : (
+                              <span className="text-[#6A6865]">Not active</span>
+                            )}
+                          </div>
+                        </div>
+                      </div>
+                    )}
+
+                    {/* Court Analytics Status */}
+                    {showCourt && (
+                      <div className="rounded-lg bg-black/40 backdrop-blur-md border border-white/10 px-3 py-2 w-[160px]">
+                        <div className="relative z-10">
+                          <div className="flex items-center gap-2 mb-1">
+                            <LayoutGrid className="w-3 h-3 text-[#9B7B5B]" />
+                            <span className="text-[10px] font-medium text-[#E8E6E3]">Court View</span>
+                          </div>
+                          <div className="text-[10px] text-[#8A8885]">
+                            {hasTrajectory || hasPose ? (
+                              <div className="flex items-center gap-1">
+                                <div className="w-1.5 h-1.5 rounded-full bg-[#6B8E6B]" />
+                                <span>3D Active</span>
+                              </div>
+                            ) : (
+                              <span className="text-[#6A6865]">Not active</span>
+                            )}
+                          </div>
+                        </div>
+                      </div>
+                    )}
+                  </div>
+                )}
               </div>
 
-              {/* Debug mode toggle button — top-right of video */}
-              {hasPose && (
-                <button
-                  onClick={() => setDebugMode(prev => !prev)}
-                  className={cn(
-                    "absolute top-2 right-2 z-30 p-1.5 rounded-lg transition-all",
-                    debugMode
-                      ? "bg-[#C45C5C]/20 text-[#C45C5C] ring-1 ring-[#C45C5C]/40"
-                      : "bg-black/30 text-[#6A6865] hover:text-[#E8E6E3] hover:bg-black/50"
-                  )}
-                  title="Toggle stroke debug mode (D)"
-                >
-                  <Bug className="w-3.5 h-3.5" />
-                </button>
-              )}
-
               {/* Debug floating bar */}
-              {debugMode && (
+              {hasPose && debugMode && (
                 <div className="absolute bottom-14 left-1/2 -translate-x-1/2 z-30">
                   <div className="flex items-center gap-1.5 px-3 py-2 rounded-xl bg-black/80 backdrop-blur-sm border border-[#C45C5C]/30">
                     {debugFlash && (
@@ -1363,7 +1516,7 @@ export default function GameViewerPage() {
                     </div>
                   ) : (
                     <div className="text-center py-8">
-                      {isProcessing ? (
+                      {(isTracking || isProcessing) ? (
                         <>
                           <Loader2 className="w-6 h-6 text-[#9B7B5B] mx-auto mb-3 animate-spin" />
                           <p className="text-sm text-[#E8E6E3] font-medium">Tracking ball...</p>
@@ -1373,7 +1526,15 @@ export default function GameViewerPage() {
                         <>
                           <Crosshair className="w-7 h-7 text-[#9B7B5B] mx-auto mb-3" />
                           <p className="text-sm text-[#E8E6E3] font-medium mb-1">Ready to track</p>
-                          <p className="text-xs text-[#8A8885]">Click Track in the toolbar to detect ball trajectory</p>
+                          <Button
+                            variant="outline"
+                            size="sm"
+                            onClick={handleTrackNetTrack}
+                            className="mt-2 text-xs"
+                          >
+                            <Crosshair className="w-3 h-3 mr-1" />
+                            Track Ball
+                          </Button>
                         </>
                       )}
                     </div>
@@ -1383,7 +1544,7 @@ export default function GameViewerPage() {
 
               {/* Pose analysis panel */}
               {activeTab === "pose" && showPoseOverlay && (
-                <div className="glass-context rounded-xl flex flex-col h-full overflow-hidden">
+                <div className="glass-context rounded-xl flex flex-col h-full min-h-0 flex-1 overflow-hidden">
                   <div className="px-3 py-2.5 border-b border-[#363436]/30 flex items-center justify-between">
                     <span className="text-xs font-medium text-[#E8E6E3]">Pose & Strokes</span>
                     <div className="flex items-center gap-2">
@@ -1682,17 +1843,6 @@ export default function GameViewerPage() {
                           Retry with player selection
                         </button>
                       </div>
-                    ) : detectedPersons.length === 0 && !isDetectingPose && !hasPose ? (
-                      <div className="text-center py-6">
-                        <Activity className="w-5 h-5 text-[#363436] mx-auto mb-2" />
-                        <p className="text-xs text-[#6A6865] mb-3">No pose data yet</p>
-                        <button
-                          onClick={() => setShowPlayerSelection(true)}
-                          className="text-[10px] text-[#9B7B5B] hover:text-[#B8956D] transition-colors underline"
-                        >
-                          Run pose estimation
-                        </button>
-                      </div>
                     ) : null}
 
                     {/* ── Per-person pose metrics ── */}
@@ -1829,7 +1979,7 @@ export default function GameViewerPage() {
               {/* Analytics Dashboard — full-width panel */}
               {activeTab === "analytics" && (
                 <div className="bg-background/60 dark:bg-content1/60 rounded-xl overflow-y-auto h-full">
-                  <AnalyticsDashboard sessionId={gameId} />
+                  <AnalyticsDashboard sessionId={gameId} onSeekToTime={handleAnalyticsSeek} />
                 </div>
               )}
 
@@ -1839,7 +1989,6 @@ export default function GameViewerPage() {
             </div>
           )}
         </div>
-
       </div>
       {/* YOLO Detection result modal */}
       {detection && (

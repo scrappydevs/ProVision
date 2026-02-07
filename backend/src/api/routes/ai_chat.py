@@ -255,10 +255,10 @@ def _gather_session_context(session_id: str, user_id: str) -> str:
         logger.warning(f"Failed to get stroke analytics: {e}")
 
     try:
-        # Pose analysis summary (sample a few frames)
+        # Pose analysis summary (sample a few frames, player only)
         pose = supabase.table("pose_analysis").select(
             "frame_number, keypoints, joint_angles, body_metrics"
-        ).eq("session_id", session_id).order("frame_number").limit(5).execute()
+        ).eq("session_id", session_id).eq("person_id", 0).order("frame_number").limit(5).execute()
 
         if pose.data:
             parts.append(f"\n## Pose Analysis (sampled {len(pose.data)} frames)")

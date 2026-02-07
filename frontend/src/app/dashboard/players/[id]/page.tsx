@@ -526,7 +526,7 @@ export default function PlayerProfilePage() {
                     <div className="space-y-2">
                       {insights.filter(i => i.kind === "strength").map((insight) => (
                         <div key={insight.id} className="relative group">
-                          <div className="text-left p-3 rounded-lg bg-content1/30 backdrop-blur-xl hover:bg-content1/40 transition-all">
+                          <div className="text-left p-3 rounded-lg bg-content1/80 hover:bg-content1/90 transition-all">
                             <h4 className="text-sm font-semibold text-foreground/95 mb-1 leading-tight">
                               {insight.title}
                             </h4>
@@ -549,16 +549,16 @@ export default function PlayerProfilePage() {
 
                           {/* Hover panel for clips */}
                           {insight.clips.length > 0 && (
-                            <div className="absolute left-full top-0 ml-2 z-50 w-64 rounded-lg bg-content1/95 backdrop-blur-xl shadow-2xl overflow-hidden opacity-0 invisible group-hover:opacity-100 group-hover:visible transition-all duration-200">
-                              <div className="p-2.5 space-y-1.5">
-                                <div className="px-2 py-1 text-[10px] uppercase tracking-wider text-foreground/60 font-semibold">
+                            <div className="absolute left-full top-0 ml-2 z-50 w-64 rounded-xl bg-background border border-foreground/20 shadow-2xl overflow-hidden opacity-0 invisible group-hover:opacity-100 group-hover:visible transition-all duration-200">
+                              <div className="p-3 space-y-1.5">
+                                <div className="px-2 py-1.5 text-[10px] uppercase tracking-wider text-foreground/50 font-semibold border-b border-foreground/10 pb-2 mb-1">
                                   Source clips
                                 </div>
                                 {insight.clips.map((clip) => (
                                   <button
                                     key={clip.id}
                                     onClick={() => handleClipOpen(clip, insight.tipMatch)}
-                                    className="w-full flex items-center gap-2 rounded-md bg-content1/40 p-2 text-left hover:bg-content1/60 transition-colors"
+                                    className="w-full flex items-center gap-2 rounded-md bg-content1 hover:bg-content2 p-2 text-left transition-colors"
                                   >
                                     {clip.videoUrl && (
                                       <div className="relative w-14 h-10 rounded overflow-hidden shrink-0 bg-background">
@@ -596,7 +596,7 @@ export default function PlayerProfilePage() {
                     <div className="space-y-2">
                       {insights.filter(i => i.kind === "weakness").map((insight) => (
                         <div key={insight.id} className="relative group">
-                          <div className="text-left p-3 rounded-lg bg-content1/30 backdrop-blur-xl hover:bg-content1/40 transition-all">
+                          <div className="text-left p-3 rounded-lg bg-content1/80 hover:bg-content1/90 transition-all">
                             <h4 className="text-sm font-semibold text-foreground/95 mb-1 leading-tight">
                               {insight.title}
                             </h4>
@@ -619,16 +619,16 @@ export default function PlayerProfilePage() {
 
                           {/* Hover panel for clips */}
                           {insight.clips.length > 0 && (
-                            <div className="absolute left-full top-0 ml-2 z-50 w-64 rounded-lg bg-content1/95 backdrop-blur-xl shadow-2xl overflow-hidden opacity-0 invisible group-hover:opacity-100 group-hover:visible transition-all duration-200">
-                              <div className="p-2.5 space-y-1.5">
-                                <div className="px-2 py-1 text-[10px] uppercase tracking-wider text-foreground/60 font-semibold">
+                            <div className="absolute left-full top-0 ml-2 z-50 w-64 rounded-xl bg-background border border-foreground/20 shadow-2xl overflow-hidden opacity-0 invisible group-hover:opacity-100 group-hover:visible transition-all duration-200">
+                              <div className="p-3 space-y-1.5">
+                                <div className="px-2 py-1.5 text-[10px] uppercase tracking-wider text-foreground/50 font-semibold border-b border-foreground/10 pb-2 mb-1">
                                   Source clips
                                 </div>
                                 {insight.clips.map((clip) => (
                                   <button
                                     key={clip.id}
                                     onClick={() => handleClipOpen(clip, insight.tipMatch)}
-                                    className="w-full flex items-center gap-2 rounded-md bg-content1/40 p-2 text-left hover:bg-content1/60 transition-colors"
+                                    className="w-full flex items-center gap-2 rounded-md bg-content1 hover:bg-content2 p-2 text-left transition-colors"
                                   >
                                     {clip.videoUrl && (
                                       <div className="relative w-14 h-10 rounded overflow-hidden shrink-0 bg-background">
@@ -682,10 +682,157 @@ export default function PlayerProfilePage() {
           </div>
         </div>
 
+        {/* Left: tips summary */}
+        <div className="absolute left-10 bottom-36 w-[480px] h-[calc(100vh-340px)] overflow-y-auto overflow-x-visible flex flex-col gap-2">
+          {recordingsLoading ? (
+            <div className="flex items-center justify-center h-20 bg-content1/30 backdrop-blur-xl rounded-xl">
+              <Loader2 className="w-3 h-3 text-primary animate-spin" />
+            </div>
+          ) : (
+            <div className="flex flex-col gap-2">
+              {/* Strengths Section */}
+              <div className="space-y-2">
+                <div className="flex items-center gap-2 px-1">
+                  <div className="w-1.5 h-1.5 rounded-full bg-[#6B8E6B]" />
+                  <span className="text-[10px] uppercase tracking-wider text-[#6B8E6B] font-semibold">Strengths</span>
+                </div>
+                <div className="grid grid-cols-2 gap-2">
+                  {insights.filter(i => i.kind === "strength").map((insight) => (
+                    <div key={insight.id} className="relative group">
+                      <div className="text-left p-2.5 rounded-lg bg-content1/30 backdrop-blur-xl hover:bg-content1/40 transition-all">
+                        <h4 className="text-xs font-semibold text-foreground/95 mb-0.5 leading-tight">
+                          {insight.title}
+                        </h4>
+                        <p className="text-[10px] text-foreground/60 line-clamp-2 leading-snug mb-1.5">
+                          {insight.summary}
+                        </p>
+                        {insight.metric && (
+                          <div className="flex items-center gap-1">
+                            <p className="text-[9px] text-[#6B8E6B] font-medium flex-1">
+                              {insight.metric}
+                            </p>
+                            {insight.clips.length > 0 && (
+                              <span className="text-[8px] text-foreground/40">
+                                {insight.clips.length} clip{insight.clips.length > 1 ? 's' : ''}
+                              </span>
+                            )}
+                          </div>
+                        )}
+                      </div>
+
+                      {/* Hover panel for clips */}
+                      {insight.clips.length > 0 && (
+                        <div className="absolute left-full top-0 ml-2 z-50 w-56 rounded-lg bg-content1/95 backdrop-blur-xl shadow-2xl overflow-hidden opacity-0 invisible group-hover:opacity-100 group-hover:visible transition-all duration-200">
+                          <div className="p-2 space-y-1">
+                            <div className="px-2 py-1 text-[9px] uppercase tracking-wider text-foreground/60 font-semibold">
+                              Source clips
+                            </div>
+                            {insight.clips.map((clip) => (
+                              <button
+                                key={clip.id}
+                                onClick={() => handleClipOpen(clip, insight.tipMatch)}
+                                className="w-full flex items-center gap-2 rounded-md bg-content1/40 p-1.5 text-left hover:bg-content1/60 transition-colors"
+                              >
+                                {clip.videoUrl && (
+                                  <div className="relative w-12 h-9 rounded overflow-hidden shrink-0 bg-background">
+                                    <video src={clip.videoUrl} className="w-full h-full object-cover" muted />
+                                    <div className="absolute inset-0 flex items-center justify-center bg-black/20">
+                                      <Play className="w-3 h-3 text-white/80" />
+                                    </div>
+                                  </div>
+                                )}
+                                <div className="flex-1 min-w-0">
+                                  <p className="text-[10px] text-foreground/90 truncate font-medium">{clip.label}</p>
+                                  {clip.timestamp && (
+                                    <p className="text-[8px] text-foreground/50">{clip.timestamp}</p>
+                                  )}
+                                </div>
+                                <ChevronRight className="w-3 h-3 text-foreground/40 shrink-0" />
+                              </button>
+                            ))}
+                          </div>
+                        </div>
+                      )}
+                    </div>
+                  ))}
+                </div>
+              </div>
+
+              {/* Weaknesses Section */}
+              <div className="space-y-2">
+                <div className="flex items-center gap-2 px-1">
+                  <div className="w-1.5 h-1.5 rounded-full bg-[#C45C5C]" />
+                  <span className="text-[10px] uppercase tracking-wider text-[#C45C5C] font-semibold">Areas to improve</span>
+                </div>
+                <div className="grid grid-cols-2 gap-2">
+                  {insights.filter(i => i.kind === "weakness").map((insight) => (
+                    <div key={insight.id} className="relative group">
+                      <div className="text-left p-2.5 rounded-lg bg-content1/30 backdrop-blur-xl hover:bg-content1/40 transition-all">
+                        <h4 className="text-xs font-semibold text-foreground/95 mb-0.5 leading-tight">
+                          {insight.title}
+                        </h4>
+                        <p className="text-[10px] text-foreground/60 line-clamp-2 leading-snug mb-1.5">
+                          {insight.summary}
+                        </p>
+                        {insight.metric && (
+                          <div className="flex items-center gap-1">
+                            <p className="text-[9px] text-[#C45C5C] font-medium flex-1">
+                              {insight.metric}
+                            </p>
+                            {insight.clips.length > 0 && (
+                              <span className="text-[8px] text-foreground/40">
+                                {insight.clips.length} clip{insight.clips.length > 1 ? 's' : ''}
+                              </span>
+                            )}
+                          </div>
+                        )}
+                      </div>
+
+                      {/* Hover panel for clips */}
+                      {insight.clips.length > 0 && (
+                        <div className="absolute left-full top-0 ml-2 z-50 w-56 rounded-lg bg-content1/95 backdrop-blur-xl shadow-2xl overflow-hidden opacity-0 invisible group-hover:opacity-100 group-hover:visible transition-all duration-200">
+                          <div className="p-2 space-y-1">
+                            <div className="px-2 py-1 text-[9px] uppercase tracking-wider text-foreground/60 font-semibold">
+                              Source clips
+                            </div>
+                            {insight.clips.map((clip) => (
+                              <button
+                                key={clip.id}
+                                onClick={() => handleClipOpen(clip, insight.tipMatch)}
+                                className="w-full flex items-center gap-2 rounded-md bg-content1/40 p-1.5 text-left hover:bg-content1/60 transition-colors"
+                              >
+                                {clip.videoUrl && (
+                                  <div className="relative w-12 h-9 rounded overflow-hidden shrink-0 bg-background">
+                                    <video src={clip.videoUrl} className="w-full h-full object-cover" muted />
+                                    <div className="absolute inset-0 flex items-center justify-center bg-black/20">
+                                      <Play className="w-3 h-3 text-white/80" />
+                                    </div>
+                                  </div>
+                                )}
+                                <div className="flex-1 min-w-0">
+                                  <p className="text-[10px] text-foreground/90 truncate font-medium">{clip.label}</p>
+                                  {clip.timestamp && (
+                                    <p className="text-[8px] text-foreground/50">{clip.timestamp}</p>
+                                  )}
+                                </div>
+                                <ChevronRight className="w-3 h-3 text-foreground/40 shrink-0" />
+                              </button>
+                            ))}
+                          </div>
+                        </div>
+                      )}
+                    </div>
+                  ))}
+                </div>
+              </div>
+            </div>
+          )}
+        </div>
+
         {/* Right: recordings — larger and more prominent */}
         <div className="absolute right-6 top-[15%] bottom-6 w-[560px] flex flex-col z-20">
           {/* Header with enhanced styling */}
-          <div className="flex flex-col gap-3 mb-5 px-4 py-3 bg-content1/30 backdrop-blur-xl rounded-3xl border border-foreground/15">
+          <div className="flex flex-col gap-3 mb-5 px-4 py-3 bg-content1/80 rounded-3xl border border-foreground/15">
             <div className="flex items-center justify-between">
               <div className="flex items-center gap-3">
                 <span className="text-xs uppercase tracking-[0.25em] text-foreground/70">Recordings</span>
@@ -708,7 +855,7 @@ export default function PlayerProfilePage() {
                   onClick={() => setRecordingFilter(f)}
                   className={`text-[10px] px-2.5 py-1.5 rounded-full transition-all font-medium uppercase tracking-[0.15em] whitespace-nowrap ${
                     recordingFilter === f
-                      ? "bg-primary/15 text-primary backdrop-blur-sm"
+                      ? "bg-primary/15 text-primary"
                       : "text-foreground/40 hover:text-foreground/70 hover:bg-foreground/5"
                   }`}
                 >
@@ -749,37 +896,41 @@ export default function PlayerProfilePage() {
                       );
                     }
                   }}
-                  className="group cursor-pointer flex gap-5 items-start p-4 rounded-2xl transition-colors bg-content1/30 backdrop-blur-xl border border-foreground/10 hover:border-foreground/20 hover:bg-content1/40"
+                  className="group cursor-pointer flex gap-5 items-start p-4 rounded-2xl transition-all relative overflow-hidden border border-foreground/20 hover:border-primary/40 shadow-lg"
                 >
+                  {/* Liquid glass background */}
+                  <div className="absolute inset-0 bg-gradient-to-br from-content1 via-content1 to-content1/95 group-hover:from-content1 group-hover:via-content1 group-hover:to-content1 transition-all duration-300"></div>
+                  <div className="absolute inset-0 opacity-80 group-hover:opacity-100 transition-opacity duration-300" style={{ background: 'radial-gradient(ellipse at top left, rgba(155,123,91,0.12), transparent 50%), radial-gradient(ellipse at bottom right, rgba(91,155,123,0.08), transparent 50%)' }}></div>
+                  
                   {rec.video_path && (
-                    <div className="relative w-36 h-24 rounded-xl overflow-hidden shrink-0 ring-1 ring-white/10">
+                    <div className="relative w-36 h-24 rounded-xl overflow-hidden shrink-0 ring-1 ring-white/10 z-10">
                       <video src={rec.video_path} className="w-full h-full object-cover" />
                     </div>
                   )}
-                  <div className="flex-1 min-w-0 pt-1">
-                    <p className="text-base font-semibold text-foreground/95 truncate mb-1.5">{rec.title}</p>
+                  <div className="flex-1 min-w-0 pt-1 relative z-10">
+                    <p className="text-base font-semibold text-foreground truncate mb-1.5">{rec.title}</p>
                     <div className="flex items-center gap-2.5 mb-2">
-                      <span className="text-[10px] uppercase tracking-[0.2em] text-primary font-semibold px-2 py-0.5 rounded-md bg-primary/15">{rec.type}</span>
-                      <span className="w-1 h-1 rounded-full bg-foreground/20" />
-                      <span className="text-xs text-foreground/40">
+                      <span className="text-[10px] uppercase tracking-[0.2em] text-primary font-semibold px-2 py-0.5 rounded-md bg-primary/20">{rec.type}</span>
+                      <span className="w-1 h-1 rounded-full bg-foreground/30" />
+                      <span className="text-xs text-foreground/60">
                         {new Date(rec.created_at).toLocaleDateString("en-US", { month: "short", day: "numeric" })}
                       </span>
                     </div>
                     {rec.session_id ? (
                       <div className="flex items-center gap-1.5">
-                        <CheckCircle className="w-3.5 h-3.5 text-success/80" />
-                        <span className="text-xs text-success/80 font-medium">Ready to view</span>
+                        <CheckCircle className="w-3.5 h-3.5 text-success" />
+                        <span className="text-xs text-success font-medium">Ready to view</span>
                       </div>
                     ) : analyzingRecordingId === rec.id ? (
                       <div className="flex items-center gap-1.5">
                         <Loader2 className="w-3.5 h-3.5 text-primary animate-spin" />
-                        <span className="text-xs text-primary/80 font-medium">Analyzing...</span>
+                        <span className="text-xs text-primary font-medium">Analyzing...</span>
                       </div>
                     ) : (
-                      <span className="text-xs text-foreground/30 group-hover:text-primary/70 font-medium transition-colors">Click to analyze</span>
+                      <span className="text-xs text-foreground/50 group-hover:text-primary font-medium transition-colors">Click to analyze</span>
                     )}
                   </div>
-                  <ChevronRight className="w-5 h-5 text-foreground/20 group-hover:text-primary/60 shrink-0 transition-all group-hover:translate-x-1" />
+                  <ChevronRight className="w-5 h-5 text-foreground/30 group-hover:text-primary shrink-0 transition-all group-hover:translate-x-1 relative z-10" />
                 </div>
               ))
             ) : (

@@ -2,7 +2,7 @@
 
 import { useState, useEffect } from "react";
 import { Loader2, Check, X, RefreshCw } from "lucide-react";
-import {
+import api, {
   getPlayerPreview,
   selectPlayer,
   analyzePose,
@@ -178,8 +178,23 @@ export function PlayerSelection({
 
     setSubmitting(true);
     try {
-      // Save primary player selection (first selected)
-      await selectPlayer(sessionId, selectedPlayer.player);
+      // Save all selected players (player + opponent if both selected)
+      const playersToSend = [selectedPlayer, selectedOpponent].filter(Boolean);
+      
+      if (playersToSend.length > 1) {
+        // Use new multi-player endpoint
+        await api.post(`/api/pose/select-players/${sessionId}`, {
+          players: playersToSend.map(sp => ({
+            player_idx: sp!.player.player_idx,
+            bbox: sp!.player.bbox,
+            center: sp!.player.center,
+            confidence: sp!.player.confidence,
+          }))
+        });
+      } else {
+        // Legacy single player endpoint
+        await selectPlayer(sessionId, selectedPlayer.player);
+      }
 
       // Start pose analysis
       const response = await analyzePose(sessionId);
@@ -349,21 +364,11 @@ export function PlayerSelection({
             </div>
 
             {/* Actions */}
-            <div className="flex items-center gap-2 pt-2 border-t border-[#363436]/30">
-              {previewData.players.length > 0 && (
-                <button
-                  onClick={handleSkipSelection}
-                  disabled={submitting}
-                  className="text-xs text-[#8A8885] hover:text-[#E8E6E3] transition-colors disabled:opacity-50"
-                >
-                  Auto-detect
-                </button>
-              )}
-
+            <div className="flex items-center justify-end pt-2 border-t border-[#363436]/30">
               <button
                 onClick={handleConfirm}
                 disabled={!selectedPlayer || (requiresOpponent && !selectedOpponent) || submitting}
-                className="ml-auto text-xs px-4 py-2 rounded-lg bg-[#9B7B5B] hover:bg-[#8A6B4B] text-[#1E1D1F] font-medium transition-colors disabled:opacity-50 disabled:cursor-not-allowed flex items-center gap-2"
+                className="text-xs px-4 py-2 rounded-lg bg-[#9B7B5B] hover:bg-[#8A6B4B] text-[#1E1D1F] font-medium transition-colors disabled:opacity-50 disabled:cursor-not-allowed flex items-center gap-2"
               >
                 {submitting ? (
                   <>
