@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useCallback } from "react";
+import { useState, useCallback, useMemo } from "react";
 import { useParams, useRouter } from "next/navigation";
 import { Button } from "@/components/ui/button";
 import { Card, CardBody, CardHeader, CardFooter, ScrollShadow } from "@heroui/react";
@@ -16,8 +16,10 @@ import {
   useSyncITTF, usePlayerRecordings, useCreateRecording,
   useDeleteRecording, useCreateClip, useAnalyzeRecording,
 } from "@/hooks/usePlayers";
+import { useStrokeSummary } from "@/hooks/useStrokeData";
 import { GameTimeline } from "@/components/players/GameTimeline";
 import { createSession, GamePlayerInfo, RecordingType, Recording } from "@/lib/api";
+import { generateTipsFromStrokes } from "@/lib/tipGenerator";
 import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { playerKeys } from "@/hooks/usePlayers";
 import { sessionKeys } from "@/hooks/useSessions";
@@ -88,6 +90,12 @@ export default function PlayerProfilePage() {
     playerId,
     recordingFilter === "all" ? undefined : recordingFilter
   );
+  const latestGame = useMemo(() => {
+    if (!games?.length) return null;
+    return [...games].sort((a, b) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime())[0];
+  }, [games]);
+  const latestGameId = latestGame?.id ?? "";
+  const { data: latestStrokeSummary } = useStrokeSummary(latestGameId);
   const uploadAvatarMutation = useUploadAvatar();
   const updatePlayerMutation = useUpdatePlayer();
   const syncITTFMutation = useSyncITTF();
@@ -214,7 +222,6 @@ export default function PlayerProfilePage() {
     .slice(0, 2);
 
   const gameCount = player.game_count ?? 0;
-  const lastGame = games?.[0];
 
   const statusOptions = [
     { value: "", label: "All" },
@@ -239,91 +246,53 @@ export default function PlayerProfilePage() {
 
   const ittfData = player.ittf_data;
 
-  const formatTime = (seconds?: number) => {
-    if (seconds === undefined || Number.isNaN(seconds)) return null;
+  const formatTime = useCallback((seconds?: number) => {
+    if (seconds === undefined || Number.isNaN(seconds)) return undefined;
     const minutes = Math.floor(seconds / 60);
     const remainder = Math.floor(seconds % 60);
     return `${minutes}:${remainder.toString().padStart(2, "0")}`;
-  };
+  }, []);
 
-  const clipCandidates = (recordings ?? []).filter(
-    (rec) => !!rec.session_id || !!rec.video_path
-  );
+  const recentTips = useMemo(() => {
+    const tips = generateTipsFromStrokes(latestStrokeSummary?.strokes || []);
+    return tips.filter((tip) => !tip.id.includes("follow") && !tip.id.includes("summary"));
+  }, [latestStrokeSummary?.strokes]);
 
-  const clipRefs: InsightClip[] = clipCandidates.slice(0, 3).map((rec) => {
-    const start = formatTime(rec.clip_start_time);
-    const end = formatTime(rec.clip_end_time);
-    const timestamp = start && end ? `${start} - ${end}` : start ?? undefined;
-    const safeStart = Math.max(0, (rec.clip_start_time ?? 0) - 0.1);
-
-    return {
-      id: rec.id,
-      label: rec.title,
-      sessionId: rec.session_id,
-      videoUrl: rec.video_path,
-      timestamp,
-      startSeconds: safeStart,
-    };
-  });
-
-  const insights: Insight[] = [
-    {
-      id: "strength-forehand",
-      kind: "strength",
-      title: "Forehand power",
-      summary: "Explosive hip rotation and clean wrist snap on fast rallies",
-      metric: "Maintain in multi-ball and shadow drills",
-      tipMatch: "forehand",
-      clips: clipRefs,
-    },
-    {
-      id: "strength-footwork",
-      kind: "strength",
-      title: "Recovery speed",
-      summary: "Quick reset to neutral stance after wide exchanges",
-      metric: "Add lateral recovery between shots in drills",
-      clips: clipRefs,
-    },
-    {
-      id: "strength-placement",
-      kind: "strength",
-      title: "Shot placement",
-      summary: "Consistent targeting of opponent's weak zones",
-      metric: "Target corners and body in practice games",
-      clips: clipRefs,
-    },
-    {
-      id: "strength-anticipation",
-      kind: "strength",
-      title: "Ball anticipation",
-      summary: "Early read on opponent's shot direction",
-      metric: "Watch opponent racket angle before contact",
-      clips: clipRefs,
-    },
-    {
-      id: "weakness-backhand",
-      kind: "weakness",
-      title: "Backhand depth",
-      summary: "Contact point drifts high under pressure",
-      metric: "Contact ball earlier, in front of body",
-      tipMatch: "backhand",
-      clips: clipRefs,
-    },
-    {
-      id: "weakness-serve",
-      kind: "weakness",
-      title: "Serve variation",
-      summary: "Limited spin variation on second serve",
-      metric: "Add topspin, backspin, or sidespin to second serve",
-      clips: clipRefs,
-    },
-  ];
+  const insights: Insight[] = useMemo(() => {
+    if (!recentTips.length) return [];
+    return recentTips.map((tip) => {
+      const titleLower = tip.title.toLowerCase();
+      const kind: InsightKind = titleLower.includes("excellent") || titleLower.includes("good")
+        ? "strength"
+        : "weakness";
+      const timestamp = tip.seekTime !== undefined ? formatTime(tip.seekTime) : undefined;
+      const hasClip = Boolean(latestGameId);
+      return {
+        id: tip.id,
+        kind,
+        title: tip.title,
+        summary: tip.message,
+        tipMatch: tip.id,
+        metric: hasClip ? (timestamp ? `Start ${timestamp}` : "Open clip") : undefined,
+        clips: hasClip ? [{
+          id: `${tip.id}-clip`,
+          label: latestGame?.name ? `${latestGame.name}` : "View in game",
+          sessionId: latestGameId,
+          timestamp,
+          startSeconds: tip.seekTime,
+        }] : [],
+      };
+    });
+  }, [recentTips, latestGameId, latestGame?.name, formatTime]);
 
   const handleClipOpen = (clip: InsightClip, tipMatch?: string) => {
     if (clip.sessionId) {
       const params = new URLSearchParams();
-      if (clip.startSeconds != null) params.set("t", clip.startSeconds.toFixed(2));
-      if (tipMatch) params.set("tip", tipMatch);
+      if (tipMatch) {
+        params.set("tip", tipMatch);
+      } else if (clip.startSeconds != null) {
+        params.set("t", clip.startSeconds.toFixed(2));
+      }
       const query = params.toString() ? `?${params.toString()}` : "";
       router.push(`/dashboard/games/${clip.sessionId}${query}`);
       return;
@@ -426,8 +395,8 @@ export default function PlayerProfilePage() {
             </div>
             <div>
               <p className="text-3xl font-light text-foreground">
-                {lastGame
-                  ? new Date(lastGame.created_at).toLocaleDateString("en-US", { month: "short", day: "numeric" })
+                {latestGame
+                  ? new Date(latestGame.created_at).toLocaleDateString("en-US", { month: "short", day: "numeric" })
                   : "—"}
               </p>
               <p className="text-xs uppercase tracking-[0.25em] text-foreground/50 mt-2">Last Active</p>

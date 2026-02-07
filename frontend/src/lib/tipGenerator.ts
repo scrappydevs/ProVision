@@ -35,6 +35,8 @@ export function generateTipsFromStrokes(
         duration: 2.8,
         title: contactTip.title,
         message: contactTip.message,
+        strokeId: stroke.id,
+        seekTime: stroke.start_frame / fps,
       });
     }
 
@@ -54,6 +56,8 @@ export function generateTipsFromStrokes(
           duration: 2.5,
           title: followTip.title,
           message: followTip.message,
+          strokeId: stroke.id,
+          seekTime: stroke.start_frame / fps,
         });
       }
     }

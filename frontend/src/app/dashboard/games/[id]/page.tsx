@@ -307,12 +307,13 @@ export default function GameViewerPage() {
   const tipSeekTime = useMemo(() => {
     if (!tipParam || videoTips.length === 0) return null;
     const match = videoTips.find((tip) =>
-      tip.title.toLowerCase().includes(tipParam)
+      tip.id.toLowerCase() === tipParam || tip.title.toLowerCase().includes(tipParam)
     );
-    return match?.timestamp ?? null;
+    return match?.seekTime ?? match?.timestamp ?? null;
   }, [tipParam, videoTips]);
 
   const autoSeekTime = startTimeParam ?? tipSeekTime;
+  const shouldAutoPlay = startTimeParam !== null && startTimeParam !== undefined;
 
   useEffect(() => {
     hasAutoSeeked.current = false;
@@ -329,8 +330,13 @@ export default function GameViewerPage() {
       const safeTime = Math.min(Math.max(0, autoSeekTime), durationSafe);
       video.currentTime = safeTime;
       hasAutoSeeked.current = true;
-      video.play().catch(() => undefined);
-      setIsPlaying(true);
+      if (shouldAutoPlay) {
+        video.play().catch(() => undefined);
+        setIsPlaying(true);
+      } else {
+        video.pause();
+        setIsPlaying(false);
+      }
     };
 
     if (video.readyState >= 1) {
@@ -340,7 +346,7 @@ export default function GameViewerPage() {
 
     video.addEventListener("loadedmetadata", seekAndPlay, { once: true });
     return () => video.removeEventListener("loadedmetadata", seekAndPlay);
-  }, [autoSeekTime, videoUrl]);
+  }, [autoSeekTime, videoUrl, shouldAutoPlay]);
 
   // Handle tip state changes - freeze video when tip appears
   const handleTipChange = useCallback((tip: VideoTip | null) => {
@@ -927,6 +933,14 @@ export default function GameViewerPage() {
   const handleSeek = useCallback((e: React.ChangeEvent<HTMLInputElement>) => { const t = parseFloat(e.target.value); if (videoRef.current) videoRef.current.currentTime = t; setCurrentTime(t); }, []);
   const skipFrames = useCallback((n: number) => { const t = Math.max(0, Math.min(duration, currentTime + n / fps)); if (videoRef.current) videoRef.current.currentTime = t; }, [duration, currentTime, fps]);
   const fmtTime = (t: number) => `${Math.floor(t / 60)}:${Math.floor(t % 60).toString().padStart(2, "0")}`;
+  const handleTipSeek = useCallback((tip: VideoTip) => {
+    if (!videoRef.current) return;
+    const targetTime = tip.seekTime ?? tip.timestamp;
+    videoRef.current.currentTime = targetTime;
+    videoRef.current.pause();
+    setIsPlaying(false);
+    setTipPausedVideo(false);
+  }, []);
 
   const handleTabClick = useCallback((tabId: TabId) => {
     setActiveTab(tabId);
@@ -1434,9 +1448,7 @@ export default function GameViewerPage() {
                                         <button
                                           key={tip.id}
                                           onClick={() => {
-                                            if (videoRef.current) {
-                                              videoRef.current.currentTime = tip.timestamp;
-                                            }
+                                            handleTipSeek(tip);
                                           }}
                                           className={cn(
                                             "w-full text-left p-2 rounded-lg transition-all",
