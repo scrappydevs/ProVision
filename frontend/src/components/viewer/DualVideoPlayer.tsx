@@ -63,7 +63,8 @@ export const DualVideoPlayer = memo(function DualVideoPlayer({
   const [duration, setDuration] = useState(0);
   const [isMuted, setIsMuted] = useState(true);
   const [currentFrame, setCurrentFrame] = useState(0);
-  const fps = 30; // Constant, no need for state
+  const animFrameRef = useRef<number>(0);
+  const fps = trajectoryData?.video_info?.fps ?? 30;
 
   // Memoize processed trajectory data to avoid recomputation
   const trajectoryFrameMap = useMemo(() => {
@@ -93,42 +94,67 @@ export const DualVideoPlayer = memo(function DualVideoPlayer({
     }
   }, []);
   
+  // Max pixel distance between consecutive trajectory points before we
+  // consider it a tracking glitch and break the line. Scaled relative to
+  // video diagonal so it works at any resolution.
+  const jumpThreshold = useMemo(() => {
+    const w = trajectoryData?.video_info?.width ?? 1280;
+    const h = trajectoryData?.video_info?.height ?? 720;
+    // ~12% of video diagonal — fast rallies rarely exceed this per-frame
+    return Math.sqrt(w * w + h * h) * 0.12;
+  }, [trajectoryData]);
+
   // Draw trajectory on canvas
   const drawTrajectory = useCallback(() => {
     if (!canvasRef.current || !showTrajectory || visibleTrajectoryPoints.length < 2) return;
-    
+
     const canvas = canvasRef.current;
     const ctx = canvas.getContext("2d");
     if (!ctx) return;
-    
+
     const video = exoVideoRef.current;
     if (!video) return;
-    
+
     const videoWidth = video.videoWidth || 1920;
     const videoHeight = video.videoHeight || 1080;
-    
+
     // Only resize if dimensions changed
     if (canvas.width !== videoWidth || canvas.height !== videoHeight) {
       canvas.width = videoWidth;
       canvas.height = videoHeight;
     }
-    
+
     ctx.clearRect(0, 0, canvas.width, canvas.height);
-    
-    // Draw trajectory line
-    ctx.beginPath();
+
+    // Draw trajectory line, breaking on large jumps (tracking noise)
     ctx.strokeStyle = "#9B7B5B";
     ctx.lineWidth = 3;
-    
+    ctx.beginPath();
+    let penDown = false;
+
     visibleTrajectoryPoints.forEach((point, i) => {
       if (i === 0) {
         ctx.moveTo(point.x, point.y);
+        penDown = true;
       } else {
-        ctx.lineTo(point.x, point.y);
+        const prev = visibleTrajectoryPoints[i - 1];
+        const dx = point.x - prev.x;
+        const dy = point.y - prev.y;
+        const dist = Math.sqrt(dx * dx + dy * dy);
+
+        if (dist > jumpThreshold) {
+          // Large jump detected — break the path to avoid jittery teleport line
+          if (penDown) ctx.stroke();
+          ctx.beginPath();
+          ctx.moveTo(point.x, point.y);
+          penDown = true;
+        } else {
+          ctx.lineTo(point.x, point.y);
+        }
       }
     });
-    ctx.stroke();
-    
+    if (penDown) ctx.stroke();
+
     // Draw current point marker
     const currentPoint = trajectoryFrameMap.get(currentFrame);
     if (currentPoint) {
@@ -136,11 +162,11 @@ export const DualVideoPlayer = memo(function DualVideoPlayer({
       ctx.arc(currentPoint.x, currentPoint.y, 10, 0, Math.PI * 2);
       ctx.fillStyle = "#9B7B5B";
       ctx.fill();
-      ctx.strokeStyle = "#E8E6E3"; // foreground color
+      ctx.strokeStyle = "#E8E6E3";
       ctx.lineWidth = 2;
       ctx.stroke();
     }
-  }, [visibleTrajectoryPoints, trajectoryFrameMap, currentFrame, showTrajectory]);
+  }, [visibleTrajectoryPoints, trajectoryFrameMap, currentFrame, showTrajectory, jumpThreshold]);
 
   // Draw pose skeleton on canvas
   const drawPoseSkeleton = useCallback(() => {
@@ -225,26 +251,38 @@ export const DualVideoPlayer = memo(function DualVideoPlayer({
     });
   }, [poseFrameMap, currentFrame, showPoseOverlay]);
 
-  // Video event listeners
+  // Video event listeners + rAF loop for frame-accurate ball overlay
   useEffect(() => {
     const exoVideo = exoVideoRef.current;
     if (!exoVideo) return;
-    
-    const handleTimeUpdate = () => {
-      setCurrentTime(exoVideo.currentTime);
-      setCurrentFrame(Math.floor(exoVideo.currentTime * fps));
-      syncVideos();
-    };
-    
+
     const handleLoadedMetadata = () => {
       setDuration(exoVideo.duration);
     };
-    
-    exoVideo.addEventListener("timeupdate", handleTimeUpdate);
+
+    // Use requestAnimationFrame for smooth, frame-accurate updates
+    // instead of timeupdate which only fires ~4x/sec
+    let lastFrame = -1;
+    const tick = () => {
+      if (exoVideo) {
+        const t = exoVideo.currentTime;
+        const f = Math.round(t * fps);
+        // Only trigger state updates when the frame actually changes
+        if (f !== lastFrame) {
+          lastFrame = f;
+          setCurrentTime(t);
+          setCurrentFrame(f);
+          syncVideos();
+        }
+      }
+      animFrameRef.current = requestAnimationFrame(tick);
+    };
+    animFrameRef.current = requestAnimationFrame(tick);
+
     exoVideo.addEventListener("loadedmetadata", handleLoadedMetadata);
-    
+
     return () => {
-      exoVideo.removeEventListener("timeupdate", handleTimeUpdate);
+      cancelAnimationFrame(animFrameRef.current);
       exoVideo.removeEventListener("loadedmetadata", handleLoadedMetadata);
     };
   }, [fps, syncVideos]);
