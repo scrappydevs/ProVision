@@ -1,4 +1,4 @@
--- ProVision Database Schema
+-- Database Schema
 -- Run this in your Supabase SQL Editor after creating a new project
 
 -- Enable UUID extension
@@ -59,6 +59,48 @@ $$ LANGUAGE plpgsql;
 
 CREATE TRIGGER update_sessions_updated_at
     BEFORE UPDATE ON public.sessions
+    FOR EACH ROW
+    EXECUTE FUNCTION update_updated_at_column();
+
+-- Session analytics cache (computed analytics stored for quick retrieval)
+CREATE TABLE public.session_analytics (
+    id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+    session_id UUID NOT NULL REFERENCES public.sessions(id) ON DELETE CASCADE,
+    user_id UUID NOT NULL REFERENCES auth.users(id) ON DELETE CASCADE,
+    analytics JSONB NOT NULL,
+    session_updated_at TIMESTAMPTZ,
+    created_at TIMESTAMPTZ DEFAULT NOW(),
+    updated_at TIMESTAMPTZ DEFAULT NOW(),
+    UNIQUE(session_id)
+);
+
+CREATE INDEX idx_session_analytics_session_id ON public.session_analytics(session_id);
+CREATE INDEX idx_session_analytics_user_id ON public.session_analytics(user_id);
+
+ALTER TABLE public.session_analytics ENABLE ROW LEVEL SECURITY;
+
+CREATE POLICY "Users can view own analytics"
+    ON public.session_analytics FOR SELECT
+    USING (auth.uid() = user_id);
+
+CREATE POLICY "Users can insert own analytics"
+    ON public.session_analytics FOR INSERT
+    WITH CHECK (auth.uid() = user_id);
+
+CREATE POLICY "Users can update own analytics"
+    ON public.session_analytics FOR UPDATE
+    USING (auth.uid() = user_id);
+
+CREATE POLICY "Users can delete own analytics"
+    ON public.session_analytics FOR DELETE
+    USING (auth.uid() = user_id);
+
+CREATE POLICY "Service role has full access (analytics)"
+    ON public.session_analytics FOR ALL
+    USING (auth.jwt() ->> 'role' = 'service_role');
+
+CREATE TRIGGER update_session_analytics_updated_at
+    BEFORE UPDATE ON public.session_analytics
     FOR EACH ROW
     EXECUTE FUNCTION update_updated_at_column();
 
