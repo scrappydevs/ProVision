@@ -1,0 +1,32 @@
+[project]
+name = "provision-backend"
+version = "0.1.0"
+description = "ProVision Backend - AI-powered sports analysis"
+requires-python = ">=3.10,<3.13"
+dependencies = [
+    "fastapi>=0.104.0",
+    "uvicorn[standard]>=0.24.0",
+    "python-multipart>=0.0.6",
+    "supabase>=2.0.0",
+    "python-dotenv>=1.0.0",
+    "paramiko>=3.4.0",
+    "httpx>=0.27.0",
+    "numpy==1.26.4",
+    "opencv-python==4.10.0.84",
+    "ultralytics>=8.3.0",
+    "yt-dlp>=2024.0.0",
+    "beautifulsoup4>=4.12.0",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=8.0.0",
+    "pytest-asyncio>=0.23.0",
+]
+
+[build-system]
+requires = ["setuptools>=61.0"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools.packages.find]
+where = ["src"]

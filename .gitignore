@@ -1,0 +1,69 @@
+# Dependencies
+node_modules/
+.pnpm-store/
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.egg-info/
+*.egg
+dist/
+build/
+.venv/
+venv/
+*.whl
+
+# Environment files (NEVER commit secrets)
+.env
+.env.local
+.env.*.local
+.env.bak
+.env.production
+!.env.example
+
+# Next.js
+.next/
+out/
+
+# Build outputs
+tsconfig.tsbuildinfo
+
+# IDE / Editor
+.cursor/
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Model weights (large binaries)
+*.pt
+*.pth
+*.onnx
+*.bin
+*.safetensors
+
+# Video files (large)
+*.mov
+*.mp4
+*.avi
+*.mkv
+
+# Logs
+*.log
+npm-debug.log*
+pnpm-debug.log*
+
+# Package lock (root level, not needed — frontend uses pnpm-lock)
+/package-lock.json
+
+# Misc
+*.pid
+*.seed
+coverage/
+.nyc_output/
