@@ -233,6 +233,26 @@ export function useAnalyzeRecording() {
   });
 }
 
+export function useGeneratePlayerDescription() {
+  const queryClient = useQueryClient();
+
+  return useMutation({
+    mutationFn: async (playerId: string) => {
+      const response = await generatePlayerDescription(playerId);
+      return response.data;
+    },
+    onSuccess: (data, playerId) => {
+      if (data?.description) {
+        queryClient.setQueryData<Player | undefined>(playerKeys.detail(playerId), (prev) =>
+          prev ? { ...prev, description: data.description } : prev
+        );
+      }
+      queryClient.invalidateQueries({ queryKey: playerKeys.detail(playerId) });
+      queryClient.invalidateQueries({ queryKey: playerKeys.lists() });
+    },
+  });
+}
+
 export function useSearchITTF(query: string) {
   return useQuery({
     queryKey: [...playerKeys.all, "ittf-search", query] as const,

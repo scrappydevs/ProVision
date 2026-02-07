@@ -225,44 +225,6 @@ export default function GameViewerPage() {
     return past.length > 0 ? past[past.length - 1] : null;
   }, [strokeSummary?.strokes, currentFrame]);
 
-  // Get player position from current frame pose data for stroke indicator
-  const playerLabelPosition = useMemo(() => {
-    if (!videoBounds) return null;
-
-    // Try to get position from pose data first
-    if (poseData?.frames) {
-      const frameData = poseData.frames.find(f => f.frame === currentFrame);
-      if (frameData?.landmarks && frameData.landmarks.length > 0) {
-        // Calculate bbox from landmarks (landmarks are in normalized 0-1 coordinates)
-        const xs = frameData.landmarks.map(kp => kp.x);
-        const ys = frameData.landmarks.map(kp => kp.y);
-        const minX = Math.min(...xs);
-        const minY = Math.min(...ys);
-
-        return {
-          x: minX * videoBounds.width,
-          y: minY * videoBounds.height - 7, // Same offset as "Player" label
-        };
-      }
-    }
-
-    // Fallback to selected player bbox if no pose data for current frame
-    if (session?.selected_player) {
-      const bbox = session.selected_player.bbox;
-      const videoWidth = session.trajectory_data?.video_info?.width || 1920;
-      const videoHeight = session.trajectory_data?.video_info?.height || 1080;
-
-      const scaleX = videoBounds.width / videoWidth;
-      const scaleY = videoBounds.height / videoHeight;
-
-      return {
-        x: bbox.x * scaleX,
-        y: bbox.y * scaleY - 7,
-      };
-    }
-
-    return null;
-  }, [poseData?.frames, currentFrame, videoBounds, session?.selected_player, session?.trajectory_data?.video_info]);
 
 
   const computedTrajectoryFps = useMemo(() => {
@@ -284,41 +246,6 @@ export default function GameViewerPage() {
     } catch { return videoFps; }
   }, [session?.trajectory_data, videoFps, computedTrajectoryFps]);
 
-  const pointEvents = useMemo(() => {
-    return analytics?.ball_analytics?.points?.events ?? [];
-  }, [analytics]);
-
-  const activePointEvent = useMemo(() => {
-    if (pointEvents.length === 0) return null;
-    const windowFrames = Math.max(2, Math.round(fps * 0.15));
-    return pointEvents.find((evt) => Math.abs(evt.frame - currentFrame) <= windowFrames) ?? null;
-  }, [pointEvents, currentFrame, fps]);
-
-  const lastPointEvent = useMemo(() => {
-    if (pointEvents.length === 0) return null;
-    const past = pointEvents.filter((evt) => evt.frame <= currentFrame);
-    return past.length > 0 ? past[past.length - 1] : null;
-  }, [pointEvents, currentFrame]);
-
-  useEffect(() => {
-    if (!analytics) return;
-    const pointCount = analytics.ball_analytics?.points?.count ?? 0;
-    const eventCount = analytics.ball_analytics?.points?.events?.length ?? 0;
-    console.log("[Points] analytics loaded", {
-      sessionId: gameId,
-      pointCount,
-      eventCount,
-    });
-  }, [analytics, gameId]);
-
-  useEffect(() => {
-    if (!analytics) return;
-    console.log("[Points] frame", {
-      frame: currentFrame,
-      active: activePointEvent?.frame ?? null,
-      last: lastPointEvent?.frame ?? null,
-    });
-  }, [analytics, currentFrame, activePointEvent, lastPointEvent]);
 
   const frameFromTime = useCallback(
     (time: number) => Math.max(0, Math.round(time * fps)),
@@ -1161,7 +1088,7 @@ export default function GameViewerPage() {
 
   // Auto-widen panel for court view and analytics
   useEffect(() => {
-    if (showCourt) setPanelWidth(640); // Wide panel for 3D court view
+    if (showCourt) setPanelWidth(640);
     else if (showAnalytics) setPanelWidth(800); // Wide panel for analytics
     else setPanelWidth(320);
   }, [showCourt, showAnalytics]);
@@ -1218,7 +1145,7 @@ export default function GameViewerPage() {
           "gap-3 flex-1 min-h-0",
           aiChatOpen ? "flex flex-col overflow-y-auto" : "flex"
         )}>
-          {/* Left: Video */}
+          {/* Left: Video or Court (full area) */}
           <div className={cn(
             "flex flex-col min-h-0",
             aiChatOpen
@@ -1263,20 +1190,16 @@ export default function GameViewerPage() {
                   onTipChange={handleTipChange}
                 />
 
-                {/* Live Stroke Indicator - Tracks player dynamically */}
-                {playerLabelPosition && videoBounds && (
+                {/* Live Stroke Indicator - Top-left of video */}
+                {(hasStrokes || poseData?.frames?.length) && (
                   <div
-                    className="fixed pointer-events-none transition-all duration-150"
-                    style={{
-                      left: `${videoBounds.left + playerLabelPosition.x + 80}px`, // Next to "Player" label
-                      top: `${videoBounds.top + playerLabelPosition.y}px`, // Same height as label
-                      zIndex: 100,
-                    }}
+                    className="absolute top-1/3 left-4 pointer-events-none"
+                    style={{ zIndex: 100 }}
                   >
-                    <div className="glass-shot-card px-3 py-1.5">
-                      <div className="flex items-center gap-2">
+                    <div className="glass-shot-card px-4 py-2">
+                      <div className="flex items-center gap-2.5">
                         <div className={cn(
-                          "w-1.5 h-1.5 rounded-full shrink-0",
+                          "w-2 h-2 rounded-full shrink-0",
                           activeStroke
                             ? activeStroke.stroke_type === "forehand"
                               ? "bg-[#9B7B5B] animate-pulse"
@@ -1436,7 +1359,6 @@ export default function GameViewerPage() {
                 duration={duration}
                 strokes={strokeSummary?.strokes ?? []}
                 velocities={session?.trajectory_data?.velocity}
-                pointEvents={pointEvents}
                 activityRegions={analytics?.activity_regions}
                 fps={fps}
                 totalFrames={Math.floor(duration * fps)}
@@ -1575,38 +1497,6 @@ export default function GameViewerPage() {
                           }}
                         />
                       </>
-                    )}
-
-                    {/* ── Live Point Indicator (synced to video frame) ── */}
-                    {pointEvents.length > 0 && (
-                      <div className={cn(
-                        "p-2.5 rounded-lg transition-all duration-200 shrink-0",
-                        activePointEvent ? "bg-[#C45C5C]/15 ring-1 ring-[#C45C5C]/40" : "bg-[#1E1D1F]"
-                      )}>
-                        {activePointEvent ? (
-                          <div className="flex items-center gap-2">
-                            <div className="w-2 h-2 rounded-full bg-[#C45C5C] animate-pulse" />
-                            <span className="text-sm font-medium text-[#C45C5C]">Point scored</span>
-                            <span className="text-xs text-[#6A6865] ml-auto">
-                              {fmtTime(activePointEvent.timestamp)}
-                            </span>
-                          </div>
-                        ) : lastPointEvent ? (
-                          <div className="flex items-center justify-between gap-2">
-                            <div className="flex items-center gap-2">
-                              <div className="w-2 h-2 rounded-full bg-[#363436]" />
-                              <span className="text-sm text-[#8A8885]">
-                                Last point <span className="font-medium text-[#C45C5C]">{fmtTime(lastPointEvent.timestamp)}</span>
-                              </span>
-                            </div>
-                            <span className="text-sm font-medium text-[#E8E6E3] capitalize">
-                              {lastPointEvent.reason.replace(/_/g, " ")}
-                            </span>
-                          </div>
-                        ) : (
-                          <p className="text-[11px] text-[#6A6865] text-center">Play video to see point events</p>
-                        )}
-                      </div>
                     )}
 
                     {/* ── Stroke Summary Stats ── */}

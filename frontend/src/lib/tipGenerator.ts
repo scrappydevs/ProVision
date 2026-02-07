@@ -109,7 +109,7 @@ function generateStrokeTip(
 
   // Priority 1: If form is excellent, give positive reinforcement with opponent context
   if (form_score > 85) {
-    const baseMessage = `Excellent kinetic chain - strong power transfer`;
+    const baseMessage = `Great shot - smooth and powerful`;
     const contextualMessage = oppContext.hasOpponent
       ? `${baseMessage}. Opponent at ${oppContext.opponentPosition}`
       : baseMessage;
@@ -126,7 +126,7 @@ function generateStrokeTip(
   if (metrics.elbow_angle < 120) {
     return {
       title: `${prefix} ${strokeName}`,
-      message: `Extend arm more at contact for better power`,
+      message: `Straighten your arm more at contact`,
     };
   }
 
@@ -135,7 +135,7 @@ function generateStrokeTip(
   if (hipRotRange < 10) {
     return {
       title: `${prefix} ${strokeName}`,
-      message: `Rotate hips more to generate power`,
+      message: `Turn your body more for extra power`,
     };
   }
 
@@ -143,7 +143,7 @@ function generateStrokeTip(
   if (metrics.elbow_range < 40) {
     return {
       title: `${prefix} ${strokeName}`,
-      message: `Complete the follow-through`,
+      message: `Finish the swing completely`,
     };
   }
 
@@ -152,7 +152,7 @@ function generateStrokeTip(
   if (shoulderRotRange < 15) {
     return {
       title: `${prefix} ${strokeName}`,
-      message: `Increase shoulder rotation`,
+      message: `Turn your shoulders more through the shot`,
     };
   }
 
@@ -160,12 +160,12 @@ function generateStrokeTip(
   if (metrics.knee_angle < 130) {
     return {
       title: `${prefix} ${strokeName}`,
-      message: `Stance too low - raise slightly for mobility`,
+      message: `Stand up a bit - you're too low`,
     };
   } else if (metrics.knee_angle > 170) {
     return {
       title: `${prefix} ${strokeName}`,
-      message: `Bend knees more for better balance`,
+      message: `Bend your knees more - stay low and ready`,
     };
   }
 
@@ -174,14 +174,14 @@ function generateStrokeTip(
   if (stroke_type === "forehand" && spineLean < 3) {
     return {
       title: `${prefix} ${strokeName}`,
-      message: `Transfer weight forward into the shot`,
+      message: `Shift your weight forward through the ball`,
     };
   }
 
   // Priority 3: Needs significant work
   return {
     title: `${prefix} ${strokeName}`,
-    message: `Focus on coordinating legs → hips → shoulders → arm`,
+    message: `Work on smooth power from legs through body to racket`,
   };
 }
 

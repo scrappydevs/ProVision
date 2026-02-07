@@ -1,14 +1,23 @@
 "use client";
 
-import { useMemo, useState } from "react";
+import { useMemo, useState, useEffect, useRef } from "react";
 import { useQueries } from "@tanstack/react-query";
-import { Card, CardBody, CardHeader } from "@heroui/react";
-import { Calendar, Swords, TrendingUp } from "lucide-react";
+import { Swords, Sparkles } from "lucide-react";
 import { Button } from "@/components/ui/button";
-import { PlayerCard } from "@/components/players/PlayerCard";
 import { usePlayers, usePlayerGames } from "@/hooks/usePlayers";
-import { tournamentKeys, useTournaments, useUpcomingTournaments } from "@/hooks/useTournaments";
-import { getTournamentMatchups, Matchup, Player, Tournament } from "@/lib/api";
+import { tournamentKeys, useTournaments } from "@/hooks/useTournaments";
+import { analyzePlayerMatchup, getTournamentMatchups, Matchup, MatchupAnalysisResponse, Player } from "@/lib/api";
+import { useMutation } from "@tanstack/react-query";
+import {
+  RadarChart,
+  PolarGrid,
+  PolarAngleAxis,
+  PolarRadiusAxis,
+  Radar,
+  ResponsiveContainer,
+  Legend,
+  Tooltip,
+} from "recharts";
 
 type ResultSummary = {
   recent: string[];
@@ -65,7 +74,61 @@ const buildStyleSummary = (player?: Player) => {
   const parts = [handedness];
   if (style) parts.push(style);
   if (ranking) parts.push(`World rank #${ranking}`);
-  return parts.join(" • ");
+  return parts.join(" · ");
+};
+
+const getSafeDescription = (value?: string) => {
+  if (!value) return null;
+  const trimmed = value.trim();
+  if (!trimmed) return null;
+  if (trimmed.startsWith("{") || trimmed.startsWith("[")) return null;
+  return trimmed;
+};
+
+const tryParseJsonString = (value?: string) => {
+  if (!value) return null;
+  const trimmed = value.trim();
+  if (!trimmed.startsWith("{") && !trimmed.startsWith("[")) return null;
+  try {
+    return JSON.parse(trimmed);
+  } catch {
+    return null;
+  }
+};
+
+const normalizeMatchupAnalysis = (data?: MatchupAnalysisResponse | null) => {
+  if (!data) return null;
+  let base: MatchupAnalysisResponse = data;
+
+  const parsedFromRaw =
+    typeof data.raw === "string" ? tryParseJsonString(data.raw) : null;
+  const parsedFromHeadline =
+    typeof data.headline === "string" ? tryParseJsonString(data.headline) : null;
+  const parsedFromTactical =
+    typeof (data as { tactical_advantage?: unknown }).tactical_advantage === "string"
+      ? tryParseJsonString(data.tactical_advantage as unknown as string)
+      : null;
+
+  const parsed =
+    parsedFromRaw || parsedFromHeadline || parsedFromTactical;
+
+  if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) {
+    base = { ...data, ...(parsed as MatchupAnalysisResponse) };
+  }
+
+  const normalizeList = (value: unknown) => {
+    if (Array.isArray(value)) return value.filter(Boolean) as string[];
+    if (typeof value === "string") return [value];
+    return [];
+  };
+
+  return {
+    ...base,
+    tactical_advantage: normalizeList(base.tactical_advantage),
+    key_edges: normalizeList(base.key_edges),
+    serve_receive_plan: normalizeList(base.serve_receive_plan),
+    rally_length_bias: normalizeList(base.rally_length_bias),
+  };
 };
 
 const filterMatchupsByPlayer = (matchups: Matchup[], playerId?: string) => {
@@ -79,27 +142,89 @@ const getRecentActivity = (games?: { created_at: string }[]) => {
   return games.filter((g) => new Date(g.created_at).getTime() >= cutoff).length;
 };
 
-const getUpcomingMatchups = (
-  tournament: Tournament,
-  matchups: Matchup[],
-  limit = 2
-) => {
-  const list = matchups
-    .filter((m) => m.tournament_id === tournament.id)
-    .sort((a, b) => {
-      const aDate = new Date(a.scheduled_at || a.created_at).getTime();
-      const bDate = new Date(b.scheduled_at || b.created_at).getTime();
-      return aDate - bDate;
-    });
-  return list.slice(0, limit);
+const buildMatchupInsights = ({
+  leftPlayer,
+  rightPlayer,
+  leftSummary,
+  rightSummary,
+  sharedGames,
+  lastShared,
+  leftGames,
+  rightGames,
+}: {
+  leftPlayer?: Player;
+  rightPlayer?: Player;
+  leftSummary: ResultSummary;
+  rightSummary: ResultSummary;
+  sharedGames: { created_at: string }[];
+  lastShared: { created_at: string } | null;
+  leftGames?: { created_at: string }[];
+  rightGames?: { created_at: string }[];
+}) => {
+  if (!leftPlayer || !rightPlayer) return [];
+  const insights: string[] = [];
+
+  if (sharedGames.length) {
+    insights.push(
+      `Head-to-head: ${sharedGames.length} shared sessions, last on ${formatDate(lastShared?.created_at)}.`
+    );
+  } else {
+    insights.push("Head-to-head: no shared sessions recorded yet.");
+  }
+
+  const leftRank = leftPlayer.ittf_data?.ranking;
+  const rightRank = rightPlayer.ittf_data?.ranking;
+  if (leftRank && rightRank) {
+    const edge =
+      leftRank < rightRank
+        ? `${leftPlayer.name} has the ranking edge (#${leftRank} vs #${rightRank}).`
+        : rightRank < leftRank
+        ? `${rightPlayer.name} has the ranking edge (#${rightRank} vs #${leftRank}).`
+        : `Both players are ranked #${leftRank}.`;
+    insights.push(edge);
+  }
+
+  if (leftPlayer.handedness && rightPlayer.handedness) {
+    if (leftPlayer.handedness !== rightPlayer.handedness) {
+      insights.push(
+        `Handedness split: ${leftPlayer.name} is ${leftPlayer.handedness}-handed, ${rightPlayer.name} is ${rightPlayer.handedness}-handed.`
+      );
+    } else {
+      insights.push(`Both players are ${leftPlayer.handedness}-handed.`);
+    }
+  }
+
+  if (leftSummary.streak || rightSummary.streak) {
+    const leftStreak = leftSummary.streak
+      ? `${leftPlayer.name} is on a ${leftSummary.streak.count} ${leftSummary.streak.kind} streak.`
+      : `${leftPlayer.name} has ${getRecentActivity(leftGames)} sessions in 30 days.`;
+    const rightStreak = rightSummary.streak
+      ? `${rightPlayer.name} is on a ${rightSummary.streak.count} ${rightSummary.streak.kind} streak.`
+      : `${rightPlayer.name} has ${getRecentActivity(rightGames)} sessions in 30 days.`;
+    insights.push(leftStreak, rightStreak);
+  }
+
+  const leftStyle = leftPlayer.ittf_data?.playing_style;
+  const rightStyle = rightPlayer.ittf_data?.playing_style;
+  if (leftStyle || rightStyle) {
+    insights.push(
+      `Style matchup: ${leftPlayer.name}${leftStyle ? ` (${leftStyle})` : ""} vs ${rightPlayer.name}${rightStyle ? ` (${rightStyle})` : ""}.`
+    );
+  }
+
+  return insights;
 };
 
 export default function ComparePage() {
   const { data: players, isLoading: playersLoading } = usePlayers();
   const { data: tournaments } = useTournaments();
-  const { data: upcomingTournaments } = useUpcomingTournaments();
   const [leftId, setLeftId] = useState("");
   const [rightId, setRightId] = useState("");
+  const [analysisOpen, setAnalysisOpen] = useState(false);
+  const [analysisData, setAnalysisData] = useState<MatchupAnalysisResponse | null>(null);
+  const [analysisError, setAnalysisError] = useState<string | null>(null);
+  const [searchQuery, setSearchQuery] = useState("");
+  const lastAnalysisKey = useRef<string | null>(null);
 
   const leftPlayer = players?.find((p) => p.id === leftId);
   const rightPlayer = players?.find((p) => p.id === rightId);
@@ -141,255 +266,358 @@ export default function ComparePage() {
   const leftSummary = useMemo(() => getResultSummary(leftMatchups), [leftMatchups]);
   const rightSummary = useMemo(() => getResultSummary(rightMatchups), [rightMatchups]);
 
-  const recommendedTournaments = useMemo(() => {
-    return (upcomingTournaments ?? []).filter((t) => t.level === "international" || t.level === "world");
-  }, [upcomingTournaments]);
-
   const canCompare = leftPlayer && rightPlayer && leftId !== rightId;
+  const matchupInsights = useMemo(
+    () =>
+      buildMatchupInsights({
+        leftPlayer,
+        rightPlayer,
+        leftSummary,
+        rightSummary,
+        sharedGames,
+        lastShared,
+        leftGames,
+        rightGames,
+      }),
+    [leftPlayer, rightPlayer, leftSummary, rightSummary, sharedGames, lastShared, leftGames, rightGames]
+  );
+  const normalizedAnalysis = useMemo(
+    () => normalizeMatchupAnalysis(analysisData),
+    [analysisData]
+  );
 
-  return (
+  const filteredPlayers = useMemo(() => {
+    const query = searchQuery.trim().toLowerCase();
+    if (!query) return players ?? [];
+    return (players ?? []).filter((p) => {
+      const name = p.name.toLowerCase();
+      const team = p.team?.toLowerCase() ?? "";
+      return name.includes(query) || team.includes(query);
+    });
+  }, [players, searchQuery]);
+
+  const handleRosterPick = (playerId: string) => {
+    if (!leftId) {
+      setLeftId(playerId);
+      return;
+    }
+    if (!rightId) {
+      if (playerId !== leftId) setRightId(playerId);
+      return;
+    }
+    if (playerId === leftId) return;
+    setRightId(playerId);
+  };
+
+  const analyzeMatchupMutation = useMutation({
+    mutationFn: async () => {
+      if (!leftId || !rightId) {
+        throw new Error("Missing player ids");
+      }
+      const response = await analyzePlayerMatchup(leftId, rightId);
+      return response.data;
+    },
+    onSuccess: (data) => {
+      setAnalysisData(data);
+      setAnalysisError(null);
+    },
+    onError: (err: unknown) => {
+      setAnalysisError(err instanceof Error ? err.message : "Failed to analyze matchup.");
+    },
+  });
+
+  useEffect(() => {
+    if (!canCompare) return;
+    const key = `${leftId}:${rightId}`;
+    if (lastAnalysisKey.current === key) return;
+    lastAnalysisKey.current = key;
+    setAnalysisOpen(true);
+    setAnalysisData(null);
+    setAnalysisError(null);
+    analyzeMatchupMutation.mutate();
+  }, [canCompare, leftId, rightId, analyzeMatchupMutation]);
+
+  // Collect analysis sections
+  const analysisSections = useMemo(() => {
+    if (!normalizedAnalysis) return [];
+    const sections: { title: string; items: string[] }[] = [];
+    if (normalizedAnalysis.tactical_advantage?.length) {
+      sections.push({ title: "Tactical Advantage", items: normalizedAnalysis.tactical_advantage });
+    }
+    if (normalizedAnalysis.key_edges?.length) {
+      sections.push({ title: "Key Edges", items: normalizedAnalysis.key_edges });
+    }
+    if (normalizedAnalysis.serve_receive_plan?.length) {
+      sections.push({ title: "Serve & Receive", items: normalizedAnalysis.serve_receive_plan });
+    }
+    if (normalizedAnalysis.rally_length_bias?.length) {
+      sections.push({ title: "Rally Length", items: normalizedAnalysis.rally_length_bias });
+    }
+    return sections;
+  }, [normalizedAnalysis]);
+
+  // Player card helper
+  const renderPlayerSlot = (
+    label: string,
+    player: Player | undefined,
+    id: string,
+    setId: (v: string) => void
+  ) => (
     <div>
-      <div className="flex items-center justify-between mb-6">
-        <div>
-          <h1 className="text-2xl font-light text-foreground flex items-center gap-2">
-            <Swords className="w-5 h-5 text-primary" />
-            Player Comparison
-          </h1>
-          <p className="text-sm text-muted-foreground mt-1">
-            Compare head-to-head stats, style matchup, and streaks.
-          </p>
-        </div>
-        <Button
-          variant="outline"
-          onClick={() => {
-            setLeftId("");
-            setRightId("");
-          }}
+      <div className="flex items-center justify-between mb-2">
+        <p className="text-xs uppercase tracking-widest text-foreground/40">{label}</p>
+        <select
+          value={id}
+          onChange={(e) => setId(e.target.value)}
+          className="px-3 py-1 bg-foreground/5 rounded-lg text-xs text-foreground focus:outline-none focus:ring-1 focus:ring-primary/40"
         >
-          Reset
-        </Button>
+          <option value="">Select</option>
+          {(players ?? []).map((p) => (
+            <option key={p.id} value={p.id}>{p.name}</option>
+          ))}
+        </select>
       </div>
-
-      <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
-        <Card className="bg-content1/60">
-          <CardHeader className="text-sm text-foreground/70">Player A</CardHeader>
-          <CardBody className="space-y-4">
-            <select
-              value={leftId}
-              onChange={(e) => setLeftId(e.target.value)}
-              className="w-full px-3 py-2 bg-background rounded-lg text-foreground text-sm focus:outline-none focus:ring-1 focus:ring-primary/50"
-            >
-              <option value="">Select player</option>
-              {(players ?? []).map((p) => (
-                <option key={p.id} value={p.id}>
-                  {p.name}
-                </option>
-              ))}
-            </select>
-            {leftPlayer ? (
-              <div className="max-w-[240px]">
-                <PlayerCard player={leftPlayer} onClick={() => null} />
-              </div>
-            ) : (
-              <p className="text-xs text-muted-foreground">Pick a player to see the card.</p>
-            )}
-          </CardBody>
-        </Card>
-
-        <Card className="bg-content1/60">
-          <CardHeader className="text-sm text-foreground/70">Player B</CardHeader>
-          <CardBody className="space-y-4">
-            <select
-              value={rightId}
-              onChange={(e) => setRightId(e.target.value)}
-              className="w-full px-3 py-2 bg-background rounded-lg text-foreground text-sm focus:outline-none focus:ring-1 focus:ring-primary/50"
-            >
-              <option value="">Select player</option>
-              {(players ?? []).map((p) => (
-                <option key={p.id} value={p.id}>
-                  {p.name}
-                </option>
-              ))}
-            </select>
-            {rightPlayer ? (
-              <div className="max-w-[240px]">
-                <PlayerCard player={rightPlayer} onClick={() => null} />
-              </div>
-            ) : (
-              <p className="text-xs text-muted-foreground">Pick a player to see the card.</p>
-            )}
-          </CardBody>
-        </Card>
-      </div>
-
-      {!playersLoading && leftId === rightId && leftId && (
-        <p className="text-xs text-red-400 mt-3">Select two different players to compare.</p>
-      )}
-
-      <div className="grid grid-cols-1 lg:grid-cols-3 gap-6 mt-8">
-        <Card className="bg-content1/60">
-          <CardHeader className="text-sm text-foreground/70">Head-to-Head</CardHeader>
-          <CardBody className="space-y-2">
-            {canCompare ? (
-              <>
-                <p className="text-2xl font-semibold text-foreground">{sharedGames.length}</p>
-                <p className="text-xs text-muted-foreground">
-                  Shared sessions • Last: {lastShared ? formatDate(lastShared.created_at) : "—"}
-                </p>
-              </>
-            ) : (
-              <p className="text-xs text-muted-foreground">
-                Select two players to view shared match history.
+      {player ? (
+        <div className="flex items-center gap-3">
+          {player.avatar_url ? (
+            <img src={player.avatar_url} alt={player.name} className="w-12 h-12 rounded-full object-cover shrink-0" />
+          ) : (
+            <div className="w-12 h-12 rounded-full bg-foreground/5 flex items-center justify-center text-sm text-foreground/30 shrink-0">
+              {player.name.split(" ").map((n) => n[0]).join("").slice(0, 2).toUpperCase()}
+            </div>
+          )}
+          <div className="min-w-0">
+            <p className="text-base font-medium text-foreground truncate">{player.name}</p>
+            <p className="text-sm text-foreground/50">{buildStyleSummary(player)}</p>
+            {getSafeDescription(player.description ?? player.notes) && (
+              <p className="text-sm text-foreground/40 mt-1 line-clamp-2">
+                {getSafeDescription(player.description ?? player.notes)}
               </p>
             )}
-          </CardBody>
-        </Card>
-
-        <Card className="bg-content1/60">
-          <CardHeader className="text-sm text-foreground/70">Style Matchup</CardHeader>
-          <CardBody className="space-y-3">
-            <div>
-              <p className="text-xs uppercase tracking-wide text-muted-foreground mb-1">Player A</p>
-              <p className="text-sm text-foreground/80">{buildStyleSummary(leftPlayer)}</p>
-            </div>
-            <div>
-              <p className="text-xs uppercase tracking-wide text-muted-foreground mb-1">Player B</p>
-              <p className="text-sm text-foreground/80">{buildStyleSummary(rightPlayer)}</p>
-            </div>
-            {canCompare && (leftPlayer?.description || rightPlayer?.description) && (
-              <div className="pt-2 border-t border-content3 space-y-2">
-                {leftPlayer?.description && (
-                  <p className="text-xs text-foreground/60 whitespace-pre-line">
-                    {leftPlayer.description}
-                  </p>
-                )}
-                {rightPlayer?.description && (
-                  <p className="text-xs text-foreground/60 whitespace-pre-line">
-                    {rightPlayer.description}
-                  </p>
-                )}
-              </div>
-            )}
-          </CardBody>
-        </Card>
-
-        <Card className="bg-content1/60">
-          <CardHeader className="text-sm text-foreground/70">Streaks</CardHeader>
-          <CardBody className="space-y-4">
-            {canCompare ? (
-              <div className="space-y-3">
-                <div className="flex items-center justify-between">
-                  <span className="text-xs text-muted-foreground">Player A</span>
-                  {leftSummary.streak ? (
-                    <span className="text-xs text-foreground">
-                      {leftSummary.streak.count} {leftSummary.streak.kind.toUpperCase()} streak
-                    </span>
-                  ) : (
-                    <span className="text-xs text-muted-foreground">
-                      {getRecentActivity(leftGames)} sessions in 30 days
-                    </span>
-                  )}
-                </div>
-                <div className="flex gap-2">
-                  {leftSummary.recent.length ? (
-                    leftSummary.recent.map((r, i) => (
-                      <span
-                        key={`l-${i}`}
-                        className="text-[10px] px-2 py-0.5 rounded-full bg-content2 text-foreground/70"
-                      >
-                        {r}
-                      </span>
-                    ))
-                  ) : (
-                    <span className="text-xs text-muted-foreground">No results yet</span>
-                  )}
-                </div>
-
-                <div className="flex items-center justify-between">
-                  <span className="text-xs text-muted-foreground">Player B</span>
-                  {rightSummary.streak ? (
-                    <span className="text-xs text-foreground">
-                      {rightSummary.streak.count} {rightSummary.streak.kind.toUpperCase()} streak
-                    </span>
-                  ) : (
-                    <span className="text-xs text-muted-foreground">
-                      {getRecentActivity(rightGames)} sessions in 30 days
-                    </span>
-                  )}
-                </div>
-                <div className="flex gap-2">
-                  {rightSummary.recent.length ? (
-                    rightSummary.recent.map((r, i) => (
-                      <span
-                        key={`r-${i}`}
-                        className="text-[10px] px-2 py-0.5 rounded-full bg-content2 text-foreground/70"
-                      >
-                        {r}
-                      </span>
-                    ))
-                  ) : (
-                    <span className="text-xs text-muted-foreground">No results yet</span>
-                  )}
-                </div>
-              </div>
-            ) : (
-              <p className="text-xs text-muted-foreground">Choose two players to compare streaks.</p>
-            )}
-          </CardBody>
-        </Card>
-      </div>
-
-      <div className="mt-10">
-        <div className="flex items-center gap-2 mb-3">
-          <TrendingUp className="w-4 h-4 text-primary" />
-          <h2 className="text-sm font-medium text-foreground">
-            Recommended International Matchups
-          </h2>
+          </div>
         </div>
-        <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-          {recommendedTournaments.length ? (
-            recommendedTournaments.map((tournament) => {
-              const matchups = getUpcomingMatchups(tournament, allMatchups);
-              return (
-                <Card key={tournament.id} className="bg-content1/60">
-                  <CardBody className="space-y-2">
-                    <div className="flex items-center justify-between">
-                      <div>
-                        <p className="text-sm text-foreground">{tournament.name}</p>
-                        <p className="text-xs text-muted-foreground flex items-center gap-1">
-                          <Calendar className="w-3 h-3" />
-                          {formatDate(tournament.start_date)}
-                        </p>
-                      </div>
-                      <span className="text-[10px] uppercase tracking-wide text-muted-foreground">
-                        {tournament.level}
-                      </span>
+      ) : (
+        <p className="text-sm text-foreground/20 py-3">No player selected</p>
+      )}
+    </div>
+  );
+
+  return (
+    <div className="-m-6 h-[calc(100vh-4rem)] overflow-y-auto">
+      <div className="px-8 py-6 max-w-5xl mx-auto space-y-6">
+        {/* Header */}
+        <div className="flex items-center justify-between">
+          <div className="flex items-center gap-3">
+            <Swords className="w-5 h-5 text-primary" />
+            <h1 className="text-xl font-medium text-foreground">Player Comparison</h1>
+          </div>
+          <div className="flex items-center gap-2">
+            {canCompare && (
+              <Button
+                size="sm"
+                onClick={() => {
+                  setAnalysisData(null);
+                  setAnalysisError(null);
+                  analyzeMatchupMutation.mutate();
+                }}
+                disabled={analyzeMatchupMutation.isPending}
+                className="flex items-center gap-1.5"
+              >
+                <Sparkles className="w-3.5 h-3.5" />
+                Re-analyze
+              </Button>
+            )}
+            <Button
+              variant="outline"
+              size="sm"
+              onClick={() => {
+                setLeftId("");
+                setRightId("");
+                setAnalysisOpen(false);
+                setAnalysisData(null);
+                lastAnalysisKey.current = null;
+              }}
+            >
+              Reset
+            </Button>
+          </div>
+        </div>
+
+        {/* Player Selection */}
+        <div className="grid grid-cols-2 gap-8">
+          {renderPlayerSlot("Player A", leftPlayer, leftId, setLeftId)}
+          {renderPlayerSlot("Player B", rightPlayer, rightId, setRightId)}
+        </div>
+
+        {/* Roster Grid (only when not both selected) */}
+        {!canCompare && (
+          <div className="space-y-3">
+            <div className="flex items-center gap-3">
+              <input
+                value={searchQuery}
+                onChange={(e) => setSearchQuery(e.target.value)}
+                placeholder="Search roster..."
+                className="flex-1 px-4 py-2 bg-foreground/5 rounded-lg text-sm text-foreground placeholder:text-foreground/20 focus:outline-none focus:ring-1 focus:ring-primary/40"
+              />
+              <p className="text-xs text-foreground/30 shrink-0">
+                Next: {!leftId ? "Player A" : "Player B"}
+              </p>
+            </div>
+            <div className="grid grid-cols-3 md:grid-cols-4 lg:grid-cols-6 gap-2">
+              {(filteredPlayers ?? []).map((player) => {
+                const isLeft = player.id === leftId;
+                const isRight = player.id === rightId;
+                return (
+                  <button
+                    key={player.id}
+                    onClick={() => handleRosterPick(player.id)}
+                    className={`group relative overflow-hidden rounded-xl transition-all ${
+                      isLeft || isRight
+                        ? "ring-2 ring-primary/50"
+                        : "hover:ring-1 hover:ring-foreground/20"
+                    }`}
+                  >
+                    <div className="relative aspect-[3/4]">
+                      {player.avatar_url ? (
+                        <img
+                          src={player.avatar_url}
+                          alt={player.name}
+                          className="w-full h-full object-cover group-hover:scale-105 transition-transform duration-500"
+                        />
+                      ) : (
+                        <div className="w-full h-full bg-foreground/5 flex items-center justify-center">
+                          <span className="text-xl font-light text-foreground/15 select-none">
+                            {player.name.split(" ").map((n) => n[0]).join("").slice(0, 2).toUpperCase()}
+                          </span>
+                        </div>
+                      )}
+                      <div className="absolute inset-0 bg-gradient-to-t from-background/90 via-transparent to-transparent" />
                     </div>
-                    {matchups.length ? (
-                      <div className="space-y-1">
-                        {matchups.map((m) => (
-                          <p key={m.id} className="text-xs text-foreground/70">
-                            {m.player_name || "TBD"} vs {m.opponent_name}
-                          </p>
-                        ))}
+                    <div className="absolute bottom-2 left-2 right-2">
+                      {(isLeft || isRight) && (
+                        <p className="text-[10px] uppercase tracking-wider text-primary font-medium">
+                          {isLeft ? "Player A" : "Player B"}
+                        </p>
+                      )}
+                      <p className="text-xs text-foreground font-medium truncate">{player.name}</p>
+                    </div>
+                  </button>
+                );
+              })}
+            </div>
+          </div>
+        )}
+
+        {!playersLoading && leftId === rightId && leftId && (
+          <p className="text-sm text-red-400">Select two different players to compare.</p>
+        )}
+
+        {/* Matchup Analysis */}
+        {canCompare && analysisOpen && (
+          <div className="space-y-5">
+            {/* Loading / Error */}
+            {analyzeMatchupMutation.isPending && (
+              <p className="text-sm text-foreground/40">Generating matchup analysis...</p>
+            )}
+            {analysisError && (
+              <p className="text-sm text-red-400">{analysisError}</p>
+            )}
+
+            {normalizedAnalysis && (
+              <>
+                {/* Headline */}
+                {normalizedAnalysis.headline && (
+                  <p className="text-base text-foreground/70 leading-relaxed">
+                    {normalizedAnalysis.headline}
+                  </p>
+                )}
+
+                {/* Radar + Analysis sections */}
+                <div className="grid grid-cols-5 gap-6 items-start">
+                  {/* Combined radar chart */}
+                  {normalizedAnalysis.scores?.axes?.length ? (
+                    <div className="col-span-2">
+                      <p className="text-xs uppercase tracking-widest text-foreground/30 mb-2">Player Profiles</p>
+                      <ResponsiveContainer width="100%" height={260}>
+                        <RadarChart data={normalizedAnalysis.scores.axes}>
+                          <PolarGrid stroke="currentColor" className="text-foreground/8" />
+                          <PolarAngleAxis
+                            dataKey="axis"
+                            tick={{ fill: "currentColor", fontSize: 11 }}
+                            className="text-foreground/50"
+                          />
+                          <PolarRadiusAxis
+                            angle={90}
+                            domain={[0, 100]}
+                            tick={false}
+                            axisLine={false}
+                          />
+                          <Radar
+                            name={leftPlayer?.name ?? "Player A"}
+                            dataKey="left"
+                            stroke="#9B7B5B"
+                            fill="#9B7B5B"
+                            fillOpacity={0.2}
+                            strokeWidth={2}
+                          />
+                          <Radar
+                            name={rightPlayer?.name ?? "Player B"}
+                            dataKey="right"
+                            stroke="#6B8E6B"
+                            fill="#6B8E6B"
+                            fillOpacity={0.15}
+                            strokeWidth={2}
+                            strokeDasharray="4 4"
+                          />
+                          <Legend wrapperStyle={{ fontSize: "12px" }} iconSize={10} />
+                          <Tooltip
+                            contentStyle={{
+                              backgroundColor: "var(--background)",
+                              border: "1px solid var(--foreground-10)",
+                              borderRadius: "8px",
+                              fontSize: "12px",
+                            }}
+                          />
+                        </RadarChart>
+                      </ResponsiveContainer>
+                    </div>
+                  ) : null}
+
+                  {/* Analysis sections */}
+                  <div className={normalizedAnalysis.scores?.axes?.length ? "col-span-3 space-y-5" : "col-span-5 grid grid-cols-2 gap-5"}>
+                    {analysisSections.map((section) => (
+                      <div key={section.title}>
+                        <p className="text-xs font-medium uppercase tracking-widest text-foreground/30 mb-2">
+                          {section.title}
+                        </p>
+                        <ul className="space-y-1.5">
+                          {section.items.map((item, idx) => (
+                            <li key={idx} className="flex gap-2.5 text-sm text-foreground/60 leading-relaxed">
+                              <span className="mt-2 h-1 w-1 rounded-full bg-primary/50 shrink-0" />
+                              <span>{item}</span>
+                            </li>
+                          ))}
+                        </ul>
                       </div>
-                    ) : (
-                      <p className="text-xs text-muted-foreground">
-                        Matchups will be announced soon.
-                      </p>
-                    )}
-                  </CardBody>
-                </Card>
-              );
-            })
-          ) : (
-            <Card className="bg-content1/60">
-              <CardBody className="text-xs text-muted-foreground">
-                No upcoming international tournaments yet.
-              </CardBody>
-            </Card>
-          )}
-        </div>
+                    ))}
+                  </div>
+                </div>
+              </>
+            )}
+
+            {/* Head-to-head insights */}
+            {matchupInsights.length > 0 && (
+              <div className="pt-2">
+                <p className="text-xs uppercase tracking-widest text-foreground/30 mb-2">Head-to-Head</p>
+                <div className="flex flex-wrap gap-x-4 gap-y-1">
+                  {matchupInsights.map((insight, idx) => (
+                    <p key={idx} className="text-sm text-foreground/50">{insight}</p>
+                  ))}
+                </div>
+              </div>
+            )}
+          </div>
+        )}
       </div>
     </div>
   );

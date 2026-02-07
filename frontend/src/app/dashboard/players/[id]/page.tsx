@@ -15,7 +15,7 @@ import {
   usePlayer, usePlayerGames, useUploadAvatar, useUpdatePlayer,
   useSyncITTF, usePlayerRecordings, useCreateRecording,
   useDeleteRecording, useCreateClip, useAnalyzeRecording,
-  usePlayerInsights,
+  usePlayerInsights, useGeneratePlayerDescription,
 } from "@/hooks/usePlayers";
 import { GameTimeline } from "@/components/players/GameTimeline";
 import { createSession, GamePlayerInfo, RecordingType, Recording } from "@/lib/api";
@@ -83,6 +83,7 @@ export default function PlayerProfilePage() {
   const [analyzingRecordingId, setAnalyzingRecordingId] = useState<string | null>(null);
   const [editingDescription, setEditingDescription] = useState(false);
   const [descriptionDraft, setDescriptionDraft] = useState("");
+  const [generatedDescription, setGeneratedDescription] = useState<string | null>(null);
   const { data: player, isLoading: playerLoading } = usePlayer(playerId);
   const { data: games, isLoading: gamesLoading } = usePlayerGames(playerId, {
     search: searchQuery || undefined,
@@ -114,6 +115,7 @@ export default function PlayerProfilePage() {
   const deleteRecordingMutation = useDeleteRecording();
   const createClipMutation = useCreateClip();
   const analyzeRecordingMutation = useAnalyzeRecording();
+  const regenerateDescriptionMutation = useGeneratePlayerDescription();
 
   const { setContext: setAIChatContext, clearContext: clearAIChatContext } = useAIChat();
 
@@ -166,7 +168,10 @@ export default function PlayerProfilePage() {
 
   useEffect(() => {
     if (!player) return;
-    setDescriptionDraft(player.description ?? "");
+    setDescriptionDraft(player.description ?? player.notes ?? "");
+    if (player.description) {
+      setGeneratedDescription(null);
+    }
     setEditingDescription(false);
   }, [player?.description, player]);
 
@@ -461,13 +466,37 @@ export default function PlayerProfilePage() {
               <h2 className="text-xs uppercase tracking-[0.3em] text-foreground/50">
                 Player Description
               </h2>
-              <button
-                onClick={() => setEditingDescription((prev) => !prev)}
-                className="flex items-center gap-1 text-[10px] uppercase tracking-[0.2em] text-foreground/50 hover:text-foreground transition-colors"
-              >
-                <Edit2 className="w-3 h-3" />
-                {editingDescription ? "Close" : "Edit"}
-              </button>
+              <div className="flex items-center gap-3">
+                <button
+                  onClick={() => {
+                    regenerateDescriptionMutation.mutate(playerId, {
+                      onSuccess: (data) => {
+                        if (data.description) {
+                          setGeneratedDescription(data.description);
+                          setDescriptionDraft(data.description);
+                        }
+                        setEditingDescription(false);
+                      },
+                    });
+                  }}
+                  disabled={regenerateDescriptionMutation.isPending}
+                  className="flex items-center gap-1 text-[10px] uppercase tracking-[0.2em] text-foreground/50 hover:text-foreground transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+                >
+                  {regenerateDescriptionMutation.isPending ? (
+                    <Loader2 className="w-3 h-3 animate-spin" />
+                  ) : (
+                    <RefreshCw className="w-3 h-3" />
+                  )}
+                  Regenerate
+                </button>
+                <button
+                  onClick={() => setEditingDescription((prev) => !prev)}
+                  className="flex items-center gap-1 text-[10px] uppercase tracking-[0.2em] text-foreground/50 hover:text-foreground transition-colors"
+                >
+                  <Edit2 className="w-3 h-3" />
+                  {editingDescription ? "Close" : "Edit"}
+                </button>
+              </div>
             </div>
             {editingDescription ? (
               <div className="space-y-3">
@@ -505,7 +534,7 @@ export default function PlayerProfilePage() {
               </div>
             ) : (
               <p className="text-sm text-foreground/70 whitespace-pre-line leading-relaxed">
-                {player.description || "Add a short two-paragraph description covering strengths, weaknesses, and playing style."}
+                {generatedDescription || player.description || player.notes || "Add a short two-paragraph description covering strengths, weaknesses, and playing style."}
               </p>
             )}
           </div>

@@ -44,6 +44,7 @@ polars==1.38.0
 polars-runtime-32==1.38.0
 postgrest==2.27.3
 propcache==0.4.1
+
 psutil==7.2.2
 pycparser==3.0
 pydantic==2.12.5

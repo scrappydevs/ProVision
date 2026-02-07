@@ -5,6 +5,7 @@ import traceback
 
 from ..database.supabase import get_supabase, get_current_user_id
 from ..services.stroke_detector import StrokeDetector, Stroke
+from .players import update_player_description_from_insights
 
 router = APIRouter()
 
@@ -164,6 +165,15 @@ def process_stroke_detection(session_id: str):
         supabase.table("sessions").update({
             "stroke_summary": summary
         }).eq("id", session_id).execute()
+
+        # Auto-update player descriptions (agent-based) after new analysis
+        try:
+            gp_result = supabase.table("game_players").select("player_id").eq("game_id", session_id).execute()
+            player_ids = {g["player_id"] for g in (gp_result.data or []) if g.get("player_id")}
+            for pid in player_ids:
+                update_player_description_from_insights(pid)
+        except Exception as e:
+            print(f"[StrokeDetection] Failed to update player descriptions: {e}")
 
         print(f"[StrokeDetection] Completed stroke detection for session: {session_id}")
         print(f"[StrokeDetection] Summary: {summary}")

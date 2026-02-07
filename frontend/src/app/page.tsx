@@ -55,7 +55,7 @@ export default function LandingPage() {
       >
         <div className="max-w-7xl mx-auto flex items-center justify-between">
           <div className="flex items-center gap-2.5">
-            <img src="/logo.png" alt="ProVision" className="w-8 h-8 dark:invert" />
+            <img src="/logo.png" alt="ProVision" className="w-5 h-5 dark:invert" />
             <span className="text-sm font-medium tracking-wide">ProVision</span>
           </div>
           <div className="flex items-center gap-8">
@@ -101,9 +101,12 @@ export default function LandingPage() {
               animate={{ opacity: 1, y: 0 }}
               transition={{ duration: 1, delay: 0.8 }}
             >
-              <h1 className="text-4xl md:text-5xl lg:text-6xl font-light leading-[1.1] tracking-tight mb-3">
-                Turn <span className="text-[#9B7B5B]">Spectator</span> into <span className="text-[#9B7B5B]">Player</span>
+              <h1 className="text-5xl md:text-7xl lg:text-8xl font-light leading-[1.05] tracking-tight mb-8">
+                <span className="text-[#9B7B5B]">Telemetry</span> for Table Tennis
               </h1>
+              <p className="text-xl md:text-2xl text-muted-foreground max-w-4xl leading-relaxed">
+                AI and computer vision to automatically track the ball, analyze stroke mechanics, estimate player pose, and deliver real-time coaching insights from any match or practice video
+              </p>
             </motion.div>
           </div>
         </div>
@@ -222,9 +225,9 @@ export default function LandingPage() {
             whileInView={{ opacity: 1 }}
             viewport={{ once: true }}
             transition={{ delay: 0.1 }}
-            className="text-muted-foreground mb-8 max-w-md mx-auto"
+            className="text-muted-foreground mb-8 max-w-2xl mx-auto"
           >
-            Upload your sports clips and experience AI-powered exo-to-ego transformation with dual-view pose analysis.
+            Upload any table tennis video and get automatic ball tracking, stroke analysis, pose estimation, and AI-powered coaching tips - all powered by computer vision.
           </motion.p>
           <motion.div
             initial={{ opacity: 0 }}
@@ -247,13 +250,13 @@ export default function LandingPage() {
       <footer className="py-8 px-8 border-t border-border">
         <div className="max-w-5xl mx-auto flex items-center justify-between text-sm text-muted-foreground">
           <div className="flex items-center gap-2">
-            <img src="/logo.png" alt="ProVision" className="w-6 h-6 dark:invert" />
+            <img src="/logo.png" alt="ProVision" className="w-4 h-4 dark:invert" />
             <span>ProVision</span>
           </div>
           <div className="flex items-center gap-6 text-xs">
-            <span>EgoX</span>
+            <span>TrackNet</span>
+            <span>YOLO</span>
             <span>SAM2</span>
-            <span>MediaPipe</span>
           </div>
         </div>
       </footer>

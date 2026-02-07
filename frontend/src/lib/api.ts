@@ -931,6 +931,24 @@ export const getPlayerInsights = (playerId: string) =>
 export const generatePlayerDescription = (playerId: string) =>
   api.post<{ player_id: string; description: string; generated_at: string }>(`/api/players/generate-description/${playerId}`);
 
+export interface MatchupAnalysisResponse {
+  headline?: string;
+  tactical_advantage: string[];
+  key_edges: string[];
+  serve_receive_plan: string[];
+  rally_length_bias: string[];
+  scores?: {
+    axes?: Array<{ axis: string; left: number; right: number }>;
+  };
+  raw?: string;
+}
+
+export const analyzePlayerMatchup = (leftPlayerId: string, rightPlayerId: string) =>
+  api.post<MatchupAnalysisResponse>("/api/players/compare/analyze", {
+    left_player_id: leftPlayerId,
+    right_player_id: rightPlayerId,
+  });
+
 // Video types
 export interface Video {
   id: string;
