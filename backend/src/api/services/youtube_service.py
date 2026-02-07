@@ -2,9 +2,48 @@ import os
 import re
 import logging
 import tempfile
+import base64
 from typing import Optional
 
 logger = logging.getLogger(__name__)
+
+# ── YouTube cookie support ───────────────────────────────────────────
+# YouTube blocks datacenter IPs with bot detection. To work around this,
+# set YT_COOKIES_BASE64 env var with a base64-encoded Netscape cookies file.
+# Generate it: yt-dlp --cookies-from-browser chrome --cookies cookies.txt
+#              cat cookies.txt | base64 > cookies_b64.txt
+_yt_cookies_path: Optional[str] = None
+
+
+def _get_cookies_path() -> Optional[str]:
+    """Lazily decode YT_COOKIES_BASE64 to a temp file and return its path."""
+    global _yt_cookies_path
+    if _yt_cookies_path and os.path.exists(_yt_cookies_path):
+        return _yt_cookies_path
+
+    b64 = os.getenv("YT_COOKIES_BASE64")
+    if not b64:
+        return None
+
+    try:
+        raw = base64.b64decode(b64)
+        fd, path = tempfile.mkstemp(prefix="yt_cookies_", suffix=".txt")
+        with os.fdopen(fd, "wb") as f:
+            f.write(raw)
+        _yt_cookies_path = path
+        logger.info(f"YouTube cookies written to {path} ({len(raw)} bytes)")
+        return path
+    except Exception as e:
+        logger.warning(f"Failed to decode YT_COOKIES_BASE64: {e}")
+        return None
+
+
+def _inject_cookies(opts: dict) -> dict:
+    """Inject cookies file into yt-dlp options if available."""
+    cookies = _get_cookies_path()
+    if cookies:
+        opts["cookiefile"] = cookies
+    return opts
 
 
 def extract_youtube_id(url: str) -> Optional[str]:
@@ -28,11 +67,11 @@ def get_youtube_metadata(url: str) -> Optional[dict]:
     try:
         import yt_dlp
 
-        ydl_opts = {
+        ydl_opts = _inject_cookies({
             "quiet": True,
             "no_warnings": True,
             "skip_download": True,
-        }
+        })
 
         with yt_dlp.YoutubeDL(ydl_opts) as ydl:
             info = ydl.extract_info(url, download=False)
@@ -106,13 +145,13 @@ def get_youtube_streaming_url(url: str) -> Optional[dict]:
     try:
         import yt_dlp
 
-        ydl_opts = {
+        ydl_opts = _inject_cookies({
             "format": "best[ext=mp4][height<=720]/best[ext=mp4]/best",
             "quiet": True,
             "no_warnings": True,
             "skip_download": True,
             "extract_flat": False,
-        }
+        })
 
         with yt_dlp.YoutubeDL(ydl_opts) as ydl:
             info = ydl.extract_info(url, download=False)
@@ -164,13 +203,13 @@ def download_youtube_video(
 
         # Fallback: Download full video
         output_path = os.path.join(temp_dir, "video.mp4")
-        ydl_opts = {
+        ydl_opts = _inject_cookies({
             "format": "best[ext=mp4][height<=720]/best[ext=mp4]/best",
             "outtmpl": output_path,
             "quiet": True,
             "no_warnings": True,
             "max_filesize": 500 * 1024 * 1024,
-        }
+        })
 
         with yt_dlp.YoutubeDL(ydl_opts) as ydl:
             ydl.download([url])
