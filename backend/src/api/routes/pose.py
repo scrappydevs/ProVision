@@ -118,39 +118,44 @@ def process_pose_analysis(session_id: str, video_path: str, video_url: str, sele
             supabase.table("pose_analysis").insert(batch).execute()
             print(f"[PoseAnalysis] Inserted batch {i//batch_size + 1}/{(len(pose_records) + batch_size - 1)//batch_size}")
 
-        # Generate pose overlay video
-        print(f"[PoseAnalysis] Generating pose overlay video for session: {session_id}")
-        pose_overlay_temp = tempfile.NamedTemporaryFile(delete=False, suffix='.mp4').name
-        processor.generate_pose_overlay_video(local_video_path, pose_overlay_temp, sample_rate=1, selected_players=selected_players)
+        # Generate pose overlay video (optional — may fail if OpenCV lacks codec)
+        pose_video_url = None
+        try:
+            print(f"[PoseAnalysis] Generating pose overlay video for session: {session_id}")
+            pose_overlay_temp = tempfile.NamedTemporaryFile(delete=False, suffix='.mp4').name
+            processor.generate_pose_overlay_video(local_video_path, pose_overlay_temp, sample_rate=1, selected_players=selected_players)
 
-        # Upload pose overlay video to Supabase storage
-        print(f"[PoseAnalysis] Uploading pose overlay video to storage")
+            # Upload pose overlay video to Supabase storage
+            print(f"[PoseAnalysis] Uploading pose overlay video to storage")
 
-        # Get user_id from video_path (format: user_id/session_id/filename)
-        user_id = video_path.split('/')[0]
-        pose_storage_path = f"{user_id}/{session_id}/pose_overlay.mp4"
+            # Get user_id from video_path (format: user_id/session_id/filename)
+            user_id = video_path.split('/')[0]
+            pose_storage_path = f"{user_id}/{session_id}/pose_overlay.mp4"
 
-        # Read video file
-        with open(pose_overlay_temp, 'rb') as f:
-            video_content = f.read()
+            with open(pose_overlay_temp, 'rb') as f:
+                video_content = f.read()
 
-        # Upload to storage with automatic retry for SSL/network errors
-        from ..utils.video_utils import upload_to_storage_with_retry
-        pose_video_url = upload_to_storage_with_retry(pose_storage_path, video_content)
+            from ..utils.video_utils import upload_to_storage_with_retry
+            pose_video_url = upload_to_storage_with_retry(pose_storage_path, video_content)
+            pose_video_path = pose_overlay_temp
+            print(f"[PoseAnalysis] Pose overlay video uploaded for session: {session_id}")
+        except Exception as overlay_err:
+            print(f"[PoseAnalysis] Pose overlay video failed (non-fatal): {overlay_err}")
+            print(f"[PoseAnalysis] Pose data was saved — analysis will work without overlay video")
 
-        # Clean up temporary pose video file
-        pose_video_path = pose_overlay_temp
-
-        # Update session with pose video path
-        supabase.table("sessions").update({
+        # Update session — mark completed even if overlay failed
+        update_data = {
             "status": "completed",
-            "pose_video_path": pose_video_url,
             "pose_data": {
                 "frame_count": len(pose_frames),
                 "analyzed_at": pose_frames[0].timestamp if pose_frames else 0,
                 "analyzed_until": pose_frames[-1].timestamp if pose_frames else 0
             }
-        }).eq("id", session_id).execute()
+        }
+        if pose_video_url:
+            update_data["pose_video_path"] = pose_video_url
+
+        supabase.table("sessions").update(update_data).eq("id", session_id).execute()
 
         print(f"[PoseAnalysis] Completed analysis for session: {session_id}")
         
