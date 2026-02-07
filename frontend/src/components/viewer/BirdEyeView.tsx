@@ -5,7 +5,7 @@ import { Canvas, useFrame, useThree, ThreeEvent } from "@react-three/fiber";
 import { OrbitControls, Line } from "@react-three/drei";
 import * as THREE from "three";
 import { TrajectoryData, TrajectoryPoint } from "@/lib/api";
-import { PoseAnalysisData, PoseFrame } from "@/hooks/usePoseData";
+import { PoseAnalysisData } from "@/hooks/usePoseData";
 
 interface BirdEyeViewProps {
   trajectoryData?: TrajectoryData;
@@ -924,58 +924,6 @@ function ImpactHeatmap({ trajectoryData }: { trajectoryData?: TrajectoryData }) 
   );
 }
 
-function PosePlayers({ poseData, currentFrame }: { poseData?: PoseAnalysisData; currentFrame: number }) {
-  const frameMap = useMemo(() => {
-    if (!poseData?.frames) return new Map<number, PoseFrame>();
-    return new Map(poseData.frames.map((f) => [f.frame_number, f]));
-  }, [poseData]);
-
-  const getPlayerPos = useCallback((frame: PoseFrame): [number, number, number] | null => {
-    const lh = frame.keypoints?.left_hip;
-    const rh = frame.keypoints?.right_hip;
-    if (!lh && !rh) return null;
-    const cx = lh && rh ? (lh.x + rh.x) / 2 : (lh?.x ?? rh?.x ?? 0.5);
-    const cy = lh && rh ? (lh.y + rh.y) / 2 : (lh?.y ?? rh?.y ?? 0.5);
-    return [cx * 4.0 - 2.0, TABLE_H + 0.5, cy * 2.5 - 1.25];
-  }, []);
-
-  const currentPoseFrame = useMemo(() => {
-    if (!frameMap.size) return null;
-    let closest: PoseFrame | null = null;
-    let minDist = Infinity;
-    for (const [fn, f] of frameMap) {
-      const dist = Math.abs(fn - currentFrame);
-      if (dist < minDist) { minDist = dist; closest = f; }
-    }
-    return closest;
-  }, [frameMap, currentFrame]);
-
-  const trail = useMemo(() => {
-    if (!poseData?.frames) return [];
-    return poseData.frames.filter((f) => f.frame_number <= currentFrame).slice(-30)
-      .map((f) => getPlayerPos(f)).filter((p): p is [number, number, number] => p !== null);
-  }, [poseData, currentFrame, getPlayerPos]);
-
-  const playerPos = currentPoseFrame ? getPlayerPos(currentPoseFrame) : null;
-
-  if (!playerPos) {
-    const t = currentFrame / Math.max(1, 300);
-    return (
-      <>
-        <PlayerCapsule position={[-TABLE_W / 2 - 0.4, TABLE_H + 0.3, Math.sin(t * Math.PI * 4) * 0.3]} color="#9B7B5B" />
-        <PlayerCapsule position={[TABLE_W / 2 + 0.4, TABLE_H + 0.3, Math.sin(t * Math.PI * 3 + 1) * 0.25]} color="#5B9B7B" />
-      </>
-    );
-  }
-
-  return (
-    <group>
-      <PlayerCapsule position={playerPos} color="#9B7B5B" />
-      {trail.length >= 2 && <Line points={trail} color="#9B7B5B" transparent opacity={0.15} lineWidth={1} />}
-    </group>
-  );
-}
-
 /** Animate camera to a preset position */
 function CameraController({ preset }: { preset: CameraPreset }) {
   const { camera } = useThree();
@@ -998,22 +946,6 @@ function CameraController({ preset }: { preset: CameraPreset }) {
   }, [preset, camera]);
 
   return null;
-}
-
-function PlayerCapsule({ position, color }: { position: [number, number, number]; color: string }) {
-  const ref = useRef<THREE.Mesh>(null);
-  useFrame(() => {
-    if (ref.current) {
-      ref.current.position.x = THREE.MathUtils.lerp(ref.current.position.x, position[0], 0.1);
-      ref.current.position.z = THREE.MathUtils.lerp(ref.current.position.z, position[2], 0.1);
-    }
-  });
-  return (
-    <mesh ref={ref} position={position} castShadow>
-      <capsuleGeometry args={[0.06, 0.2, 4, 12]} />
-      <meshStandardMaterial color={color} roughness={0.4} metalness={0.2} />
-    </mesh>
-  );
 }
 
 function Scene({
@@ -1045,7 +977,6 @@ function Scene({
         whatIfStart={whatIfStart} whatIfSpeed={whatIfSpeed} whatIfAngle={whatIfAngle} whatIfDir={whatIfDir}
       />
       {mode === "heatmap" && <ImpactHeatmap trajectoryData={trajectoryData} />}
-      <PosePlayers poseData={poseData} currentFrame={currentFrame} />
     </>
   );
 }
