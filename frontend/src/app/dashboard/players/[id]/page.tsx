@@ -621,13 +621,8 @@ export default function PlayerProfilePage() {
 
         {/* Right: recordings — larger and more prominent */}
         <div className="absolute right-6 top-[15%] bottom-6 w-[560px] flex flex-col z-20">
-          {/* Smooth gradient background */}
-          <div className="absolute inset-0 rounded-3xl bg-gradient-to-br from-[#2a3f3f]/90 via-[#1e2d2d]/95 to-[#1a2525]/95 shadow-2xl" />
-          
-          {/* Content */}
-          <div className="relative flex flex-col h-full">
           {/* Header with enhanced styling */}
-          <div className="flex flex-col gap-3 mb-5 px-4 py-3 rounded-t-3xl border-b border-foreground/10">
+          <div className="flex flex-col gap-3 mb-5 px-4 py-3 bg-content1/80 rounded-3xl border border-foreground/15">
             <div className="flex items-center justify-between">
               <div className="flex items-center gap-3">
                 <span className="text-xs uppercase tracking-[0.25em] text-foreground/70">Recordings</span>
@@ -691,14 +686,18 @@ export default function PlayerProfilePage() {
                       );
                     }
                   }}
-                  className="group cursor-pointer flex gap-5 items-start p-4 rounded-2xl transition-colors bg-content1/90 border border-foreground/10 hover:border-foreground/20 hover:bg-content1"
+                  className="group cursor-pointer flex gap-5 items-start p-4 rounded-2xl transition-all relative overflow-hidden border border-foreground/10 hover:border-foreground/20"
                 >
+                  {/* Liquid glass background */}
+                  <div className="absolute inset-0 bg-gradient-to-br from-content1/95 via-content1/90 to-content1/85 group-hover:from-content1 group-hover:via-content1/95 group-hover:to-content1/90 transition-all duration-300" />
+                  <div className="absolute inset-0 bg-[radial-gradient(ellipse_at_top_left,rgba(155,123,91,0.08),transparent_50%),radial-gradient(ellipse_at_bottom_right,rgba(91,155,123,0.05),transparent_50%)] opacity-60 group-hover:opacity-80 transition-opacity duration-300" />
+                  
                   {rec.video_path && (
-                    <div className="relative w-36 h-24 rounded-xl overflow-hidden shrink-0 ring-1 ring-white/10">
+                    <div className="relative w-36 h-24 rounded-xl overflow-hidden shrink-0 ring-1 ring-white/10 z-10">
                       <video src={rec.video_path} className="w-full h-full object-cover" />
                     </div>
                   )}
-                  <div className="flex-1 min-w-0 pt-1">
+                  <div className="flex-1 min-w-0 pt-1 relative z-10">
                     <p className="text-base font-semibold text-foreground/95 truncate mb-1.5">{rec.title}</p>
                     <div className="flex items-center gap-2.5 mb-2">
                       <span className="text-[10px] uppercase tracking-[0.2em] text-primary font-semibold px-2 py-0.5 rounded-md bg-primary/15">{rec.type}</span>
@@ -721,7 +720,7 @@ export default function PlayerProfilePage() {
                       <span className="text-xs text-foreground/30 group-hover:text-primary/70 font-medium transition-colors">Click to analyze</span>
                     )}
                   </div>
-                  <ChevronRight className="w-5 h-5 text-foreground/20 group-hover:text-primary/60 shrink-0 transition-all group-hover:translate-x-1" />
+                  <ChevronRight className="w-5 h-5 text-foreground/20 group-hover:text-primary/60 shrink-0 transition-all group-hover:translate-x-1 relative z-10" />
                 </div>
               ))
             ) : (
@@ -729,7 +728,6 @@ export default function PlayerProfilePage() {
                 <p className="text-xs text-foreground/30">No recordings yet</p>
               </div>
             )}
-          </div>
           </div>
         </div>
       </div>
