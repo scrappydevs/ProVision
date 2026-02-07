@@ -904,22 +904,31 @@ def _run_tracknet_pass(frame_list, model, device, postprocess_fn):
         r = cv2.resize(f, (TN_W, TN_H)).astype(np.float32) / 255.0
         resized.append(np.rollaxis(r, 2, 0))  # (3, H, W)
     
+    # Pre-build all frame triplets for batched GPU inference
+    # Batching amortizes CUDA kernel launch + PCIe transfer overhead
+    triplets = []
+    for num in range(2, n):
+        imgs = np.concatenate((resized[num], resized[num-1], resized[num-2]), axis=0)
+        triplets.append(imgs)
+
+    batch_size = 8  # Conservative: ~300MB peak VRAM for (8, 9, 360, 640)
     with torch.no_grad():
-        for num in range(2, n):
-            # Stack 3 pre-resized frames: (9, H, W)
-            imgs = np.concatenate((resized[num], resized[num-1], resized[num-2]), axis=0)
-            inp = torch.from_numpy(imgs).unsqueeze(0).float().to(device)
+        for batch_start in range(0, len(triplets), batch_size):
+            batch = triplets[batch_start:batch_start + batch_size]
+            inp = torch.from_numpy(np.stack(batch)).float().to(device)
             out = model(inp, testing=True)
-            output = out.argmax(dim=1).detach().cpu().numpy()
-            x_pred, y_pred, conf_pred = postprocess_fn(output)
-            ball_track.append((x_pred, y_pred))
-            conf_track.append(conf_pred)
-            if ball_track[-1][0] is not None and ball_track[-2][0] is not None:
-                dist = distance.euclidean(ball_track[-1], ball_track[-2])
-            else:
-                dist = -1
-            dists.append(dist)
-    
+            outputs = out.argmax(dim=1).detach().cpu().numpy()
+
+            for j in range(len(batch)):
+                x_pred, y_pred, conf_pred = postprocess_fn(outputs[j:j+1])
+                ball_track.append((x_pred, y_pred))
+                conf_track.append(conf_pred)
+                if ball_track[-1][0] is not None and ball_track[-2][0] is not None:
+                    dist = distance.euclidean(ball_track[-1], ball_track[-2])
+                else:
+                    dist = -1
+                dists.append(dist)
+
     return ball_track, conf_track, dists
 
 
@@ -1193,7 +1202,46 @@ async def tracknet_track(request: SAM2TrackRequest):
         ball_subtrack = ball_track[r[0]:r[1]]
         ball_subtrack = interpolation(ball_subtrack)
         ball_track[r[0]:r[1]] = ball_subtrack
-    
+
+    # === YOLO Recovery: fill gaps BEFORE smoothing ===
+    # Placed before One Euro Filter so recovered points get smoothed too.
+    # Inserting raw data after low-pass filtering creates high-frequency
+    # discontinuities at gap boundaries (Gibbs phenomenon).
+    yolo_model = registry.get("yolo")
+    yolo_recovered = 0
+    if yolo_model is not None:
+        gap_frames = [i for i in range(n) if ball_track[i][0] is None]
+        for gi in gap_frames[::2]:
+            try:
+                results = yolo_model(frames[gi], verbose=False, conf=0.15, imgsz=640)
+                for r in results:
+                    for box in r.boxes:
+                        if int(box.cls[0]) == 32:  # sports ball
+                            bx1, by1, bx2, by2 = box.xyxy[0].tolist()
+                            cx = ((bx1 + bx2) / 2) * (1280.0 / orig_w)
+                            cy = ((by1 + by2) / 2) * (720.0 / orig_h)
+                            # Spatial validation: reject detections far from existing track
+                            # Prevents latching onto a different ball on screen
+                            nearest_dist = float('inf')
+                            for offset in [-3, -2, -1, 1, 2, 3]:
+                                ni = gi + offset
+                                if 0 <= ni < n and ball_track[ni][0] is not None:
+                                    d = distance.euclidean((cx, cy), ball_track[ni])
+                                    nearest_dist = min(nearest_dist, d)
+                            if nearest_dist < 120:  # ~1.5x max ball speed per frame
+                                ball_track[gi] = (cx, cy)
+                                conf_track[gi] = float(box.conf[0]) * 0.8
+                                yolo_recovered += 1
+                                if gi + 1 < n and ball_track[gi + 1][0] is None:
+                                    ball_track[gi + 1] = (cx, cy)
+                                    conf_track[gi + 1] = float(box.conf[0]) * 0.7
+                            break
+                    break
+            except Exception:
+                pass
+    if yolo_recovered:
+        logger.info(f"YOLO recovered {yolo_recovered} gap frames")
+
     # === One Euro Filter Smoothing (adaptive + responsive) ===
     # Replaces EMA with One Euro Filter for better jitter reduction while preserving fast motion
     class LowPassFilter:
@@ -1252,60 +1300,61 @@ async def tracknet_track(request: SAM2TrackRequest):
     x_filter = OneEuroFilter(min_cutoff=0.8, beta=0.7)
     y_filter = OneEuroFilter(min_cutoff=0.8, beta=0.7)
 
+    # Apply filter with improved gap handling:
+    # - Reset filter after long gaps (Casiez 2012: assumes continuous input)
+    # - Quadratic (constant-acceleration) gap prediction models projectile motion
+    # - Predict from anchor point (last real detection), not from previous predictions
+    # - Cap prediction at 8 frames (~267ms) to prevent divergence
+    # - Clamp to video bounds (TrackNet space: 1280x720)
+    MAX_GAP_PREDICTION = 8
+    FILTER_RESET_GAP = 5
+
     smoothed_track = []
+    gap_count = 0
+    anchor_idx = -1  # Index of last real (non-predicted) smoothed point
+
     for i in range(n):
         if ball_track[i][0] is not None:
-            # Apply One Euro Filter
+            if gap_count > FILTER_RESET_GAP:
+                x_filter.reset()
+                y_filter.reset()
+            gap_count = 0
             smoothed_x = x_filter(ball_track[i][0])
             smoothed_y = y_filter(ball_track[i][1])
             smoothed_track.append((smoothed_x, smoothed_y))
+            anchor_idx = len(smoothed_track) - 1
         else:
-            # Gap: use prediction from last valid position + velocity
-            if len(smoothed_track) > 0 and smoothed_track[-1] is not None:
-                # Simple linear prediction (could enhance with physics model)
-                if len(smoothed_track) >= 2 and smoothed_track[-2] is not None:
-                    vx = smoothed_track[-1][0] - smoothed_track[-2][0]
-                    vy = smoothed_track[-1][1] - smoothed_track[-2][1]
-                    predicted_x = smoothed_track[-1][0] + vx
-                    predicted_y = smoothed_track[-1][1] + vy
-                    smoothed_track.append((predicted_x, predicted_y))
-                else:
-                    # No velocity info, use last known position
-                    smoothed_track.append(smoothed_track[-1])
+            gap_count += 1
+            if gap_count <= MAX_GAP_PREDICTION and anchor_idx >= 2:
+                # Quadratic prediction: p(t) = p0 + v0*t + 0.5*a*t^2
+                # Captures gravity/spin deceleration in free flight
+                a0 = smoothed_track[anchor_idx]
+                a1 = smoothed_track[anchor_idx - 1]
+                a2 = smoothed_track[anchor_idx - 2]
+                vx = a0[0] - a1[0]
+                vy = a0[1] - a1[1]
+                ax = a0[0] - 2 * a1[0] + a2[0]  # 2nd derivative (acceleration)
+                ay = a0[1] - 2 * a1[1] + a2[1]
+                t = float(gap_count)
+                predicted_x = a0[0] + vx * t + 0.5 * ax * t * t
+                predicted_y = a0[1] + vy * t + 0.5 * ay * t * t
+                predicted_x = max(0.0, min(1280.0, predicted_x))
+                predicted_y = max(0.0, min(720.0, predicted_y))
+                smoothed_track.append((predicted_x, predicted_y))
+            elif gap_count <= MAX_GAP_PREDICTION and anchor_idx >= 1:
+                # Linear fallback with only 2 history points
+                a0 = smoothed_track[anchor_idx]
+                a1 = smoothed_track[anchor_idx - 1]
+                vx = a0[0] - a1[0]
+                vy = a0[1] - a1[1]
+                t = float(gap_count)
+                predicted_x = max(0.0, min(1280.0, a0[0] + vx * t))
+                predicted_y = max(0.0, min(720.0, a0[1] + vy * t))
+                smoothed_track.append((predicted_x, predicted_y))
             else:
                 smoothed_track.append((None, None))
 
     ball_track = smoothed_track
-    
-    # === YOLO Recovery: fill remaining gaps ===
-    yolo_model = registry.get("yolo")
-    yolo_recovered = 0
-    if yolo_model is not None:
-        gap_frames = [i for i in range(n) if ball_track[i][0] is None]
-        # Sample gap frames (every 2nd to limit GPU calls)
-        for gi in gap_frames[::2]:
-            try:
-                results = yolo_model(frames[gi], verbose=False, conf=0.15, imgsz=640)
-                for r in results:
-                    for box in r.boxes:
-                        if int(box.cls[0]) == 32:  # sports ball
-                            bx1, by1, bx2, by2 = box.xyxy[0].tolist()
-                            cx = ((bx1 + bx2) / 2) * (1280.0 / orig_w)  # scale to TrackNet coords
-                            cy = ((by1 + by2) / 2) * (720.0 / orig_h)
-                            ball_track[gi] = (cx, cy)
-                            conf_track[gi] = float(box.conf[0]) * 0.8  # slightly lower confidence for YOLO
-                            yolo_recovered += 1
-                            # Also fill the skipped neighbor
-                            if gi + 1 < n and ball_track[gi + 1][0] is None:
-                                ball_track[gi + 1] = (cx, cy)
-                                conf_track[gi + 1] = float(box.conf[0]) * 0.7
-                            break
-                    break  # only need first result
-            except Exception:
-                pass
-    
-    if yolo_recovered:
-        logger.info(f"YOLO recovered {yolo_recovered} gap frames")
     
     # === Convert to output trajectory ===
     MIN_CONFIDENCE = 0.2  # Don't output detections below this threshold (reduces jitter)

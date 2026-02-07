@@ -79,10 +79,11 @@ export const DualVideoPlayer = memo(function DualVideoPlayer({
     return Math.sqrt(w * w + h * h) * 0.12;
   }, [trajectoryData]);
 
-  // Memoize trajectory points up to current frame for drawing
+  // Memoize recent trajectory points for drawing (last 40 frames only)
+  // Drawing entire history (potentially 9000+ points) per frame is wasteful
   const visibleTrajectoryPoints = useMemo(() => {
     if (!trajectoryData?.frames) return [];
-    return trajectoryData.frames.filter(f => f.frame <= currentFrame);
+    return trajectoryData.frames.filter(f => f.frame <= currentFrame).slice(-40);
   }, [trajectoryData, currentFrame]);
 
   // Memoize pose data frame maps — separate player (person_id=0) and opponent (person_id=1)

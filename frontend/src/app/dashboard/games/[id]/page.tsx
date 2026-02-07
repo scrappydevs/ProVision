@@ -1206,104 +1206,41 @@ export default function GameViewerPage() {
                   isPlaying={isPlaying}
                 />
 
-                {/* Tracking Statistics Overlay - Top Right */}
-                {(showPoseOverlay || showTrack || showCourt) && videoBounds && (
-                  <div 
-                    className="fixed z-30 flex flex-col gap-2 pointer-events-none"
+                {/* Tracking in-progress overlay */}
+                {isTracking && videoBounds && (
+                  <div
+                    className="fixed z-30 pointer-events-none"
                     style={{
                       top: `${videoBounds.top + 12}px`,
-                      right: `${window.innerWidth - videoBounds.right + 12}px`,
+                      left: `${videoBounds.right - (videoBounds.width / 2) - 80}px`,
                     }}
                   >
-                    {/* Pose Track Status */}
-                    {showPoseOverlay && (
-                      <div className="rounded-lg bg-black/40 backdrop-blur-md border border-white/10 px-3 py-2 w-[160px]">
-                        <div className="relative z-10">
-                          <div className="flex items-center gap-2 mb-1">
-                            <Activity className="w-3 h-3 text-[#9B7B5B]" />
-                            <span className="text-[10px] font-medium text-[#E8E6E3]">Pose Track</span>
-                          </div>
-                          <div className="text-[10px] text-[#8A8885]">
-                            {hasPose ? (
-                              <>
-                                <div className="flex items-center gap-1">
-                                  <div className="w-1.5 h-1.5 rounded-full bg-[#6B8E6B]" />
-                                  <span>{selectedPersonIds.length} player{selectedPersonIds.length !== 1 ? 's' : ''}</span>
-                                </div>
-                                {hasStrokes && (
-                                  <div className="mt-0.5">{strokeSummary?.total_strokes ?? 0} strokes</div>
-                                )}
-                              </>
-                            ) : isPoseProcessing ? (
-                              <div className="flex items-center gap-1">
-                                <Loader2 className="w-2.5 h-2.5 animate-spin" />
-                                <span>Processing...</span>
-                              </div>
-                            ) : (
-                              <span className="text-[#6A6865]">Not active</span>
-                            )}
-                          </div>
-                        </div>
+                    <div className="rounded-lg bg-black/60 backdrop-blur-md border border-[#9B7B5B]/30 px-4 py-2.5 flex items-center gap-2.5">
+                      <Loader2 className="w-4 h-4 text-[#9B7B5B] animate-spin" />
+                      <div>
+                        <p className="text-xs font-medium text-[#E8E6E3]">Tracking ball</p>
+                        <p className="text-[10px] text-[#8A8885]">This may take a moment</p>
                       </div>
-                    )}
+                    </div>
+                  </div>
+                )}
 
-                    {/* Ball Track Status */}
-                    {showTrack && (
-                      <div className="rounded-lg bg-black/40 backdrop-blur-md border border-white/10 px-3 py-2 w-[160px]">
-                        <div className="relative z-10">
-                          <div className="flex items-center gap-2 mb-1">
-                            <Crosshair className="w-3 h-3 text-[#9B7B5B]" />
-                            <span className="text-[10px] font-medium text-[#E8E6E3]">Ball Track</span>
-                          </div>
-                          <div className="text-[10px] text-[#8A8885]">
-                            {hasTrajectory ? (
-                              <>
-                                <div className="flex items-center gap-1">
-                                  <div className="w-1.5 h-1.5 rounded-full bg-[#6B8E6B]" />
-                                  <span>{session.trajectory_data?.frames?.length} frames</span>
-                                </div>
-                                <div className="mt-0.5">
-                                  {session.trajectory_data?.velocity?.length ? (
-                                    `${(session.trajectory_data.velocity.reduce((a: number, b: number) => a + b, 0) / session.trajectory_data.velocity.length).toFixed(1)} px/f`
-                                  ) : (
-                                    "—"
-                                  )}
-                                </div>
-                              </>
-                            ) : isProcessing ? (
-                              <div className="flex items-center gap-1">
-                                <Loader2 className="w-2.5 h-2.5 animate-spin" />
-                                <span>Processing...</span>
-                              </div>
-                            ) : (
-                              <span className="text-[#6A6865]">Not active</span>
-                            )}
-                          </div>
-                        </div>
+                {/* Pose processing overlay */}
+                {isPoseProcessing && videoBounds && (
+                  <div
+                    className="fixed z-30 pointer-events-none"
+                    style={{
+                      top: `${videoBounds.top + 12}px`,
+                      left: `${videoBounds.right - (videoBounds.width / 2) - 80}px`,
+                    }}
+                  >
+                    <div className="rounded-lg bg-black/60 backdrop-blur-md border border-[#9B7B5B]/30 px-4 py-2.5 flex items-center gap-2.5">
+                      <Loader2 className="w-4 h-4 text-[#9B7B5B] animate-spin" />
+                      <div>
+                        <p className="text-xs font-medium text-[#E8E6E3]">Analyzing poses</p>
+                        <p className="text-[10px] text-[#8A8885]">Detecting player movements</p>
                       </div>
-                    )}
-
-                    {/* Court Analytics Status */}
-                    {showCourt && (
-                      <div className="rounded-lg bg-black/40 backdrop-blur-md border border-white/10 px-3 py-2 w-[160px]">
-                        <div className="relative z-10">
-                          <div className="flex items-center gap-2 mb-1">
-                            <LayoutGrid className="w-3 h-3 text-[#9B7B5B]" />
-                            <span className="text-[10px] font-medium text-[#E8E6E3]">Court View</span>
-                          </div>
-                          <div className="text-[10px] text-[#8A8885]">
-                            {hasTrajectory || hasPose ? (
-                              <div className="flex items-center gap-1">
-                                <div className="w-1.5 h-1.5 rounded-full bg-[#6B8E6B]" />
-                                <span>3D Active</span>
-                              </div>
-                            ) : (
-                              <span className="text-[#6A6865]">Not active</span>
-                            )}
-                          </div>
-                        </div>
-                      </div>
-                    )}
+                    </div>
                   </div>
                 )}
               </div>
