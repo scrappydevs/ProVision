@@ -779,6 +779,16 @@ export interface AnalyticsData {
       estimate: string;
       distribution: Record<string, number>;
     };
+    points?: {
+      count: number;
+      events: Array<{
+        frame: number;
+        timestamp: number;
+        reason: string;
+        last_contact_frame?: number;
+        bounce_frame?: number | null;
+      }>;
+    };
   };
   pose_analytics: {
     movement: {
@@ -811,8 +821,10 @@ export interface AnalyticsData {
   runpod_dashboard?: RunpodDashboardData;
 }
 
-export const getSessionAnalytics = (sessionId: string) =>
-  api.get<AnalyticsData>(`/api/analytics/${sessionId}`);
+export const getSessionAnalytics = (sessionId: string, options?: { force?: boolean }) =>
+  api.get<AnalyticsData>(`/api/analytics/${sessionId}`, {
+    params: options?.force ? { force: true } : undefined,
+  });
 
 export const getRunpodArtifacts = (sessionId: string) =>
   api.get<RunpodDashboardData>(`/api/analytics/${sessionId}/runpod-artifacts`);
@@ -953,4 +965,5 @@ export const createAndAnalyzeVideo = async (
   return { videoId: video.id, sessionId: analyzeResp.data.session_id };
 };
 
+export { api };
 export default api;

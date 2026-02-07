@@ -5,6 +5,7 @@ import { useParams, useRouter, useSearchParams } from "next/navigation";
 import { useSession, useTrackObject, useUpdateSession } from "@/hooks/useSessions";
 import { usePoseAnalysis } from "@/hooks/usePoseData";
 import { useStrokeSummary, useAnalyzeStrokes } from "@/hooks/useStrokeData";
+import { useAnalytics } from "@/hooks/useAnalytics";
 import { useQueryClient } from "@tanstack/react-query";
 import { sessionKeys } from "@/hooks/useSessions";
 import { Button } from "@/components/ui/button";
@@ -26,6 +27,7 @@ import {
   PersonPose,
   Stroke,
   getDebugFrame,
+  getSessionAnalytics,
 } from "@/lib/api";
 import { generateTipsFromStrokes } from "@/lib/tipGenerator";
 import { PlayerSelection, PlayerSelectionOverlays } from "@/components/viewer/PlayerSelection";
@@ -114,6 +116,7 @@ export default function GameViewerPage() {
   const [debugLoading, setDebugLoading] = useState(false);
   const [debugFlash, setDebugFlash] = useState<string | null>(null);
   const [debugCopied, setDebugCopied] = useState(false);
+  const [isRecomputingAnalytics, setIsRecomputingAnalytics] = useState(false);
 
   useEffect(() => {
     setDebugMode(readStrokeDebugModeSetting());
@@ -128,6 +131,7 @@ export default function GameViewerPage() {
   const { data: session, isLoading } = useSession(gameId);
   const { data: poseData } = usePoseAnalysis(gameId);
   const { data: strokeSummary } = useStrokeSummary(gameId);
+  const { data: analytics } = useAnalytics(gameId);
   const trackMutation = useTrackObject(gameId);
   const strokeMutation = useAnalyzeStrokes(gameId);
   const updateSessionMutation = useUpdateSession(gameId);
@@ -210,6 +214,7 @@ export default function GameViewerPage() {
     return past.length > 0 ? past[past.length - 1] : null;
   }, [strokeSummary?.strokes, currentFrame]);
 
+
   const computedTrajectoryFps = useMemo(() => {
     const frames = session?.trajectory_data?.frames?.length ?? 0;
     if (!frames || !duration) return null;
@@ -228,6 +233,42 @@ export default function GameViewerPage() {
       return videoFps;
     } catch { return videoFps; }
   }, [session?.trajectory_data, videoFps, computedTrajectoryFps]);
+
+  const pointEvents = useMemo(() => {
+    return analytics?.ball_analytics?.points?.events ?? [];
+  }, [analytics]);
+
+  const activePointEvent = useMemo(() => {
+    if (pointEvents.length === 0) return null;
+    const windowFrames = Math.max(2, Math.round(fps * 0.15));
+    return pointEvents.find((evt) => Math.abs(evt.frame - currentFrame) <= windowFrames) ?? null;
+  }, [pointEvents, currentFrame, fps]);
+
+  const lastPointEvent = useMemo(() => {
+    if (pointEvents.length === 0) return null;
+    const past = pointEvents.filter((evt) => evt.frame <= currentFrame);
+    return past.length > 0 ? past[past.length - 1] : null;
+  }, [pointEvents, currentFrame]);
+
+  useEffect(() => {
+    if (!analytics) return;
+    const pointCount = analytics.ball_analytics?.points?.count ?? 0;
+    const eventCount = analytics.ball_analytics?.points?.events?.length ?? 0;
+    console.log("[Points] analytics loaded", {
+      sessionId: gameId,
+      pointCount,
+      eventCount,
+    });
+  }, [analytics, gameId]);
+
+  useEffect(() => {
+    if (!analytics) return;
+    console.log("[Points] frame", {
+      frame: currentFrame,
+      active: activePointEvent?.frame ?? null,
+      last: lastPointEvent?.frame ?? null,
+    });
+  }, [analytics, currentFrame, activePointEvent, lastPointEvent]);
 
   const frameFromTime = useCallback(
     (time: number) => Math.max(0, Math.round(time * fps)),
@@ -476,6 +517,19 @@ export default function GameViewerPage() {
     setTimeout(() => setDebugCopied(false), 2000);
   }, [debugLog]);
 
+  const handleRecomputeAnalytics = useCallback(async () => {
+    if (!gameId || isRecomputingAnalytics) return;
+    setIsRecomputingAnalytics(true);
+    try {
+      const response = await getSessionAnalytics(gameId, { force: true });
+      queryClient.setQueryData(["analytics", gameId], response.data);
+    } catch (err) {
+      console.error("Analytics recompute failed:", err);
+    } finally {
+      setIsRecomputingAnalytics(false);
+    }
+  }, [gameId, isRecomputingAnalytics, queryClient]);
+
   // Keyboard shortcuts for debug mode
   useEffect(() => {
     const handler = (e: KeyboardEvent) => {
@@ -566,6 +620,13 @@ export default function GameViewerPage() {
     };
   }, [videoUrl, frameFromTime]);
 
+  // Jump threshold: points further than 12% of video diagonal are tracking noise
+  const jumpThreshold = useMemo(() => {
+    const vw = videoRef.current?.videoWidth || 1920;
+    const vh = videoRef.current?.videoHeight || 1080;
+    return Math.sqrt(vw * vw + vh * vh) * 0.12;
+  }, [session?.trajectory_data]);
+
   // Draw ball tracking overlay (mask/bbox)
   useEffect(() => {
     const canvas = canvasRef.current;
@@ -578,10 +639,15 @@ export default function GameViewerPage() {
     ctx.clearRect(0, 0, vw, vh);
     if (!hasTrajectory || visibleTrajectoryPoints.length === 0) return;
 
-    // Trail: fading green line connecting recent positions
+    // Trail: fading green line connecting recent positions, breaking on jumps
     if (visibleTrajectoryPoints.length >= 2) {
       const recent = visibleTrajectoryPoints.slice(-40);
       for (let i = 1; i < recent.length; i++) {
+        const dx = recent[i].x - recent[i-1].x;
+        const dy = recent[i].y - recent[i-1].y;
+        const dist = Math.sqrt(dx * dx + dy * dy);
+        // Skip drawing segment if it's a tracking jump (noise)
+        if (dist > jumpThreshold) continue;
         const alpha = (i / recent.length) * 0.4;
         ctx.beginPath();
         ctx.strokeStyle = `rgba(34, 197, 94, ${alpha})`;
@@ -593,7 +659,6 @@ export default function GameViewerPage() {
     }
 
     // Lookup current frame's trajectory point — find closest match if no exact hit
-    // Exact match first, then closest within window
     let cp = trajectoryFrameMap.get(currentFrame);
     if (!cp && trajectoryFrameMap.size > 0) {
       let minDiff = Infinity;
@@ -605,6 +670,21 @@ export default function GameViewerPage() {
         }
       }
     }
+
+    // Validate the current point isn't a wild jump from recent trajectory
+    if (cp && visibleTrajectoryPoints.length >= 2) {
+      const prev = visibleTrajectoryPoints[visibleTrajectoryPoints.length - 1];
+      // If current point is the prev point itself, it's fine
+      if (prev.frame !== cp.frame) {
+        const dx = cp.x - prev.x;
+        const dy = cp.y - prev.y;
+        const dist = Math.sqrt(dx * dx + dy * dy);
+        if (dist > jumpThreshold) {
+          cp = undefined; // Suppress the jump — don't render this detection
+        }
+      }
+    }
+
     if (cp) {
       const bbox = (cp as TrajectoryPoint & { bbox?: number[] }).bbox;
 
@@ -640,7 +720,7 @@ export default function GameViewerPage() {
         ctx.stroke();
       }
     }
-  }, [visibleTrajectoryPoints, trajectoryFrameMap, currentFrame, hasTrajectory]);
+  }, [visibleTrajectoryPoints, trajectoryFrameMap, currentFrame, hasTrajectory, jumpThreshold]);
 
   // Draw player markers on video
   useEffect(() => {
@@ -916,25 +996,6 @@ export default function GameViewerPage() {
     ctx.globalAlpha = 1.0;
   }, [detectedPersons, showPoseOverlay, selectedPersonIds, SKELETON_CONNECTIONS, PERSON_COLORS]);
 
-  const handleTrackNetTrack = useCallback(() => {
-    setIsTracking(true);
-    trackWithTrackNet(gameId)
-      .then((res) => {
-        const tracked = res.data.frames_tracked ?? 0;
-        if (tracked > 0) {
-          queryClient.invalidateQueries({ queryKey: sessionKeys.detail(gameId) });
-        } else {
-          // TrackNet found nothing — fall back to YOLO+SAM2
-          handleAutoDetect();
-        }
-      })
-      .catch(() => {
-        // TrackNet failed — fall back to YOLO+SAM2
-        handleAutoDetect();
-      })
-      .finally(() => setIsTracking(false));
-  }, [gameId, queryClient]);
-
   // Fallback: Auto-detect balls with YOLO (then user confirms for SAM2)
   const handleAutoDetect = useCallback(() => {
     setIsDetecting(true);
@@ -952,6 +1013,28 @@ export default function GameViewerPage() {
       })
       .finally(() => setIsDetecting(false));
   }, [gameId, currentFrame]);
+
+  const handleTrackNetTrack = useCallback(() => {
+    console.log("[Track] Starting ball tracking for session:", gameId);
+    setIsTracking(true);
+    trackWithTrackNet(gameId)
+      .then((res) => {
+        const tracked = res.data.frames_tracked ?? 0;
+        console.log("[Track] TrackNet result:", tracked, "frames tracked");
+        if (tracked > 0) {
+          queryClient.invalidateQueries({ queryKey: sessionKeys.detail(gameId) });
+        } else {
+          // TrackNet found nothing — fall back to YOLO+SAM2
+          handleAutoDetect();
+        }
+      })
+      .catch((err) => {
+        console.error("[Track] TrackNet failed, falling back:", err);
+        // TrackNet failed — fall back to YOLO+SAM2
+        handleAutoDetect();
+      })
+      .finally(() => setIsTracking(false));
+  }, [gameId, queryClient, handleAutoDetect]);
 
   // Confirm a YOLO detection and run SAM2 tracking with its bbox
   const handleConfirmDetection = useCallback((detection: BallDetection) => {
@@ -996,7 +1079,7 @@ export default function GameViewerPage() {
       if (!showPoseOverlay) handleDetectPose(); // detect on first enable
     }
     if (tabId === "track" && !hasTrajectory) handleTrackNetTrack();
-  }, []);
+  }, [showPoseOverlay, handleDetectPose, hasTrajectory, handleTrackNetTrack]);
 
   // Auto-widen panel for court view and analytics
   useEffect(() => {
@@ -1345,13 +1428,63 @@ export default function GameViewerPage() {
                   "mx-auto flex flex-col min-h-0 overflow-hidden",
                   aiChatOpen ? "w-full h-auto max-h-[50vh]" : "w-full h-full max-w-[calc(100%-8px)]"
                 )}>
+                  {/* 3D Ball Trajectory Visualization */}
+                  {activeTab === "track" && (
+                    <div className="flex-1 min-h-0 rounded-xl overflow-hidden flex flex-col">
+                  {hasTrajectory ? (
+                    <div className="space-y-3">
+                      <p className="text-[10px] text-[#6A6865] uppercase tracking-wider">Tracking Results</p>
+                      <div className="space-y-2">
+                        <div className="flex justify-between text-xs"><span className="text-[#8A8885]">Frames</span><span className="text-[#E8E6E3]">{session.trajectory_data?.frames?.length}</span></div>
+                        <div className="flex justify-between text-xs"><span className="text-[#8A8885]">Avg Speed</span><span className="text-[#E8E6E3]">{session.trajectory_data?.velocity?.length ? (session.trajectory_data.velocity.reduce((a: number, b: number) => a + b, 0) / session.trajectory_data.velocity.length).toFixed(1) : "—"} px/f</span></div>
+                        <div className="flex justify-between text-xs"><span className="text-[#8A8885]">Spin</span><span className="text-[#9B7B5B] capitalize">{session.trajectory_data?.spin_estimate ?? "—"}</span></div>
+                      </div>
+                    </div>
+                  ) : (
+                    <div className="text-center py-8">
+                      {(isTracking || isProcessing) ? (
+                        <>
+                          <Loader2 className="w-6 h-6 text-[#9B7B5B] mx-auto mb-3 animate-spin" />
+                          <p className="text-sm text-[#E8E6E3] font-medium">Tracking ball...</p>
+                          <p className="text-[10px] text-[#8A8885] mt-1.5">Trajectory will appear when ready</p>
+                        </>
+                      ) : (
+                        <>
+                          <Crosshair className="w-7 h-7 text-[#9B7B5B] mx-auto mb-3" />
+                          <p className="text-sm text-[#E8E6E3] font-medium mb-1">Ready to track</p>
+                          <Button
+                            variant="outline"
+                            size="sm"
+                            onClick={handleTrackNetTrack}
+                            className="mt-2 text-xs"
+                          >
+                            <Crosshair className="w-3 h-3 mr-1" />
+                            Track Ball
+                          </Button>
+                        </>
+                      )}
+                    </div>
+                  )}
+                </div>
+              )}
 
               {/* Pose analysis panel */}
               {activeTab === "pose" && showPoseOverlay && (
                 <div className="glass-context rounded-xl flex flex-col h-full min-h-0 flex-1 overflow-hidden">
                   <div className="px-3 py-2.5 border-b border-[#363436]/30 flex items-center justify-between">
                     <span className="text-xs font-medium text-[#E8E6E3]">Pose & Strokes</span>
-                    {(isDetectingPose || isPoseProcessing) && <Loader2 className="w-3 h-3 text-[#9B7B5B] animate-spin" />}
+                    <div className="flex items-center gap-2">
+                      <button
+                        onClick={handleRecomputeAnalytics}
+                        disabled={isRecomputingAnalytics}
+                        className="flex items-center gap-1 text-[10px] text-[#6A6865] hover:text-[#9B7B5B] transition-colors disabled:opacity-50"
+                        title="Recompute analytics for this session"
+                      >
+                        <RefreshCw className={cn("w-3 h-3", isRecomputingAnalytics && "animate-spin")} />
+                        <span className="hidden sm:inline">Recompute analytics</span>
+                      </button>
+                      {(isDetectingPose || isPoseProcessing) && <Loader2 className="w-3 h-3 text-[#9B7B5B] animate-spin" />}
+                    </div>
                   </div>
                   <div className="flex-1 overflow-y-auto p-2 space-y-2">
                     {showPlayerSelection && (
@@ -1416,6 +1549,36 @@ export default function GameViewerPage() {
                           </div>
                         ) : (
                           <p className="text-[10px] text-[#6A6865] text-center">Play video to see live stroke detection</p>
+                        )}
+                      </div>
+                    )}
+
+                    {/* ── Live Point Indicator (synced to video frame) ── */}
+                    {pointEvents.length > 0 && (
+                      <div className={cn(
+                        "p-2.5 rounded-lg transition-all duration-200",
+                        activePointEvent ? "bg-[#C45C5C]/15 ring-1 ring-[#C45C5C]/40" : "bg-[#1E1D1F]"
+                      )}>
+                        {activePointEvent ? (
+                          <div className="flex items-center gap-2">
+                            <div className="w-2 h-2 rounded-full bg-[#C45C5C] animate-pulse" />
+                            <span className="text-sm font-medium text-[#C45C5C]">Point scored</span>
+                            <span className="text-[10px] text-[#6A6865] ml-auto">
+                              {fmtTime(activePointEvent.timestamp)}
+                            </span>
+                          </div>
+                        ) : lastPointEvent ? (
+                          <div className="flex items-center gap-2">
+                            <div className="w-2 h-2 rounded-full bg-[#363436]" />
+                            <span className="text-xs text-[#6A6865]">
+                              Last point: <span className="text-[#C45C5C]">{fmtTime(lastPointEvent.timestamp)}</span>
+                            </span>
+                            <span className="text-[10px] text-[#6A6865] ml-auto capitalize">
+                              {lastPointEvent.reason.replace(/_/g, " ")}
+                            </span>
+                          </div>
+                        ) : (
+                          <p className="text-[10px] text-[#6A6865] text-center">Play video to see point events</p>
                         )}
                       </div>
                     )}
@@ -1531,6 +1694,40 @@ export default function GameViewerPage() {
                               </div>
                             </div>
 
+                            {/* Point timeline — each point as a mini pill */}
+                            {pointEvents.length > 0 && (
+                              <div>
+                                <p className="text-[10px] text-[#6A6865] uppercase tracking-wider mb-1.5">
+                                  Point Timeline ({pointEvents.length})
+                                </p>
+                                <div className="flex flex-wrap gap-1">
+                                  {pointEvents.map((evt, i) => {
+                                    const isActive = activePointEvent?.frame === evt.frame;
+                                    return (
+                                      <button
+                                        key={`${evt.frame}-${i}`}
+                                        onClick={() => {
+                                          if (videoRef.current) videoRef.current.currentTime = evt.frame / fps;
+                                        }}
+                                        className={cn(
+                                          "px-1.5 py-0.5 rounded text-[9px] font-medium transition-all cursor-pointer",
+                                          isActive ? "ring-1 scale-110" : "opacity-70 hover:opacity-100"
+                                        )}
+                                        style={{
+                                          backgroundColor: "#C45C5C20",
+                                          color: "#C45C5C",
+                                          ...(isActive ? { ringColor: "#C45C5C" } : {}),
+                                        }}
+                                        title={`Point — Frame ${evt.frame} — ${evt.reason.replace(/_/g, " ")}`}
+                                      >
+                                        P{i + 1}
+                                      </button>
+                                    );
+                                  })}
+                                </div>
+                              </div>
+                            )}
+
                             {/* All Insights throughout the video */}
                             {videoTips.length > 0 && (
                               <div>
@@ -1637,17 +1834,6 @@ export default function GameViewerPage() {
                           className="text-[10px] text-[#9B7B5B] hover:text-[#B8956D] transition-colors underline"
                         >
                           Retry with player selection
-                        </button>
-                      </div>
-                    ) : detectedPersons.length === 0 && !isDetectingPose && !hasPose ? (
-                      <div className="text-center py-6">
-                        <Activity className="w-5 h-5 text-[#363436] mx-auto mb-2" />
-                        <p className="text-xs text-[#6A6865] mb-3">No pose data yet</p>
-                        <button
-                          onClick={() => setShowPlayerSelection(true)}
-                          className="text-[10px] text-[#9B7B5B] hover:text-[#B8956D] transition-colors underline"
-                        >
-                          Run pose estimation
                         </button>
                       </div>
                     ) : null}

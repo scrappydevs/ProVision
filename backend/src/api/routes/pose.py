@@ -62,15 +62,18 @@ class PlayerSelectionRequest(BaseModel):
     confidence: Optional[float] = None
 
 
-def process_pose_analysis(session_id: str, video_path: str, video_url: str, target_player: Optional[Dict] = None):
+def process_pose_analysis(session_id: str, video_path: str, video_url: str, selected_players: Optional[List[Dict]] = None):
     """
     Background task to process pose analysis.
     This runs asynchronously to avoid blocking the API.
+    
+    Args:
+        selected_players: List of selected players [player, opponent] or None for auto-detect
     """
     try:
         print(f"[PoseAnalysis] Task started for session: {session_id}", flush=True)
-        if target_player:
-            print(f"[PoseAnalysis] Tracking player: {target_player}", flush=True)
+        if selected_players:
+            print(f"[PoseAnalysis] Tracking {len(selected_players)} selected players: {selected_players}", flush=True)
         import os
         import tempfile
 
@@ -90,7 +93,7 @@ def process_pose_analysis(session_id: str, video_path: str, video_url: str, targ
         processor = PoseProcessor(model_name='yolo11n-pose.pt', conf=0.25)
 
         # Process video (sample every 3rd frame for speed)
-        pose_frames = processor.process_video(local_video_path, sample_rate=3, target_player=target_player)
+        pose_frames = processor.process_video(local_video_path, sample_rate=3, selected_players=selected_players)
 
         print(f"[PoseAnalysis] Extracted pose data from {len(pose_frames)} frames")
 
@@ -118,7 +121,7 @@ def process_pose_analysis(session_id: str, video_path: str, video_url: str, targ
         # Generate pose overlay video
         print(f"[PoseAnalysis] Generating pose overlay video for session: {session_id}")
         pose_overlay_temp = tempfile.NamedTemporaryFile(delete=False, suffix='.mp4').name
-        processor.generate_pose_overlay_video(local_video_path, pose_overlay_temp, sample_rate=1, target_player=target_player)
+        processor.generate_pose_overlay_video(local_video_path, pose_overlay_temp, sample_rate=1, selected_players=selected_players)
 
         # Upload pose overlay video to Supabase storage
         print(f"[PoseAnalysis] Uploading pose overlay video to storage")
@@ -154,6 +157,15 @@ def process_pose_analysis(session_id: str, video_path: str, video_url: str, targ
         }).eq("id", session_id).execute()
 
         print(f"[PoseAnalysis] Completed analysis for session: {session_id}")
+        
+        # Auto-trigger stroke detection after pose analysis completes
+        try:
+            from ..routes.stroke import process_stroke_detection
+            print(f"[PoseAnalysis] Auto-triggering stroke detection for session: {session_id}")
+            process_stroke_detection(session_id)
+        except Exception as stroke_err:
+            print(f"[PoseAnalysis] Warning: Failed to auto-trigger stroke detection: {str(stroke_err)}")
+            print(f"[PoseAnalysis] Stroke detection error: {traceback.format_exc()}")
 
     except Exception as e:
         print(f"[PoseAnalysis] Error processing session {session_id}: {str(e)}", flush=True)
@@ -260,13 +272,16 @@ async def get_player_preview(
             cleanup_temp_file(local_video_path)
 
 
+class MultiPlayerSelectionRequest(BaseModel):
+    players: List[PlayerSelectionRequest]
+
 @router.post("/select-player/{session_id}")
 async def select_player(
     session_id: str,
     request: PlayerSelectionRequest,
     user_id: str = Depends(get_current_user_id),
 ):
-    """Save selected player for pose tracking."""
+    """Save selected player for pose tracking (legacy - use select-players for multiple)."""
     supabase = get_supabase()
 
     result = supabase.table("sessions").select("id").eq("id", session_id).eq("user_id", user_id).single().execute()
@@ -285,6 +300,35 @@ async def select_player(
     }).eq("id", session_id).execute()
 
     return {"status": "ok", "selected_player": selected_player}
+
+@router.post("/select-players/{session_id}")
+async def select_players(
+    session_id: str,
+    request: MultiPlayerSelectionRequest,
+    user_id: str = Depends(get_current_user_id),
+):
+    """Save multiple selected players (player + opponent) for pose tracking."""
+    supabase = get_supabase()
+
+    result = supabase.table("sessions").select("id").eq("id", session_id).eq("user_id", user_id).single().execute()
+    if not result.data:
+        raise HTTPException(status_code=404, detail="Session not found")
+
+    selected_players = [
+        {
+            "player_idx": p.player_idx,
+            "bbox": p.bbox,
+            "center": p.center,
+            "confidence": p.confidence,
+        } for p in request.players
+    ]
+
+    supabase.table("sessions").update({
+        "selected_player": selected_players[0] if selected_players else None,
+        "selected_players": selected_players,  # Store all selected players
+    }).eq("id", session_id).execute()
+
+    return {"status": "ok", "selected_players": selected_players}
 
 
 @router.delete("/select-player/{session_id}")
@@ -345,11 +389,11 @@ async def analyze_pose(
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
 
-    # Get selected player if any
-    target_player = session.get("selected_player")
+    # Get selected players (supports both legacy single player and new multi-player)
+    selected_players = session.get("selected_players") or ([session.get("selected_player")] if session.get("selected_player") else None)
 
     # Add background task for processing
-    background_tasks.add_task(process_pose_analysis, session_id, video_path, video_url, target_player)
+    background_tasks.add_task(process_pose_analysis, session_id, video_path, video_url, selected_players)
 
     return {
         "status": "processing",

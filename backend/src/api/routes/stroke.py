@@ -196,13 +196,35 @@ async def get_stroke_summary(
         .execute()
 
     if not strokes_result.data:
-        raise HTTPException(status_code=404, detail="No stroke data found. Run stroke analysis first.")
+        return StrokeSummaryResponse(
+            session_id=session_id,
+            average_form_score=0,
+            best_form_score=0,
+            consistency_score=0,
+            total_strokes=0,
+            forehand_count=0,
+            backhand_count=0,
+            strokes=[]
+        )
 
     # Get summary from session
     stroke_summary = session.get("stroke_summary", {})
 
     if not stroke_summary:
-        raise HTTPException(status_code=404, detail="Stroke summary not available")
+        total = len(strokes_result.data)
+        forehand = sum(1 for s in strokes_result.data if s.get("stroke_type") == "forehand")
+        backhand = sum(1 for s in strokes_result.data if s.get("stroke_type") == "backhand")
+        scores = [s.get("form_score") for s in strokes_result.data if isinstance(s.get("form_score"), (int, float))]
+        avg_score = sum(scores) / len(scores) if scores else 0
+        best_score = max(scores) if scores else 0
+        stroke_summary = {
+            "average_form_score": avg_score,
+            "best_form_score": best_score,
+            "consistency_score": 0,
+            "total_strokes": total,
+            "forehand_count": forehand,
+            "backhand_count": backhand,
+        }
 
     # Format strokes
     strokes = [

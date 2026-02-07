@@ -560,6 +560,123 @@ def detect_ball_contacts(
     )
 
 
+def detect_point_events(
+    trajectory_frames: List[Dict[str, Any]],
+    velocity: List[float],
+    pose_data: List[Dict[str, Any]],
+    fps: float = 30.0,
+    contact_moments: Optional[List[Dict[str, Any]]] = None,
+    gap_threshold_frames: int = 12,
+    pre_contact_window: int = 20,
+    post_contact_window: int = 10,
+    min_separation_frames: int = 15
+) -> List[Dict[str, Any]]:
+    """
+    Detect point-scoring events using ball trajectory and pose-based contacts.
+    
+    Heuristics:
+    - A bounce with no subsequent contact within a short window ends the point.
+    - Large tracking gaps after a recent contact imply the ball went out of play.
+    - Trajectory end shortly after a contact is treated as a point end.
+    """
+    if not trajectory_frames or not pose_data:
+        logger.info(
+            "Point detection skipped: trajectory_frames=%s pose_data=%s",
+            bool(trajectory_frames),
+            bool(pose_data),
+        )
+        return []
+    
+    # Parse and order frames defensively
+    parsed_frames = []
+    for frame in trajectory_frames:
+        if isinstance(frame, str):
+            try:
+                parsed_frames.append(json.loads(frame))
+            except Exception:
+                continue
+        elif isinstance(frame, dict):
+            parsed_frames.append(frame)
+    
+    frames = sorted(parsed_frames, key=lambda f: f.get("frame", 0))
+    if not frames:
+        logger.info("Point detection skipped: no parsed trajectory frames")
+        return []
+    
+    # Build contact list (requires pose data)
+    if contact_moments is None:
+        contact_moments = detect_ball_contacts(frames, pose_data, velocity).contact_moments
+    contact_frames = sorted({c.get("frame") for c in contact_moments if isinstance(c.get("frame"), int)})
+    if not contact_frames:
+        logger.info("Point detection skipped: no contact frames found")
+        return []
+    
+    bounce_frames, _ = detect_bounces(frames, velocity)
+    frame_numbers = [f.get("frame", 0) for f in frames if isinstance(f.get("frame"), int)]
+    
+    logger.info(
+        "Point detection inputs: frames=%d contacts=%d bounces=%d",
+        len(frame_numbers),
+        len(contact_frames),
+        len(bounce_frames),
+    )
+    
+    events: List[Dict[str, Any]] = []
+    
+    def add_event(frame_num: int, reason: str, last_contact: Optional[int] = None, bounce_frame: Optional[int] = None):
+        if frame_num is None:
+            return
+        if any(abs(frame_num - e["frame"]) <= min_separation_frames for e in events):
+            return
+        events.append({
+            "frame": frame_num,
+            "timestamp": round(frame_num / fps, 2) if fps else 0,
+            "reason": reason,
+            "last_contact_frame": last_contact,
+            "bounce_frame": bounce_frame
+        })
+    
+    def recent_contact_before(frame_num: int, window: int) -> Optional[int]:
+        candidates = [c for c in contact_frames if c <= frame_num and (frame_num - c) <= window]
+        return max(candidates) if candidates else None
+    
+    def has_contact_after(frame_num: int, window: int) -> bool:
+        return any((c > frame_num and (c - frame_num) <= window) for c in contact_frames)
+    
+    # Bounce-based point ends
+    for bounce_frame in bounce_frames:
+        last_contact = recent_contact_before(bounce_frame, pre_contact_window)
+        if last_contact and not has_contact_after(bounce_frame, post_contact_window):
+            add_event(bounce_frame, "bounce_no_return", last_contact=last_contact, bounce_frame=bounce_frame)
+    
+    # Tracking gaps after contact imply out-of-play
+    for i in range(1, len(frame_numbers)):
+        gap = frame_numbers[i] - frame_numbers[i - 1]
+        if gap > gap_threshold_frames:
+            last_frame = frame_numbers[i - 1]
+            last_contact = recent_contact_before(last_frame, pre_contact_window)
+            if last_contact:
+                add_event(last_frame, "tracking_gap", last_contact=last_contact)
+    
+    # Trajectory end shortly after contact
+    last_frame = frame_numbers[-1] if frame_numbers else None
+    if last_frame is not None:
+        last_contact = recent_contact_before(last_frame, pre_contact_window)
+        if last_contact:
+            add_event(last_frame, "trajectory_end", last_contact=last_contact)
+    
+    events_sorted = sorted(events, key=lambda e: e["frame"])
+    if events_sorted:
+        logger.info(
+            "Point detection complete: events=%d last=%s",
+            len(events_sorted),
+            events_sorted[-1],
+        )
+    else:
+        logger.info("Point detection complete: no events detected")
+    return events_sorted
+
+
 def compute_correlations(
     speed_timeline: List[Dict[str, Any]],
     stance_timeline: List[Dict[str, Any]],
@@ -638,6 +755,15 @@ async def compute_session_analytics(
     velocity = trajectory_data.get("velocity", [])
     contact_stats = detect_ball_contacts(frames, pose_data, velocity)
     
+    # Point detection (uses ball tracking + pose-based contacts)
+    point_events = detect_point_events(
+        trajectory_frames=frames,
+        velocity=velocity,
+        pose_data=pose_data,
+        fps=fps,
+        contact_moments=contact_stats.contact_moments
+    )
+    
     # Correlations
     correlations = compute_correlations(
         speed_stats.timeline,
@@ -647,7 +773,8 @@ async def compute_session_analytics(
     
     logger.info(f"Analytics computed: {len(speed_stats.timeline)} speed points, "
                 f"{trajectory_stats.bounce_count} bounces, "
-                f"{len(contact_stats.contact_moments)} contacts")
+                f"{len(contact_stats.contact_moments)} contacts, "
+                f"{len(point_events)} point events")
     
     return {
         "session_id": session_id,
@@ -672,6 +799,10 @@ async def compute_session_analytics(
             "spin": {
                 "estimate": trajectory_data.get("spin_estimate", "unknown"),
                 "distribution": {}  # Future: detailed spin analysis
+            },
+            "points": {
+                "count": len(point_events),
+                "events": point_events
             }
         },
         "pose_analytics": {

@@ -11,23 +11,46 @@ def postprocess(feature_map, scale=2):
     - Threshold lowered from 127 to 80 (catches weaker detections from tennis pretrained model)
     - param2 lowered from 2 to 1 (more sensitive circle detection)
     - maxRadius increased from 7 to 12 (ping pong ball can appear larger at close range)
-    - Accepts best circle even when multiple detected (not just exactly 1)
-    - Returns real confidence from heatmap peak value
+    - Prefer the candidate with the strongest heatmap peak (reduces teleports)
+    - Fallback to contour centroid for ellipsoid-like blobs
     """
-    peak = float(np.max(feature_map))
-    feature_map = (feature_map * 255).astype(np.uint8)
-    feature_map = feature_map.reshape((360, 640))
-    ret, heatmap = cv2.threshold(feature_map, 80, 255, cv2.THRESH_BINARY)
+    raw_map = feature_map.reshape((360, 640))
+    peak = float(np.max(raw_map))
+    scaled = (raw_map * 255).astype(np.uint8)
+    _, heatmap = cv2.threshold(scaled, 80, 255, cv2.THRESH_BINARY)
     circles = cv2.HoughCircles(
         heatmap, cv2.HOUGH_GRADIENT, dp=1, minDist=1,
         param1=50, param2=1, minRadius=2, maxRadius=12,
     )
     x, y, conf = None, None, 0.0
     if circles is not None and len(circles) > 0:
-        # Take the first (highest accumulator) circle
-        x = circles[0][0][0] * scale
-        y = circles[0][0][1] * scale
-        conf = min(peak, 1.0)  # heatmap peak as confidence (0-1)
+        best_score = -1.0
+        best_x = None
+        best_y = None
+        for c in circles[0]:
+            cx = int(round(c[0]))
+            cy = int(round(c[1]))
+            if 0 <= cx < raw_map.shape[1] and 0 <= cy < raw_map.shape[0]:
+                score = float(raw_map[cy, cx])
+                if score > best_score:
+                    best_score = score
+                    best_x = c[0]
+                    best_y = c[1]
+        if best_x is not None and best_y is not None:
+            x = best_x * scale
+            y = best_y * scale
+            conf = min(peak, 1.0)
+    else:
+        contours, _ = cv2.findContours(heatmap, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+        if contours:
+            contour = max(contours, key=cv2.contourArea)
+            m = cv2.moments(contour)
+            if m["m00"] > 0:
+                cx = m["m10"] / m["m00"]
+                cy = m["m01"] / m["m00"]
+                x = cx * scale
+                y = cy * scale
+                conf = min(peak, 1.0)
     return x, y, conf
 
 

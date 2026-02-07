@@ -914,7 +914,7 @@ def _run_tracknet_pass(frame_list, model, device, postprocess_fn):
             x_pred, y_pred, conf_pred = postprocess_fn(output)
             ball_track.append((x_pred, y_pred))
             conf_track.append(conf_pred)
-            if ball_track[-1][0] and ball_track[-2][0]:
+            if ball_track[-1][0] is not None and ball_track[-2][0] is not None:
                 dist = distance.euclidean(ball_track[-1], ball_track[-2])
             else:
                 dist = -1
@@ -978,17 +978,125 @@ async def tracknet_track(request: SAM2TrackRequest):
     bwd_det = sum(1 for b in bwd_track if b[0] is not None)
     logger.info(f"TrackNet backward: {bwd_det}/{n} detections")
     
+    from scipy.spatial import distance
+
+    # === Pre-merge: Physics-based motion validation ===
+    # Reject detections that are physically impossible (teleports to wrong objects)
+    # Ping pong ball max speed ~30-40 m/s, at 1920px width ~= 2m → ~30-60 px/frame at 30fps
+    MAX_BALL_SPEED_PX_PER_FRAME = 80  # Conservative upper bound for 30fps
+
+    def is_physically_plausible(new_pt, prev_pt, prev2_pt, confidence):
+        """Check if detection is physically plausible given recent history."""
+        if new_pt[0] is None or prev_pt[0] is None:
+            return True  # No history to validate against
+
+        # Distance from previous frame
+        dist_from_prev = distance.euclidean(new_pt, prev_pt)
+
+        # Reject obvious teleports (>80px in one frame at 30fps)
+        if dist_from_prev > MAX_BALL_SPEED_PX_PER_FRAME:
+            # Only accept if confidence is very high (0.8+) — might be a smash
+            if confidence < 0.8:
+                return False
+
+        # If we have 2+ history points, check velocity consistency
+        if prev2_pt[0] is not None:
+            # Expected position based on constant velocity
+            pred_x = prev_pt[0] + (prev_pt[0] - prev2_pt[0])
+            pred_y = prev_pt[1] + (prev_pt[1] - prev2_pt[1])
+            pred_pt = (pred_x, pred_y)
+
+            # How far is detection from predicted position?
+            pred_error = distance.euclidean(new_pt, pred_pt)
+
+            # Reject if deviation is too large (ball changed direction impossibly)
+            # Allow more deviation if confidence is high
+            max_deviation = 60 if confidence > 0.7 else 40
+            if pred_error > max_deviation:
+                return False
+
+        return True
+
+    # Validate forward and backward tracks before merging
+    validated_fwd = []
+    validated_bwd = []
+    for i in range(n):
+        fwd_pt = fwd_track[i] if i < len(fwd_track) else (None, None)
+        fc = fwd_conf[i] if i < len(fwd_conf) else 0.0
+        prev_fwd = validated_fwd[i-1] if i > 0 and len(validated_fwd) > i-1 else (None, None)
+        prev2_fwd = validated_fwd[i-2] if i > 1 and len(validated_fwd) > i-2 else (None, None)
+
+        if fwd_pt[0] is not None and not is_physically_plausible(fwd_pt, prev_fwd, prev2_fwd, fc):
+            validated_fwd.append((None, None))
+        else:
+            validated_fwd.append(fwd_pt)
+
+    for i in range(n):
+        bwd_pt = bwd_track[i] if i < len(bwd_track) else (None, None)
+        bc = bwd_conf[i] if i < len(bwd_conf) else 0.0
+        prev_bwd = validated_bwd[i-1] if i > 0 and len(validated_bwd) > i-1 else (None, None)
+        prev2_bwd = validated_bwd[i-2] if i > 1 and len(validated_bwd) > i-2 else (None, None)
+
+        if bwd_pt[0] is not None and not is_physically_plausible(bwd_pt, prev_bwd, prev2_bwd, bc):
+            validated_bwd.append((None, None))
+        else:
+            validated_bwd.append(bwd_pt)
+
+    rejected_fwd = sum(1 for i in range(n) if fwd_track[i][0] is not None and validated_fwd[i][0] is None)
+    rejected_bwd = sum(1 for i in range(n) if bwd_track[i][0] is not None and validated_bwd[i][0] is None)
+    logger.info(f"Motion validation: rejected {rejected_fwd} forward, {rejected_bwd} backward detections")
+
     # === Merge: higher confidence wins, fill gaps from either ===
     ball_track = [(None, None)] * n
     conf_track = [0.0] * n
     for i in range(n):
-        fwd_pt = fwd_track[i] if i < len(fwd_track) else (None, None)
-        bwd_pt = bwd_track[i] if i < len(bwd_track) else (None, None)
+        fwd_pt = validated_fwd[i]  # Use validated tracks
+        bwd_pt = validated_bwd[i]
         fc = fwd_conf[i] if i < len(fwd_conf) else 0.0
         bc = bwd_conf[i] if i < len(bwd_conf) else 0.0
-        
+        prev_pt = ball_track[i - 1] if i > 0 else (None, None)
+        prev2_pt = ball_track[i - 2] if i > 1 else (None, None)
+        pred_pt = (None, None)
+        if prev_pt[0] is not None and prev2_pt[0] is not None:
+            pred_pt = (
+                prev_pt[0] + (prev_pt[0] - prev2_pt[0]),
+                prev_pt[1] + (prev_pt[1] - prev2_pt[1]),
+            )
+
         if fwd_pt[0] is not None and bwd_pt[0] is not None:
-            if fc >= bc:
+            if pred_pt[0] is not None:
+                df = distance.euclidean(pred_pt, fwd_pt)
+                db = distance.euclidean(pred_pt, bwd_pt)
+                if abs(df - db) > 20:
+                    if df <= db:
+                        ball_track[i] = fwd_pt
+                        conf_track[i] = fc
+                    else:
+                        ball_track[i] = bwd_pt
+                        conf_track[i] = bc
+                elif fc >= bc:
+                    ball_track[i] = fwd_pt
+                    conf_track[i] = fc
+                else:
+                    ball_track[i] = bwd_pt
+                    conf_track[i] = bc
+            elif prev_pt[0] is not None:
+                df = distance.euclidean(prev_pt, fwd_pt)
+                db = distance.euclidean(prev_pt, bwd_pt)
+                if abs(df - db) > 25:
+                    if df <= db:
+                        ball_track[i] = fwd_pt
+                        conf_track[i] = fc
+                    else:
+                        ball_track[i] = bwd_pt
+                        conf_track[i] = bc
+                elif fc >= bc:
+                    ball_track[i] = fwd_pt
+                    conf_track[i] = fc
+                else:
+                    ball_track[i] = bwd_pt
+                    conf_track[i] = bc
+            elif fc >= bc:
                 ball_track[i] = fwd_pt
                 conf_track[i] = fc
             else:
@@ -1005,7 +1113,6 @@ async def tracknet_track(request: SAM2TrackRequest):
     logger.info(f"TrackNet merged: {merged_det}/{n} detections (fwd={fwd_det}, bwd={bwd_det})")
     
     # === Post-processing ===
-    from scipy.spatial import distance
     dists = [-1] * n
     for i in range(1, n):
         if ball_track[i][0] is not None and ball_track[i-1][0] is not None:
@@ -1019,6 +1126,62 @@ async def tracknet_track(request: SAM2TrackRequest):
         if ball_track[i][0] is not None and conf_track[i] < 0.15:
             ball_track[i] = (None, None)
     
+    # Third pass: teleport filter using local motion + confidence gating
+    valid_dists = [
+        distance.euclidean(ball_track[i], ball_track[i - 1])
+        for i in range(1, n)
+        if ball_track[i][0] is not None and ball_track[i - 1][0] is not None
+    ]
+    median_dist = float(np.median(valid_dists)) if valid_dists else 0.0
+    fps_scale = max(1.0, 30.0 / max(fps, 1.0))
+    base_jump = max(60.0, median_dist * 3.0) * fps_scale
+    hard_jump = max(110.0, median_dist * 5.0) * fps_scale
+    for i in range(1, n - 1):
+        if ball_track[i][0] is None:
+            continue
+        prev_pt = ball_track[i - 1]
+        next_pt = ball_track[i + 1]
+        if prev_pt[0] is not None and next_pt[0] is not None:
+            d_prev = distance.euclidean(ball_track[i], prev_pt)
+            d_next = distance.euclidean(ball_track[i], next_pt)
+            d_skip = distance.euclidean(prev_pt, next_pt)
+            if d_prev > base_jump and d_next > base_jump and d_skip < base_jump * 1.2 and conf_track[i] < 0.45:
+                ball_track[i] = (None, None)
+                continue
+        if prev_pt[0] is not None:
+            d_prev = distance.euclidean(ball_track[i], prev_pt)
+            if d_prev > hard_jump and conf_track[i] < 0.35:
+                ball_track[i] = (None, None)
+                continue
+        if i >= 2 and prev_pt[0] is not None:
+            prev2_pt = ball_track[i - 2]
+            if prev2_pt[0] is not None:
+                pred = (
+                    prev_pt[0] + (prev_pt[0] - prev2_pt[0]),
+                    prev_pt[1] + (prev_pt[1] - prev2_pt[1]),
+                )
+                d_pred = distance.euclidean(ball_track[i], pred)
+                if d_pred > hard_jump and conf_track[i] < 0.5:
+                    ball_track[i] = (None, None)
+
+    # Fourth pass: median window spike filter (mid-flight teleports)
+    window = 2
+    for i in range(window, n - window):
+        if ball_track[i][0] is None:
+            continue
+        neighbors = []
+        for j in range(i - window, i + window + 1):
+            if j == i:
+                continue
+            if ball_track[j][0] is not None:
+                neighbors.append(ball_track[j])
+        if len(neighbors) >= 3:
+            mx = float(np.median([p[0] for p in neighbors]))
+            my = float(np.median([p[1] for p in neighbors]))
+            d_med = distance.euclidean(ball_track[i], (mx, my))
+            if d_med > base_jump * 0.8 and conf_track[i] < 0.55:
+                ball_track[i] = (None, None)
+    
     subtracks = split_track(ball_track)
     
     # Bridge segments across hit events before interpolation
@@ -1031,18 +1194,88 @@ async def tracknet_track(request: SAM2TrackRequest):
         ball_subtrack = interpolation(ball_subtrack)
         ball_track[r[0]:r[1]] = ball_subtrack
     
-    # === Exponential Moving Average Smoothing (reduce jitter) ===
-    # Apply EMA to smooth out small jitters while preserving actual motion
-    alpha = 0.3  # Smoothing factor (0 = no smoothing, 1 = no smoothing)
-    for i in range(1, n):
-        if ball_track[i][0] is not None and ball_track[i-1][0] is not None:
-            # Only smooth if positions are close (< 50px) - don't smooth across large jumps
-            dist = distance.euclidean(ball_track[i], ball_track[i-1])
-            if dist < 50:
-                ball_track[i] = (
-                    alpha * ball_track[i][0] + (1 - alpha) * ball_track[i-1][0],
-                    alpha * ball_track[i][1] + (1 - alpha) * ball_track[i-1][1]
-                )
+    # === One Euro Filter Smoothing (adaptive + responsive) ===
+    # Replaces EMA with One Euro Filter for better jitter reduction while preserving fast motion
+    class LowPassFilter:
+        def __init__(self, alpha: float):
+            self.alpha = alpha
+            self.s = None
+
+        def __call__(self, value: float) -> float:
+            if self.s is None:
+                self.s = value
+            else:
+                self.s = self.alpha * value + (1 - self.alpha) * self.s
+            return self.s
+
+        def reset(self):
+            self.s = None
+
+    class OneEuroFilter:
+        def __init__(self, min_cutoff: float = 1.0, beta: float = 0.0, d_cutoff: float = 1.0):
+            self.min_cutoff = min_cutoff
+            self.beta = beta
+            self.d_cutoff = d_cutoff
+            self.x_filter = LowPassFilter(self._alpha(min_cutoff))
+            self.dx_filter = LowPassFilter(self._alpha(d_cutoff))
+            self.last_value = None
+
+        def _alpha(self, cutoff: float) -> float:
+            te = 1.0 / max(fps, 1.0)  # Actual video FPS
+            tau = 1.0 / (2 * 3.14159 * cutoff)
+            return 1.0 / (1.0 + tau / te)
+
+        def __call__(self, value: float) -> float:
+            if self.last_value is None:
+                self.last_value = value
+                return value
+
+            # Compute derivative (velocity)
+            dx = (value - self.last_value) * fps
+            edx = self.dx_filter(dx)
+
+            # Adaptive cutoff: higher velocity = less smoothing (more responsive)
+            cutoff = self.min_cutoff + self.beta * abs(edx)
+            self.x_filter.alpha = self._alpha(cutoff)
+
+            self.last_value = value
+            return self.x_filter(value)
+
+        def reset(self):
+            self.x_filter.reset()
+            self.dx_filter.reset()
+            self.last_value = None
+
+    # Create filters for x and y coordinates
+    # min_cutoff: Lower = more smoothing (0.5-1.5 for ball)
+    # beta: Higher = more responsive to fast motion (0.5-1.0 for ball)
+    x_filter = OneEuroFilter(min_cutoff=0.8, beta=0.7)
+    y_filter = OneEuroFilter(min_cutoff=0.8, beta=0.7)
+
+    smoothed_track = []
+    for i in range(n):
+        if ball_track[i][0] is not None:
+            # Apply One Euro Filter
+            smoothed_x = x_filter(ball_track[i][0])
+            smoothed_y = y_filter(ball_track[i][1])
+            smoothed_track.append((smoothed_x, smoothed_y))
+        else:
+            # Gap: use prediction from last valid position + velocity
+            if len(smoothed_track) > 0 and smoothed_track[-1] is not None:
+                # Simple linear prediction (could enhance with physics model)
+                if len(smoothed_track) >= 2 and smoothed_track[-2] is not None:
+                    vx = smoothed_track[-1][0] - smoothed_track[-2][0]
+                    vy = smoothed_track[-1][1] - smoothed_track[-2][1]
+                    predicted_x = smoothed_track[-1][0] + vx
+                    predicted_y = smoothed_track[-1][1] + vy
+                    smoothed_track.append((predicted_x, predicted_y))
+                else:
+                    # No velocity info, use last known position
+                    smoothed_track.append(smoothed_track[-1])
+            else:
+                smoothed_track.append((None, None))
+
+    ball_track = smoothed_track
     
     # === YOLO Recovery: fill remaining gaps ===
     yolo_model = registry.get("yolo")

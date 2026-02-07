@@ -72,6 +72,13 @@ export const DualVideoPlayer = memo(function DualVideoPlayer({
     return new Map(trajectoryData.frames.map(f => [f.frame, f]));
   }, [trajectoryData]);
 
+  // Jump threshold based on video diagonal — points further apart than this are noise
+  const jumpThreshold = useMemo(() => {
+    const w = trajectoryData?.video_info?.width ?? 1280;
+    const h = trajectoryData?.video_info?.height ?? 720;
+    return Math.sqrt(w * w + h * h) * 0.12;
+  }, [trajectoryData]);
+
   // Memoize trajectory points up to current frame for drawing
   const visibleTrajectoryPoints = useMemo(() => {
     if (!trajectoryData?.frames) return [];
@@ -102,16 +109,6 @@ export const DualVideoPlayer = memo(function DualVideoPlayer({
       }
     }
   }, []);
-  
-  // Max pixel distance between consecutive trajectory points before we
-  // consider it a tracking glitch and break the line. Scaled relative to
-  // video diagonal so it works at any resolution.
-  const jumpThreshold = useMemo(() => {
-    const w = trajectoryData?.video_info?.width ?? 1280;
-    const h = trajectoryData?.video_info?.height ?? 720;
-    // ~12% of video diagonal — fast rallies rarely exceed this per-frame
-    return Math.sqrt(w * w + h * h) * 0.12;
-  }, [trajectoryData]);
 
   // Draw trajectory on canvas
   const drawTrajectory = useCallback(() => {
@@ -135,34 +132,32 @@ export const DualVideoPlayer = memo(function DualVideoPlayer({
 
     ctx.clearRect(0, 0, canvas.width, canvas.height);
 
-    // Draw trajectory line, breaking on large jumps (tracking noise)
+    // Draw trajectory line, breaking path on jumps (noise suppression)
     ctx.strokeStyle = "#9B7B5B";
     ctx.lineWidth = 3;
     ctx.beginPath();
-    let penDown = false;
+    let pathStarted = false;
 
     visibleTrajectoryPoints.forEach((point, i) => {
       if (i === 0) {
         ctx.moveTo(point.x, point.y);
-        penDown = true;
+        pathStarted = true;
       } else {
         const prev = visibleTrajectoryPoints[i - 1];
         const dx = point.x - prev.x;
         const dy = point.y - prev.y;
         const dist = Math.sqrt(dx * dx + dy * dy);
-
         if (dist > jumpThreshold) {
-          // Large jump detected — break the path to avoid jittery teleport line
-          if (penDown) ctx.stroke();
+          // Large jump = tracking noise — break the path
+          ctx.stroke();
           ctx.beginPath();
           ctx.moveTo(point.x, point.y);
-          penDown = true;
         } else {
           ctx.lineTo(point.x, point.y);
         }
       }
     });
-    if (penDown) ctx.stroke();
+    ctx.stroke();
 
     // Draw current point marker
     const currentPoint = trajectoryFrameMap.get(currentFrame);
@@ -271,7 +266,7 @@ export const DualVideoPlayer = memo(function DualVideoPlayer({
     drawSkeleton(opponentPoseMap.get(currentFrame), "#5B9B9B", "#5B9B9B");
   }, [playerPoseMap, opponentPoseMap, currentFrame, showPoseOverlay]);
 
-  // Video event listeners + rAF loop for frame-accurate ball overlay
+  // Video event listeners — use requestAnimationFrame for smooth frame-accurate updates
   useEffect(() => {
     const exoVideo = exoVideoRef.current;
     if (!exoVideo) return;
@@ -280,14 +275,14 @@ export const DualVideoPlayer = memo(function DualVideoPlayer({
       setDuration(exoVideo.duration);
     };
 
-    // Use requestAnimationFrame for smooth, frame-accurate updates
-    // instead of timeupdate which only fires ~4x/sec
+    exoVideo.addEventListener("loadedmetadata", handleLoadedMetadata);
+
+    // rAF loop fires at display refresh rate (60Hz+) instead of timeupdate (~4Hz)
     let lastFrame = -1;
     const tick = () => {
       if (exoVideo) {
         const t = exoVideo.currentTime;
         const f = Math.round(t * fps);
-        // Only trigger state updates when the frame actually changes
         if (f !== lastFrame) {
           lastFrame = f;
           setCurrentTime(t);
@@ -298,8 +293,6 @@ export const DualVideoPlayer = memo(function DualVideoPlayer({
       animFrameRef.current = requestAnimationFrame(tick);
     };
     animFrameRef.current = requestAnimationFrame(tick);
-
-    exoVideo.addEventListener("loadedmetadata", handleLoadedMetadata);
 
     return () => {
       cancelAnimationFrame(animFrameRef.current);

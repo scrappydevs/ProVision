@@ -105,6 +105,7 @@ def _with_runpod_dashboard(
 @router.get("/{session_id}")
 async def get_session_analytics(
     session_id: str,
+    force: bool = False,
     user_id: str = Depends(get_current_user_id)
 ) -> Dict[str, Any]:
     """
@@ -128,10 +129,19 @@ async def get_session_analytics(
     
     trajectory_data = session_result.data.get("trajectory_data")
     if not trajectory_data or not trajectory_data.get("frames"):
-        raise HTTPException(
-            status_code=400,
-            detail="No trajectory data available. Ball tracking must be completed first."
-        )
+        # Return empty analytics instead of 400 error
+        logger.info(f"No trajectory data for session {session_id}, returning empty analytics")
+        return {
+            "session_id": session_id,
+            "session_name": session_result.data.get("name", "Unnamed"),
+            "ball_analytics": None,
+            "pose_analytics": None,
+            "correlation": None,
+            "fps": 30.0,
+            "video_info": {},
+            "pose_frame_count": 0,
+            "message": "Ball tracking not completed yet. Click 'Track' to analyze ball trajectory.",
+        }
 
     session_updated_at = session_result.data.get("updated_at")
     session_updated_at_norm = (
@@ -142,40 +152,42 @@ async def get_session_analytics(
         else None
     )
 
-    # Check cached analytics
-    try:
-        cache_result = supabase.table("session_analytics") \
-            .select("analytics, session_updated_at") \
-            .eq("session_id", session_id) \
-            .eq("user_id", user_id) \
-            .limit(1) \
-            .execute()
-        if cache_result.data:
-            cache_row = cache_result.data[0]
-            cache_updated = cache_row.get("session_updated_at")
-            cache_updated_norm = (
-                cache_updated.isoformat()
-                if hasattr(cache_updated, "isoformat")
-                else str(cache_updated)
-                if cache_updated is not None
-                else None
-            )
-            if cache_row.get("analytics") and session_updated_at_norm and cache_updated_norm == session_updated_at_norm:
-                return _with_runpod_dashboard(
-                    cache_row["analytics"],
-                    user_id=user_id,
-                    session_id=session_id,
+    # Check cached analytics (skip if forcing recompute)
+    if not force:
+        try:
+            cache_result = supabase.table("session_analytics") \
+                .select("analytics, session_updated_at") \
+                .eq("session_id", session_id) \
+                .eq("user_id", user_id) \
+                .limit(1) \
+                .execute()
+            if cache_result.data:
+                cache_row = cache_result.data[0]
+                cache_updated = cache_row.get("session_updated_at")
+                cache_updated_norm = (
+                    cache_updated.isoformat()
+                    if hasattr(cache_updated, "isoformat")
+                    else str(cache_updated)
+                    if cache_updated is not None
+                    else None
                 )
-    except Exception as e:
-        logger.warning(f"Analytics cache lookup failed: {e}")
+                if cache_row.get("analytics") and session_updated_at_norm and cache_updated_norm == session_updated_at_norm:
+                    return _with_runpod_dashboard(
+                        cache_row["analytics"],
+                        user_id=user_id,
+                        session_id=session_id,
+                    )
+        except Exception as e:
+            logger.warning(f"Analytics cache lookup failed: {e}")
     
-    # Fetch pose data (include person_id for multi-player analytics)
+    # Fetch pose data (player only, person_id=0)
     pose_result = supabase.table("pose_analysis") \
         .select("frame_number, timestamp, keypoints, joint_angles, body_metrics, person_id") \
         .eq("session_id", session_id) \
+        .eq("person_id", 0) \
         .order("frame_number") \
         .execute()
-    
+
     pose_data = pose_result.data or []
     
     # Get FPS from trajectory video_info
