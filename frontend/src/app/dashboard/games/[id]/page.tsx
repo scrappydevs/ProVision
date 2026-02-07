@@ -415,24 +415,20 @@ export default function GameViewerPage() {
     return () => video.removeEventListener("loadedmetadata", seekAndPlay);
   }, [autoSeekTime, videoUrl, shouldAutoPlay]);
 
-  // Handle tip state changes - freeze video when tip appears
+  // Handle tip state changes - pause video when tip appears, user resumes manually
   const handleTipChange = useCallback((tip: VideoTip | null) => {
     setActiveTip(tip);
 
     if (!videoRef.current) return;
 
     if (tip && !videoRef.current.paused) {
-      // Tip appeared - pause video
+      // Tip appeared - pause video so user can read
       videoRef.current.pause();
       setIsPlaying(false);
       setTipPausedVideo(true);
-    } else if (!tip && tipPausedVideo) {
-      // Tip disappeared and we paused it - resume
-      videoRef.current.play();
-      setIsPlaying(true);
-      setTipPausedVideo(false);
     }
-  }, [tipPausedVideo]);
+    // Don't auto-resume - let user click play when ready
+  }, []);
 
   const showTrack = activeTab === "track";
   const showCourt = activeTab === "court";

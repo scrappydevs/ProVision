@@ -34,7 +34,7 @@ export function generateTipsFromStrokes(
       tips.push({
         id: `stroke-${stroke.id}-contact`,
         timestamp: contactTime,
-        duration: 2.8,
+        duration: 6.0, // Long enough to read - video pauses anyway
         title: contactTip.title,
         message: contactTip.message,
         strokeId: stroke.id,
@@ -51,11 +51,11 @@ export function generateTipsFromStrokes(
         ? (nextStroke.start_frame / fps) - (stroke.end_frame / fps)
         : 999;
 
-      if (timeUntilNext > 1.5) {
+      if (timeUntilNext > 3.0) {
         tips.push({
           id: `stroke-${stroke.id}-follow`,
-          timestamp: stroke.end_frame / fps + 0.3,
-          duration: 2.5,
+          timestamp: stroke.end_frame / fps + 0.5,
+          duration: 5.0,
           title: followTip.title,
           message: followTip.message,
           strokeId: stroke.id,
