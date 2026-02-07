@@ -26,11 +26,56 @@ from ..utils.video_utils import extract_video_path_from_url
 logger = logging.getLogger(__name__)
 
 
+class _DashboardEngineConfig:
+    """SSH config for the *dashboard / UpliftingTableTennis* RunPod pod.
+
+    This is deliberately separate from the main ``RemoteEngineConfig`` used
+    for tracking/SAM2/pose, because the two workloads run on different pods.
+    Env-var prefix: ``RUNPOD_DASHBOARD_SSH_*``; falls back to the global
+    ``SSH_*`` vars so existing setups keep working.
+    """
+
+    def __init__(self):
+        self.SSH_HOST = os.getenv("RUNPOD_DASHBOARD_SSH_HOST") or os.getenv("SSH_HOST")
+        self.SSH_USER = os.getenv("RUNPOD_DASHBOARD_SSH_USER") or os.getenv("SSH_USER", "root")
+        self.SSH_PORT = int(
+            os.getenv("RUNPOD_DASHBOARD_SSH_PORT")
+            or os.getenv("SSH_PORT", "22")
+        )
+        self.SSH_PASSWORD = os.getenv("RUNPOD_DASHBOARD_SSH_PASSWORD") or os.getenv("SSH_PASSWORD")
+        self.SSH_KEY_FILE = os.getenv("RUNPOD_DASHBOARD_SSH_KEY_FILE") or os.getenv("SSH_KEY_FILE")
+        self.SSH_KEY_BASE64 = os.getenv("RUNPOD_DASHBOARD_SSH_KEY_BASE64") or os.getenv("SSH_KEY_BASE64")
+
+        # Expand ~ and resolve relative paths
+        if self.SSH_KEY_FILE:
+            self.SSH_KEY_FILE = os.path.expanduser(self.SSH_KEY_FILE)
+        if self.SSH_KEY_FILE and not os.path.isabs(self.SSH_KEY_FILE):
+            project_root = os.path.abspath(os.path.join(os.path.dirname(__file__), "../../.."))
+            self.SSH_KEY_FILE = os.path.join(project_root, self.SSH_KEY_FILE)
+
+        # Decode base64 key to temp file when no key file is set
+        if self.SSH_KEY_BASE64 and not self.SSH_KEY_FILE:
+            try:
+                import tempfile as _tmp
+                key_bytes = base64.b64decode(self.SSH_KEY_BASE64)
+                fd, temp_path = _tmp.mkstemp(suffix=".pem", prefix="dashboard_ssh_key_")
+                os.chmod(temp_path, 0o600)
+                with os.fdopen(fd, "wb") as f:
+                    f.write(key_bytes)
+                self.SSH_KEY_FILE = temp_path
+            except Exception as exc:
+                logger.error(f"Failed to decode RUNPOD_DASHBOARD_SSH_KEY_BASE64: {exc}")
+
+    def is_configured(self) -> bool:
+        return bool(self.SSH_HOST and self.SSH_USER and (self.SSH_PASSWORD or self.SSH_KEY_FILE))
+
+
 class RunPodDashboardService:
     """Service for dashboard analysis execution on RunPod + Supabase artifact sync."""
 
     def __init__(self):
         self._runner: Optional[RemoteEngineRunner] = None
+        self._ssh_config = _DashboardEngineConfig()
         self.bucket_name = os.getenv("RUNPOD_DASHBOARD_BUCKET", "provision-videos")
         self.repo_dir = os.getenv("RUNPOD_DASHBOARD_REPO_DIR", "/workspace/UpliftingTableTennis")
         self.wrapper_path = os.getenv(
@@ -51,12 +96,35 @@ class RunPodDashboardService:
     @property
     def runner(self) -> RemoteEngineRunner:
         if self._runner is None:
-            self._runner = RemoteEngineRunner()
+            from src.engines.remote_run import RemoteEngineConfig
+
+            # Build a RemoteEngineConfig that uses the *dashboard* SSH vars
+            cfg = RemoteEngineConfig.__new__(RemoteEngineConfig)
+            cfg.SSH_HOST = self._ssh_config.SSH_HOST
+            cfg.SSH_USER = self._ssh_config.SSH_USER
+            cfg.SSH_PORT = self._ssh_config.SSH_PORT
+            cfg.SSH_PASSWORD = self._ssh_config.SSH_PASSWORD
+            cfg.SSH_KEY_FILE = self._ssh_config.SSH_KEY_FILE
+            cfg.SSH_KEY_BASE64 = self._ssh_config.SSH_KEY_BASE64
+            cfg.REMOTE_BASE_DIR = self.repo_dir
+            cfg.REMOTE_VIDEO_DIR = f"{self.repo_dir}/videos"
+            cfg.REMOTE_RESULTS_DIR = f"{self.repo_dir}/output"
+            cfg.SAM2_MODEL_PATH = ""
+            cfg.SAM2_CONFIG = ""
+            cfg.SAM3D_MODEL_PATH = ""
+            cfg.SAM2_WORKING_DIR = self.repo_dir
+            cfg.SAM3D_WORKING_DIR = self.repo_dir
+            cfg.SAM2_CONDA_ENV = "base"
+            cfg.SAM3D_CONDA_ENV = "base"
+            cfg.MODEL_SERVER_HOST = "localhost"
+            cfg.MODEL_SERVER_PORT = 8765
+
+            self._runner = RemoteEngineRunner(config=cfg, use_pool=False)
         return self._runner
 
     @property
     def is_available(self) -> bool:
-        return bool(os.getenv("SSH_HOST"))
+        return self._ssh_config.is_configured()
 
     def artifact_prefix(self, user_id: str, session_id: str) -> str:
         return f"{user_id}/{session_id}/runpod-dashboard"
@@ -438,7 +506,13 @@ class RunPodDashboardService:
                         session_id=args.session_id,
                     )
 
-                    generated_files = [p for p in output_dir.rglob("*") if p.is_file()]
+                    # Collect output files, skipping jupyter checkpoints and initial/ dir
+                    _skip_dirs = {".ipynb_checkpoints", "initial", "__pycache__"}
+                    generated_files = [
+                        p
+                        for p in output_dir.rglob("*")
+                        if p.is_file() and not (_skip_dirs & set(p.relative_to(output_dir).parts))
+                    ]
                     if not generated_files:
                         fallback_video = output_dir / "processed_video.mp4"
                         shutil.copy2(input_video, fallback_video)

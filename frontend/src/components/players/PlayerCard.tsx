@@ -19,6 +19,11 @@ export function PlayerCard({ player, onClick }: PlayerCardProps) {
 
   const gameCount = player.game_count ?? 0;
 
+  // Show handedness as the badge (e.g. "Right Handed")
+  const badge = player.handedness
+    ? `${player.handedness === "right" ? "Right" : "Left"} Handed`
+    : null;
+
   return (
     <Card
       isPressable
@@ -51,14 +56,14 @@ export function PlayerCard({ player, onClick }: PlayerCardProps) {
           </>
         )}
 
-        {/* Position badge */}
-        {player.position && (
+        {/* Style / grip badge */}
+        {badge && (
           <Chip
             size="sm"
             variant="flat"
             className="absolute top-2.5 right-2.5 bg-black/40 backdrop-blur-sm text-primary uppercase text-[9px]"
           >
-            {player.position}
+            {badge}
           </Chip>
         )}
 

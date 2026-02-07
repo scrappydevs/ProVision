@@ -78,10 +78,19 @@ export const DualVideoPlayer = memo(function DualVideoPlayer({
     return trajectoryData.frames.filter(f => f.frame <= currentFrame);
   }, [trajectoryData, currentFrame]);
 
-  // Memoize pose data frame map
-  const poseFrameMap = useMemo(() => {
-    if (!poseData?.frames) return new Map();
-    return new Map(poseData.frames.map(f => [f.frame_number, f]));
+  // Memoize pose data frame maps — separate player (person_id=0) and opponent (person_id=1)
+  const { playerPoseMap, opponentPoseMap } = useMemo(() => {
+    const playerMap = new Map();
+    const opponentMap = new Map();
+    if (!poseData?.frames) return { playerPoseMap: playerMap, opponentPoseMap: opponentMap };
+    for (const f of poseData.frames) {
+      if (f.person_id === 1) {
+        opponentMap.set(f.frame_number, f);
+      } else {
+        playerMap.set(f.frame_number, f);
+      }
+    }
+    return { playerPoseMap: playerMap, opponentPoseMap: opponentMap };
   }, [poseData]);
 
   // Stable callback for syncing videos
@@ -168,7 +177,7 @@ export const DualVideoPlayer = memo(function DualVideoPlayer({
     }
   }, [visibleTrajectoryPoints, trajectoryFrameMap, currentFrame, showTrajectory, jumpThreshold]);
 
-  // Draw pose skeleton on canvas
+  // Draw pose skeleton on canvas (both player and opponent)
   const drawPoseSkeleton = useCallback(() => {
     if (!poseCanvasRef.current || !showPoseOverlay) return;
 
@@ -190,66 +199,77 @@ export const DualVideoPlayer = memo(function DualVideoPlayer({
 
     ctx.clearRect(0, 0, canvas.width, canvas.height);
 
-    // Get pose data for current frame
-    const poseFrame = poseFrameMap.get(currentFrame);
-    if (!poseFrame?.keypoints) return;
-
-    // Convert keypoints object to array format for easier indexing
-    const keypointsArray = Object.entries(poseFrame.keypoints).map(([name, kp]) => {
-      const k = kp as { x: number; y: number; z: number; visibility: number };
-      return {
-        name,
-        x: k.x * videoWidth,
-        y: k.y * videoHeight,
-        z: k.z,
-        visibility: k.visibility,
-      };
-    });
-
-    // Landmark order
+    // COCO 17-keypoint names (matches backend LANDMARK_NAMES order)
     const landmarkNames = [
-      "nose", "left_eye_inner", "left_eye", "left_eye_outer", "right_eye_inner",
-      "right_eye", "right_eye_outer", "left_ear", "right_ear", "mouth_left", "mouth_right",
-      "left_shoulder", "right_shoulder", "left_elbow", "right_elbow", "left_wrist",
-      "right_wrist", "left_pinky", "right_pinky", "left_index", "right_index",
-      "left_thumb", "right_thumb", "left_hip", "right_hip", "left_knee", "right_knee",
-      "left_ankle", "right_ankle", "left_heel", "right_heel", "left_foot_index", "right_foot_index"
+      "nose", "left_eye", "right_eye", "left_ear", "right_ear",
+      "left_shoulder", "right_shoulder", "left_elbow", "right_elbow",
+      "left_wrist", "right_wrist", "left_hip", "right_hip",
+      "left_knee", "right_knee", "left_ankle", "right_ankle",
     ];
 
-    // Build keypoint array by landmark index
-    const keypoints = landmarkNames.map(name =>
-      keypointsArray.find(kp => kp.name === name)
-    );
+    // COCO 17-keypoint skeleton connections
+    const cocoConnections = [
+      [0, 1], [0, 2], [1, 3], [2, 4],          // face
+      [5, 6], [5, 11], [6, 12], [11, 12],       // torso
+      [5, 7], [7, 9],                            // left arm
+      [6, 8], [8, 10],                           // right arm
+      [11, 13], [13, 15],                        // left leg
+      [12, 14], [14, 16],                        // right leg
+    ];
 
-    // Draw connections
-    ctx.strokeStyle = "#6B8E6B";
-    ctx.lineWidth = 3;
+    const drawSkeleton = (
+      poseFrame: { keypoints: Record<string, { x: number; y: number; z: number; visibility: number }> } | undefined,
+      lineColor: string,
+      dotColor: string,
+    ) => {
+      if (!poseFrame?.keypoints) return;
 
-    POSE_CONNECTIONS.forEach(([idx1, idx2]) => {
-      const kp1 = keypoints[idx1];
-      const kp2 = keypoints[idx2];
+      // Build indexed array from keypoints object
+      const keypointsArray = Object.entries(poseFrame.keypoints).map(([name, kp]) => ({
+        name,
+        x: kp.x * videoWidth,
+        y: kp.y * videoHeight,
+        z: kp.z,
+        visibility: kp.visibility,
+      }));
 
-      if (kp1 && kp2 && kp1.visibility > 0.5 && kp2.visibility > 0.5) {
-        ctx.beginPath();
-        ctx.moveTo(kp1.x, kp1.y);
-        ctx.lineTo(kp2.x, kp2.y);
-        ctx.stroke();
-      }
-    });
+      const keypoints = landmarkNames.map(name =>
+        keypointsArray.find(kp => kp.name === name)
+      );
 
-    // Draw keypoints
-    keypoints.forEach(kp => {
-      if (kp && kp.visibility > 0.5) {
-        ctx.beginPath();
-        ctx.arc(kp.x, kp.y, 5, 0, Math.PI * 2);
-        ctx.fillStyle = "#6B8E6B";
-        ctx.fill();
-        ctx.strokeStyle = "#E8E6E3"; // foreground color
-        ctx.lineWidth = 2;
-        ctx.stroke();
-      }
-    });
-  }, [poseFrameMap, currentFrame, showPoseOverlay]);
+      // Draw connections
+      ctx.strokeStyle = lineColor;
+      ctx.lineWidth = 3;
+      cocoConnections.forEach(([i1, i2]) => {
+        const kp1 = keypoints[i1];
+        const kp2 = keypoints[i2];
+        if (kp1 && kp2 && kp1.visibility > 0.5 && kp2.visibility > 0.5) {
+          ctx.beginPath();
+          ctx.moveTo(kp1.x, kp1.y);
+          ctx.lineTo(kp2.x, kp2.y);
+          ctx.stroke();
+        }
+      });
+
+      // Draw keypoints
+      keypoints.forEach(kp => {
+        if (kp && kp.visibility > 0.5) {
+          ctx.beginPath();
+          ctx.arc(kp.x, kp.y, 5, 0, Math.PI * 2);
+          ctx.fillStyle = dotColor;
+          ctx.fill();
+          ctx.strokeStyle = "#E8E6E3";
+          ctx.lineWidth = 2;
+          ctx.stroke();
+        }
+      });
+    };
+
+    // Draw player skeleton (green)
+    drawSkeleton(playerPoseMap.get(currentFrame), "#6B8E6B", "#6B8E6B");
+    // Draw opponent skeleton (teal)
+    drawSkeleton(opponentPoseMap.get(currentFrame), "#5B9B9B", "#5B9B9B");
+  }, [playerPoseMap, opponentPoseMap, currentFrame, showPoseOverlay]);
 
   // Video event listeners + rAF loop for frame-accurate ball overlay
   useEffect(() => {

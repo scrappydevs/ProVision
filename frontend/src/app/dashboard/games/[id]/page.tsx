@@ -11,7 +11,7 @@ import { Button } from "@/components/ui/button";
 import {
   ArrowLeft, Crosshair, Loader2, ChevronRight, Play, Pause,
   SkipBack, SkipForward, Volume2, VolumeX, Activity, LayoutGrid,
-  Users, BarChart3, Copy, Check, RefreshCw,
+  Users, BarChart3, Bug, Copy, Check, RefreshCw,
 } from "lucide-react";
 import Link from "next/link";
 import dynamic from "next/dynamic";

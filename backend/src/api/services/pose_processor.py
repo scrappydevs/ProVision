@@ -28,6 +28,7 @@ class PoseFrame:
     keypoints: Dict[str, Keypoint]
     joint_angles: Dict[str, float]
     body_metrics: Dict[str, float]
+    person_id: int = 0  # 0 = primary player, 1 = opponent
 
 
 class PoseProcessor:
@@ -326,26 +327,23 @@ class PoseProcessor:
             # Run pose inference
             results = self.model(frame, conf=self.conf, verbose=False)
 
-            # Process detected person
+            # Process detected persons (track both player and opponent)
             if len(results) > 0 and results[0].keypoints is not None:
                 keypoints_data = results[0].keypoints.data
 
                 if len(keypoints_data) > 0:
-                    # Determine which person to track
+                    # Determine which person is the target player
                     if target_player and last_center and len(keypoints_data) > 1:
-                        # Find closest player to last tracked position
                         player_idx = self._find_closest_player(results, last_center)
                         if player_idx is None:
                             player_idx = 0
                     else:
                         player_idx = 0
 
-                    # Get selected person's keypoints
-                    kpts = keypoints_data[player_idx]  # Shape: [17, 3] (x, y, conf)
+                    # Process target player (person_id=0)
+                    kpts = keypoints_data[player_idx]
 
-                    # Update tracking center from current keypoints
                     if target_player:
-                        # Use torso center for tracking (more stable than bbox)
                         left_hip = kpts[11]
                         right_hip = kpts[12]
                         left_shoulder = kpts[5]
@@ -355,24 +353,37 @@ class PoseProcessor:
                             "y": float((left_hip[1] + right_hip[1] + left_shoulder[1] + right_shoulder[1]) / 4)
                         }
 
-                    # Extract keypoints
                     keypoints = self._extract_keypoints(kpts)
-
-                    # Calculate joint angles
                     joint_angles = self._calculate_joint_angles(keypoints)
-
-                    # Calculate body metrics
                     body_metrics = self._calculate_body_metrics(keypoints)
 
-                    pose_frame = PoseFrame(
+                    pose_frames.append(PoseFrame(
                         frame_number=frame_number,
                         timestamp=timestamp,
                         keypoints=keypoints,
                         joint_angles=joint_angles,
-                        body_metrics=body_metrics
-                    )
+                        body_metrics=body_metrics,
+                        person_id=0,
+                    ))
 
-                    pose_frames.append(pose_frame)
+                    # Process opponent (person_id=1) — pick the next best detection
+                    if len(keypoints_data) > 1:
+                        # Choose the highest-confidence person that isn't the player
+                        opp_idx = 1 if player_idx == 0 else 0
+                        opp_kpts = keypoints_data[opp_idx]
+
+                        opp_keypoints = self._extract_keypoints(opp_kpts)
+                        opp_joint_angles = self._calculate_joint_angles(opp_keypoints)
+                        opp_body_metrics = self._calculate_body_metrics(opp_keypoints)
+
+                        pose_frames.append(PoseFrame(
+                            frame_number=frame_number,
+                            timestamp=timestamp,
+                            keypoints=opp_keypoints,
+                            joint_angles=opp_joint_angles,
+                            body_metrics=opp_body_metrics,
+                            person_id=1,
+                        ))
 
             frame_number += 1
 
@@ -421,7 +432,11 @@ class PoseProcessor:
         else:
             last_center = None
 
-        # Create video writer with H.264 codec
+        # Colors: player = green, opponent = teal (BGR format)
+        PLAYER_COLOR = (107, 142, 107)   # Green
+        OPPONENT_COLOR = (123, 155, 91)   # Teal
+        BORDER_COLOR = (232, 230, 227)    # Light
+
         fourcc = cv2.VideoWriter_fourcc(*'avc1')
         out = cv2.VideoWriter(output_path, fourcc, fps, (width, height))
 
@@ -429,7 +444,8 @@ class PoseProcessor:
             raise ValueError(f"Failed to create video writer: {output_path}")
 
         frame_idx = 0
-        last_keypoints = None  # Cache last detected keypoints
+        last_player_kpts = None
+        last_opponent_kpts = None
 
         try:
             while True:
@@ -437,16 +453,12 @@ class PoseProcessor:
                 if not ret:
                     break
 
-                # Process every sample_rate frame
                 if frame_idx % sample_rate == 0:
-                    # Run pose inference
                     results = self.model(frame, conf=self.conf, verbose=False)
 
-                    # Get keypoints from tracked person
                     if len(results) > 0 and results[0].keypoints is not None:
                         keypoints_data = results[0].keypoints.data
                         if len(keypoints_data) > 0:
-                            # Determine which person to track
                             if target_player and last_center and len(keypoints_data) > 1:
                                 player_idx = self._find_closest_player(results, last_center)
                                 if player_idx is None:
@@ -454,44 +466,46 @@ class PoseProcessor:
                             else:
                                 player_idx = 0
 
-                            last_keypoints = keypoints_data[player_idx].cpu().numpy()
+                            last_player_kpts = keypoints_data[player_idx].cpu().numpy()
 
-                            # Update tracking center
                             if target_player:
-                                left_hip = last_keypoints[11]
-                                right_hip = last_keypoints[12]
-                                left_shoulder = last_keypoints[5]
-                                right_shoulder = last_keypoints[6]
+                                left_hip = last_player_kpts[11]
+                                right_hip = last_player_kpts[12]
+                                left_shoulder = last_player_kpts[5]
+                                right_shoulder = last_player_kpts[6]
                                 last_center = {
                                     "x": float((left_hip[0] + right_hip[0] + left_shoulder[0] + right_shoulder[0]) / 4),
                                     "y": float((left_hip[1] + right_hip[1] + left_shoulder[1] + right_shoulder[1]) / 4)
                                 }
 
-                # Draw skeleton using current or cached keypoints
-                if last_keypoints is not None:
-                    # Draw connections
+                            # Get opponent keypoints
+                            if len(keypoints_data) > 1:
+                                opp_idx = 1 if player_idx == 0 else 0
+                                last_opponent_kpts = keypoints_data[opp_idx].cpu().numpy()
+                            else:
+                                last_opponent_kpts = None
+
+                # Helper to draw a skeleton with a given color
+                def _draw_skeleton(kpts, color):
+                    if kpts is None:
+                        return
                     for connection in self.SKELETON:
-                        idx1, idx2 = connection
-                        kpt1 = last_keypoints[idx1]
-                        kpt2 = last_keypoints[idx2]
+                        i1, i2 = connection
+                        k1, k2 = kpts[i1], kpts[i2]
+                        if k1[2] > 0.5 and k2[2] > 0.5:
+                            cv2.line(frame,
+                                     (int(round(k1[0])), int(round(k1[1]))),
+                                     (int(round(k2[0])), int(round(k2[1]))),
+                                     color, 3)
+                    for kpt in kpts:
+                        if kpt[2] > 0.5:
+                            pt = (int(round(kpt[0])), int(round(kpt[1])))
+                            cv2.circle(frame, pt, 5, color, -1)
+                            cv2.circle(frame, pt, 5, BORDER_COLOR, 2)
 
-                        # Check confidence (third value)
-                        if kpt1[2] > 0.5 and kpt2[2] > 0.5:
-                            x1, y1 = int(round(kpt1[0])), int(round(kpt1[1]))
-                            x2, y2 = int(round(kpt2[0])), int(round(kpt2[1]))
-                            # Green line
-                            cv2.line(frame, (x1, y1), (x2, y2), (107, 142, 107), 3)
+                _draw_skeleton(last_player_kpts, PLAYER_COLOR)
+                _draw_skeleton(last_opponent_kpts, OPPONENT_COLOR)
 
-                    # Draw keypoints
-                    for kpt in last_keypoints:
-                        if kpt[2] > 0.5:  # confidence threshold
-                            x, y = int(round(kpt[0])), int(round(kpt[1]))
-                            # Green filled circle
-                            cv2.circle(frame, (x, y), 5, (107, 142, 107), -1)
-                            # Light border
-                            cv2.circle(frame, (x, y), 5, (232, 230, 227), 2)
-
-                # Write frame
                 out.write(frame)
                 frame_idx += 1
 
@@ -658,6 +672,7 @@ class PoseProcessor:
         return {
             'frame_number': pose_frame.frame_number,
             'timestamp': pose_frame.timestamp,
+            'person_id': pose_frame.person_id,
             'keypoints': {k: asdict(v) for k, v in pose_frame.keypoints.items()},
             'joint_angles': pose_frame.joint_angles,
             'body_metrics': pose_frame.body_metrics

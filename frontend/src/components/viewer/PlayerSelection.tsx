@@ -1,8 +1,7 @@
 "use client";
 
-import { useState, useRef, useEffect } from "react";
-import { Button } from "@/components/ui/button";
-import { Loader2, Check, X, RefreshCw, Users } from "lucide-react";
+import { useState, useEffect } from "react";
+import { Loader2, Check, X, RefreshCw } from "lucide-react";
 import {
   getPlayerPreview,
   selectPlayer,
@@ -87,6 +86,23 @@ export function PlayerSelection({
   const isVideoOverlay = !isModal && videoRef && videoViewportRef;
   
   const { previewData, selectedPlayers, setSelectedPlayers, setPreviewData } = usePlayerSelectionStore(sessionId);
+  const requiresOpponent = (previewData?.players.length ?? 0) > 1;
+  const selectedPlayer = selectedPlayers.find((p) => p.role === "player");
+  const selectedOpponent = selectedPlayers.find((p) => p.role === "opponent");
+  const currentStep: "player" | "opponent" | "done" =
+    selectedPlayer ? (requiresOpponent ? (selectedOpponent ? "done" : "opponent") : "done") : "player";
+  const hoverAccentClass =
+    currentStep === "opponent"
+      ? "hover:border-[#5B9B7B]/70 hover:bg-[#5B9B7B]/10"
+      : currentStep === "player"
+        ? "hover:border-[#9B7B5B]/70 hover:bg-[#9B7B5B]/10"
+        : "hover:border-[#4A4849] hover:bg-[#2A292B]";
+  const groupHoverAccentClass =
+    currentStep === "opponent"
+      ? "group-hover:border-[#5B9B7B] group-hover:bg-[#5B9B7B]/10"
+      : currentStep === "player"
+        ? "group-hover:border-[#9B7B5B] group-hover:bg-[#9B7B5B]/10"
+        : "group-hover:border-[#E8E6E3]/40 group-hover:bg-[#2A292B]";
 
   const loadPreview = async () => {
     setLoading(true);
@@ -97,15 +113,6 @@ export function PlayerSelection({
       const response = await getPlayerPreview(sessionId);
       console.log("[PlayerSelection] Preview loaded:", response.data);
       setPreviewData(response.data);
-
-      // Auto-select up to 2 players
-      if (response.data.players.length > 0) {
-        const toSelect = response.data.players.slice(0, Math.min(2, response.data.players.length));
-        setSelectedPlayers([
-          { player: toSelect[0], role: "player" as const },
-          ...(toSelect[1] ? [{ player: toSelect[1], role: "opponent" as const }] : []),
-        ]);
-      }
     } catch (err: any) {
       console.error("[PlayerSelection] Error loading preview:", err);
       const errorMessage = err?.response?.data?.detail || err?.message || "Failed to load player preview";
@@ -132,38 +139,47 @@ export function PlayerSelection({
     }
   }, [isOpen, isModal]);
 
-  const handleRoleChange = (playerIdx: number, role: "player" | "opponent") => {
+  const handleSelectForStep = (playerIdx: number) => {
+    if (!previewData) return;
     setSelectedPlayers((prev) => {
-      const existing = prev.find((p) => p.player.player_idx === playerIdx);
-      if (existing) {
-        // Update role
-        return prev.map((p) =>
-          p.player.player_idx === playerIdx ? { ...p, role } : p
-        );
-      } else {
-        // Add new selection
-        const player = previewData?.players.find((p) => p.player_idx === playerIdx);
-        if (!player) return prev;
-        if (prev.length >= 2) {
-          // Replace oldest
-          return [...prev.slice(1), { player, role }];
-        }
-        return [...prev, { player, role }];
+      const selected = previewData.players.find((p) => p.player_idx === playerIdx);
+      if (!selected) return prev;
+      const currentPlayer = prev.find((p) => p.role === "player");
+      const currentOpponent = prev.find((p) => p.role === "opponent");
+
+      if (currentStep === "player") {
+        const nextOpponent = currentOpponent && currentOpponent.player.player_idx !== playerIdx
+          ? currentOpponent
+          : undefined;
+        return [
+          { player: selected, role: "player" as const },
+          ...(nextOpponent ? [nextOpponent] : []),
+        ];
       }
+
+      if (currentStep === "opponent") {
+        if (currentPlayer?.player.player_idx === playerIdx) return prev;
+        return [
+          ...(currentPlayer ? [currentPlayer] : []),
+          { player: selected, role: "opponent" as const },
+        ];
+      }
+
+      return prev;
     });
   };
 
-  const handleRemovePlayer = (playerIdx: number) => {
-    setSelectedPlayers((prev) => prev.filter((p) => p.player.player_idx !== playerIdx));
+  const handleClearRole = (role: "player" | "opponent") => {
+    setSelectedPlayers((prev) => prev.filter((p) => p.role !== role));
   };
 
   const handleConfirm = async () => {
-    if (selectedPlayers.length === 0) return;
+    if (!selectedPlayer || (requiresOpponent && !selectedOpponent)) return;
 
     setSubmitting(true);
     try {
       // Save primary player selection (first selected)
-      await selectPlayer(sessionId, selectedPlayers[0].player);
+      await selectPlayer(sessionId, selectedPlayer.player);
 
       // Start pose analysis
       const response = await analyzePose(sessionId);
@@ -205,95 +221,6 @@ export function PlayerSelection({
     }
   };
 
-  // Video overlay mode - render highlights on video (returned separately, not as main component)
-  const renderVideoOverlays = () => {
-    if (!isVideoOverlay || !previewData || loading) return null;
-    const video = videoRef.current;
-    const viewport = videoViewportRef.current;
-    if (!video || !viewport) return null;
-
-    // Calculate actual video display size (accounting for object-contain)
-    const containerRect = viewport.getBoundingClientRect();
-    const videoWidth = previewData.video_info.width;
-    const videoHeight = previewData.video_info.height;
-    const containerAspect = containerRect.width / containerRect.height;
-    const videoAspect = videoWidth / videoHeight;
-    
-    let displayWidth: number;
-    let displayHeight: number;
-    let offsetX: number;
-    let offsetY: number;
-    
-    if (videoAspect > containerAspect) {
-      // Video is wider - fit to width
-      displayWidth = containerRect.width;
-      displayHeight = containerRect.width / videoAspect;
-      offsetX = 0;
-      offsetY = (containerRect.height - displayHeight) / 2;
-    } else {
-      // Video is taller - fit to height
-      displayHeight = containerRect.height;
-      displayWidth = containerRect.height * videoAspect;
-      offsetX = (containerRect.width - displayWidth) / 2;
-      offsetY = 0;
-    }
-    
-    const scaleX = displayWidth / videoWidth;
-    const scaleY = displayHeight / videoHeight;
-
-    return (
-      <>
-        {/* Player highlights on video */}
-        {previewData.players.map((player) => {
-          const selection = selectedPlayers.find((p) => p.player.player_idx === player.player_idx);
-          const isSelected = !!selection;
-
-          const left = offsetX + player.bbox.x * scaleX;
-          const top = offsetY + player.bbox.y * scaleY;
-          const width = player.bbox.width * scaleX;
-          const height = player.bbox.height * scaleY;
-
-          return (
-            <div
-              key={player.player_idx}
-              className="absolute pointer-events-none"
-              style={{
-                left: `${left}px`,
-                top: `${top}px`,
-                width: `${width}px`,
-                height: `${height}px`,
-                zIndex: 30,
-              }}
-            >
-              <div
-                className={cn(
-                  "absolute inset-0 rounded border-2 transition-all",
-                  isSelected
-                    ? selection?.role === "player"
-                      ? "border-[#9B7B5B] bg-[#9B7B5B]/10"
-                      : "border-[#5B9B7B] bg-[#5B9B7B]/10"
-                    : "border-[#E8E6E3]/30"
-                )}
-              />
-              {isSelected && (
-                <div
-                  className={cn(
-                    "absolute -top-7 left-0 px-2 py-1 rounded text-xs font-semibold whitespace-nowrap",
-                    selection?.role === "player"
-                      ? "bg-[#9B7B5B] text-[#1E1D1F]"
-                      : "bg-[#5B9B7B] text-[#1E1D1F]"
-                  )}
-                >
-                  {selection.role === "player" ? "Player" : "Opponent"}
-                </div>
-              )}
-            </div>
-          );
-        })}
-      </>
-    );
-  };
-
   // Right panel selection UI (always render this when in video overlay mode)
   if (isVideoOverlay) {
     return (
@@ -324,99 +251,98 @@ export function PlayerSelection({
         {previewData && !loading && (
           <>
             <div className="space-y-3">
-              {/* Role Selection Tabs */}
-              <div className="flex items-center gap-2 p-1 bg-[#282729] rounded-lg border border-[#363436]">
-                <button
-                  onClick={() => {
-                    const currentPlayer = selectedPlayers.find((p) => p.role === "player");
-                    if (currentPlayer) {
-                      // Already has player role selected, no action needed
-                    }
-                  }}
-                  className={cn(
-                    "flex-1 px-3 py-1.5 rounded-md text-xs font-medium transition-all",
-                    selectedPlayers.some((p) => p.role === "player")
-                      ? "bg-[#9B7B5B] text-[#1E1D1F]"
-                      : "text-[#8A8885] hover:text-[#E8E6E3]"
-                  )}
-                >
-                  Player
-                </button>
-                <button
-                  onClick={() => {
-                    const currentOpponent = selectedPlayers.find((p) => p.role === "opponent");
-                    if (currentOpponent) {
-                      // Already has opponent role selected, no action needed
-                    }
-                  }}
-                  className={cn(
-                    "flex-1 px-3 py-1.5 rounded-md text-xs font-medium transition-all",
-                    selectedPlayers.some((p) => p.role === "opponent")
-                      ? "bg-[#5B9B7B] text-[#1E1D1F]"
-                      : "text-[#8A8885] hover:text-[#E8E6E3]"
-                  )}
-                >
-                  Opponent
-                </button>
+              {/* Step Header */}
+              <div className="flex items-center justify-between gap-2">
+                <div>
+                  <p className="text-[10px] text-[#8A8885] uppercase tracking-wider">
+                    {currentStep === "player" ? "Step 1 of 2" : "Step 2 of 2"}
+                  </p>
+                  <p className="text-xs text-[#E8E6E3] font-medium">
+                    {currentStep === "player" && "Click a box to set the Player"}
+                    {currentStep === "opponent" && "Click a box to set the Opponent"}
+                    {currentStep === "done" && (
+                      requiresOpponent
+                        ? "Opponent set. Click Change Opponent, then click a box to update."
+                        : "Player set. Click Confirm to proceed."
+                    )}
+                  </p>
+                </div>
+                {selectedPlayer && currentStep !== "player" && (
+                  <button
+                    onClick={() => handleClearRole("player")}
+                    className="text-[10px] text-[#8A8885] hover:text-[#E8E6E3] transition-colors"
+                  >
+                    Change Player
+                  </button>
+                )}
+                {selectedOpponent && currentStep === "done" && (
+                  <button
+                    onClick={() => handleClearRole("opponent")}
+                    className="text-[10px] text-[#8A8885] hover:text-[#E8E6E3] transition-colors"
+                  >
+                    Change Opponent
+                  </button>
+                )}
               </div>
 
-              {/* Player Cards - Click to assign role */}
+              {/* Current Selection */}
+              <div className="grid grid-cols-2 gap-2">
+                <div className="rounded-lg border border-[#363436] bg-[#1E1D1F] px-2.5 py-2">
+                  <p className="text-[10px] text-[#8A8885] uppercase tracking-wider">Player</p>
+                  <p className="text-xs text-[#E8E6E3] mt-1">
+                    {selectedPlayer ? `Detected #${selectedPlayer.player.player_idx + 1}` : "Not selected"}
+                  </p>
+                </div>
+                <div className="rounded-lg border border-[#363436] bg-[#1E1D1F] px-2.5 py-2">
+                  <p className="text-[10px] text-[#8A8885] uppercase tracking-wider">Opponent</p>
+                  <p className="text-xs text-[#E8E6E3] mt-1">
+                    {selectedOpponent ? `Detected #${selectedOpponent.player.player_idx + 1}` : "Optional"}
+                  </p>
+                </div>
+              </div>
+
+              {/* Player Cards - Click once per step */}
               <div className="space-y-2">
-                <p className="text-[10px] text-[#8A8885] uppercase tracking-wider">Click to assign role</p>
+                  <p className="text-[10px] text-[#8A8885] uppercase tracking-wider">
+                    Click a box on the video to choose
+                  </p>
                 {previewData.players.map((player) => {
                   const selection = selectedPlayers.find((p) => p.player.player_idx === player.player_idx);
                   const isSelected = !!selection;
                   const role = selection?.role;
 
                   return (
-                    <div key={player.player_idx} className="flex items-center gap-2">
-                      <button
-                        onClick={() => handleRoleChange(player.player_idx, "player")}
-                        className={cn(
-                          "flex-1 px-3 py-2 rounded-lg border transition-all text-left",
-                          role === "player"
-                            ? "border-[#9B7B5B] bg-[#9B7B5B]/10"
-                            : "border-[#363436] bg-[#282729] hover:border-[#9B7B5B]/50"
-                        )}
-                      >
-                        <div className="flex items-center justify-between">
-                          <span className="text-xs text-[#E8E6E3]">
-                            Detected #{player.player_idx + 1}
-                          </span>
-                          {role === "player" && (
-                            <span className="text-[10px] px-2 py-0.5 rounded bg-[#9B7B5B] text-[#1E1D1F] font-semibold">
-                              Player
-                            </span>
-                          )}
-                        </div>
-                        <div className="text-[10px] text-[#8A8885] mt-1">
-                          {(player.confidence * 100).toFixed(0)}% confidence
-                        </div>
-                      </button>
-                      <button
-                        onClick={() => handleRoleChange(player.player_idx, "opponent")}
-                        className={cn(
-                          "flex-1 px-3 py-2 rounded-lg border transition-all text-left",
-                          role === "opponent"
+                    <button
+                      key={player.player_idx}
+                      onClick={() => handleSelectForStep(player.player_idx)}
+                      className={cn(
+                        "w-full px-3 py-2 rounded-lg border transition-all text-left",
+                        role === "player"
+                          ? "border-[#9B7B5B] bg-[#9B7B5B]/10"
+                          : role === "opponent"
                             ? "border-[#5B9B7B] bg-[#5B9B7B]/10"
-                            : "border-[#363436] bg-[#282729] hover:border-[#5B9B7B]/50"
-                        )}
-                      >
-                        <div className="flex items-center justify-between">
-                          <span className="text-xs text-[#E8E6E3]">
-                            Detected #{player.player_idx + 1}
-                          </span>
-                          {role === "opponent" && (
-                            <span className="text-[10px] px-2 py-0.5 rounded bg-[#5B9B7B] text-[#1E1D1F] font-semibold">
-                              Opponent
-                            </span>
+                            : cn("border-[#363436] bg-[#282729]", hoverAccentClass)
+                      )}
+                    >
+                      <div className="flex items-center justify-between">
+                        <span className="text-xs text-[#E8E6E3]">
+                          Detected #{player.player_idx + 1}
+                        </span>
+                      </div>
+                      {role && (
+                        <div
+                          className={cn(
+                            "text-[10px] mt-1 font-semibold",
+                            role === "player" ? "text-[#9B7B5B]" : "text-[#5B9B7B]"
                           )}
+                        >
+                          {role === "player" ? "Player" : "Opponent"}
                         </div>
-                        <div className="text-[10px] text-[#8A8885] mt-1">
-                          {(player.confidence * 100).toFixed(0)}% confidence
-                        </div>
-                      </button>
-                    </div>
+                      )}
+                      <div className="text-[10px] text-[#8A8885] mt-1">
+                        {(player.confidence * 100).toFixed(0)}% confidence
+                      </div>
+                    </button>
                   );
                 })}
               </div>
@@ -436,7 +362,7 @@ export function PlayerSelection({
 
               <button
                 onClick={handleConfirm}
-                disabled={selectedPlayers.length === 0 || submitting}
+                disabled={!selectedPlayer || (requiresOpponent && !selectedOpponent) || submitting}
                 className="ml-auto text-xs px-4 py-2 rounded-lg bg-[#9B7B5B] hover:bg-[#8A6B4B] text-[#1E1D1F] font-medium transition-colors disabled:opacity-50 disabled:cursor-not-allowed flex items-center gap-2"
               >
                 {submitting ? (
@@ -472,7 +398,18 @@ export function PlayerSelectionOverlays({
   videoViewportRef: React.RefObject<HTMLDivElement | null>;
   sessionId: string;
 }) {
-  const { previewData, selectedPlayers } = usePlayerSelectionStore(sessionId);
+  const { previewData, selectedPlayers, setSelectedPlayers } = usePlayerSelectionStore(sessionId);
+  const requiresOpponent = (previewData?.players.length ?? 0) > 1;
+  const selectedPlayer = selectedPlayers.find((p) => p.role === "player");
+  const selectedOpponent = selectedPlayers.find((p) => p.role === "opponent");
+  const currentStep: "player" | "opponent" | "done" =
+    selectedPlayer ? (requiresOpponent ? (selectedOpponent ? "done" : "opponent") : "done") : "player";
+  const groupHoverAccentClass =
+    currentStep === "opponent"
+      ? "group-hover:border-[#5B9B7B] group-hover:bg-[#5B9B7B]/10"
+      : currentStep === "player"
+        ? "group-hover:border-[#9B7B5B] group-hover:bg-[#9B7B5B]/10"
+        : "group-hover:border-[#E8E6E3]/40 group-hover:bg-[#2A292B]";
 
   if (!previewData) return null;
   const video = videoRef.current;
@@ -516,10 +453,42 @@ export function PlayerSelectionOverlays({
         const width = player.bbox.width * scaleX;
         const height = player.bbox.height * scaleY;
 
+        const handleOverlayClick = (e: React.MouseEvent<HTMLDivElement>) => {
+          e.stopPropagation();
+          if (!previewData) return;
+          setSelectedPlayers((prev) => {
+            const selected = previewData.players.find((p) => p.player_idx === player.player_idx);
+            if (!selected) return prev;
+            const currentPlayer = prev.find((p) => p.role === "player");
+            const currentOpponent = prev.find((p) => p.role === "opponent");
+
+            if (currentStep === "player") {
+              const nextOpponent = currentOpponent && currentOpponent.player.player_idx !== player.player_idx
+                ? currentOpponent
+                : undefined;
+              return [
+                { player: selected, role: "player" as const },
+                ...(nextOpponent ? [nextOpponent] : []),
+              ];
+            }
+
+            if (currentStep === "opponent") {
+              if (currentPlayer?.player.player_idx === player.player_idx) return prev;
+              return [
+                ...(currentPlayer ? [currentPlayer] : []),
+                { player: selected, role: "opponent" as const },
+              ];
+            }
+
+            return prev;
+          });
+        };
+
         return (
           <div
             key={player.player_idx}
-            className="absolute pointer-events-none"
+            className="absolute cursor-pointer group"
+            onClick={handleOverlayClick}
             style={{
               left: `${left}px`,
               top: `${top}px`,
@@ -535,7 +504,7 @@ export function PlayerSelectionOverlays({
                   ? selection?.role === "player"
                     ? "border-[#9B7B5B] bg-[#9B7B5B]/10"
                     : "border-[#5B9B7B] bg-[#5B9B7B]/10"
-                  : "border-[#E8E6E3]/30"
+                  : cn("border-[#E8E6E3]/30", groupHoverAccentClass)
               )}
             />
             {isSelected && (

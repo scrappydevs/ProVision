@@ -51,6 +51,25 @@ async def _run_tracknet_background(session_id: str, video_url: str):
             pass
 
 
+async def _run_dashboard_analysis_background(session_id: str, user_id: str, video_url: str):
+    """Background task: run UpliftingTableTennis analysis on RunPod GPU #2."""
+    try:
+        from ..services.runpod_dashboard_service import runpod_dashboard_service
+        if not runpod_dashboard_service.is_available:
+            logger.info(f"[Dashboard] Skipping — RunPod dashboard SSH not configured")
+            return
+        logger.info(f"[Dashboard] Starting analysis for session: {session_id}")
+        result = runpod_dashboard_service.run_dashboard_analysis(
+            session_id=session_id,
+            user_id=user_id,
+            video_url=video_url,
+            force=False,
+        )
+        logger.info(f"[Dashboard] Analysis complete for {session_id}: status={result.get('status')}, artifacts={len(result.get('artifacts', []))}")
+    except Exception as e:
+        logger.error(f"[Dashboard] Analysis failed for {session_id}: {e}", exc_info=True)
+
+
 async def _run_pose_background(session_id: str, video_url: str):
     """Background task: run pose detection on sampled frames and store in pose_analysis table."""
     try:
@@ -207,7 +226,7 @@ async def create_session(
         #     background_tasks.add_task(process_pose_analysis, session_id, video_storage_path, video_url)
         # except Exception as e:
         #     print(f"[WARNING] Failed to queue pose analysis: {str(e)}")
-        # Auto-trigger ball tracking in background
+        # Auto-trigger ball tracking + pose + dashboard analysis in background
         try:
             background_tasks.add_task(
                 _run_tracknet_background,
@@ -217,7 +236,11 @@ async def create_session(
                 _run_pose_background,
                 session_id, video_url
             )
-            print(f"[DEBUG] TrackNet + Pose queued for session {session_id}")
+            background_tasks.add_task(
+                _run_dashboard_analysis_background,
+                session_id, user_id, video_url
+            )
+            print(f"[DEBUG] TrackNet + Pose + Dashboard queued for session {session_id}")
         except Exception as e:
             print(f"[WARNING] Failed to queue background tasks: {str(e)}")
 

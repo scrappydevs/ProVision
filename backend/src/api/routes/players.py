@@ -79,7 +79,7 @@ OFFICIAL_PLAYER_PHOTOS: dict[str, dict] = {
         "ittf_id": 121404,
     },
     "ma long": {
-        "avatar_url": "https://upload.wikimedia.org/wikipedia/commons/6/6e/Mondial_Ping_-_Men%27s_Singles_-_Round_4_-_Ma_Long-Koki_Niwa_-_06.jpg",
+        "avatar_url": "https://upload.wikimedia.org/wikipedia/commons/d/da/Ma_Long_WTTC2016_1.jpg",
         "ittf_id": 113883,
     },
     "wang chuqin": {

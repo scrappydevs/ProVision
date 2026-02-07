@@ -16,10 +16,8 @@ import {
   useSyncITTF, usePlayerRecordings, useCreateRecording,
   useDeleteRecording, useCreateClip, useAnalyzeRecording,
 } from "@/hooks/usePlayers";
-import { useStrokeSummary } from "@/hooks/useStrokeData";
 import { GameTimeline } from "@/components/players/GameTimeline";
 import { createSession, GamePlayerInfo, RecordingType, Recording } from "@/lib/api";
-import { generateTipsFromStrokes } from "@/lib/tipGenerator";
 import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { playerKeys } from "@/hooks/usePlayers";
 import { sessionKeys } from "@/hooks/useSessions";
@@ -95,8 +93,6 @@ export default function PlayerProfilePage() {
     if (!games?.length) return null;
     return [...games].sort((a, b) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime())[0];
   }, [games]);
-  const latestGameId = latestGame?.id ?? "";
-  const { data: latestStrokeSummary } = useStrokeSummary(latestGameId);
   const uploadAvatarMutation = useUploadAvatar();
   const updatePlayerMutation = useUpdatePlayer();
   const syncITTFMutation = useSyncITTF();
@@ -229,37 +225,78 @@ export default function PlayerProfilePage() {
     return `${minutes}:${remainder.toString().padStart(2, "0")}`;
   }, []);
 
-  const recentTips = useMemo(() => {
-    const tips = generateTipsFromStrokes(latestStrokeSummary?.strokes || []);
-    return tips.filter((tip) => !tip.id.includes("follow") && !tip.id.includes("summary"));
-  }, [latestStrokeSummary?.strokes]);
+  const clipCandidates = (recordings ?? []).filter(
+    (rec) => !!rec.session_id || !!rec.video_path
+  );
 
-  const insights: Insight[] = useMemo(() => {
-    if (!recentTips.length) return [];
-    return recentTips.map((tip) => {
-      const titleLower = tip.title.toLowerCase();
-      const kind: InsightKind = titleLower.includes("excellent") || titleLower.includes("good")
-        ? "strength"
-        : "weakness";
-      const timestamp = tip.seekTime !== undefined ? formatTime(tip.seekTime) : undefined;
-      const hasClip = Boolean(latestGameId);
-      return {
-        id: tip.id,
-        kind,
-        title: tip.title,
-        summary: tip.message,
-        tipMatch: tip.id,
-        metric: hasClip ? (timestamp ? `Start ${timestamp}` : "Open clip") : undefined,
-        clips: hasClip ? [{
-          id: `${tip.id}-clip`,
-          label: latestGame?.name ? `${latestGame.name}` : "View in game",
-          sessionId: latestGameId,
-          timestamp,
-          startSeconds: tip.seekTime,
-        }] : [],
-      };
-    });
-  }, [recentTips, latestGameId, latestGame?.name, formatTime]);
+  const clipRefs: InsightClip[] = clipCandidates.slice(0, 3).map((rec) => {
+    const start = formatTime(rec.clip_start_time);
+    const end = formatTime(rec.clip_end_time);
+    const timestamp = start && end ? `${start} - ${end}` : start ?? undefined;
+    const safeStart = Math.max(0, (rec.clip_start_time ?? 0) - 0.1);
+
+    return {
+      id: rec.id,
+      label: rec.title,
+      sessionId: rec.session_id,
+      videoUrl: rec.video_path,
+      timestamp,
+      startSeconds: safeStart,
+    };
+  });
+
+  const insights: Insight[] = [
+    {
+      id: "strength-forehand",
+      kind: "strength",
+      title: "Forehand power",
+      summary: "Explosive hip rotation and clean wrist snap on fast rallies",
+      metric: "Maintain in multi-ball and shadow drills",
+      tipMatch: "forehand",
+      clips: clipRefs,
+    },
+    {
+      id: "strength-footwork",
+      kind: "strength",
+      title: "Recovery speed",
+      summary: "Quick reset to neutral stance after wide exchanges",
+      metric: "Add lateral recovery between shots in drills",
+      clips: clipRefs,
+    },
+    {
+      id: "strength-placement",
+      kind: "strength",
+      title: "Shot placement",
+      summary: "Consistent targeting of opponent's weak zones",
+      metric: "Target corners and body in practice games",
+      clips: clipRefs,
+    },
+    {
+      id: "strength-anticipation",
+      kind: "strength",
+      title: "Ball anticipation",
+      summary: "Early read on opponent's shot direction",
+      metric: "Watch opponent racket angle before contact",
+      clips: clipRefs,
+    },
+    {
+      id: "weakness-backhand",
+      kind: "weakness",
+      title: "Backhand depth",
+      summary: "Contact point drifts high under pressure",
+      metric: "Contact ball earlier, in front of body",
+      tipMatch: "backhand",
+      clips: clipRefs,
+    },
+    {
+      id: "weakness-serve",
+      kind: "weakness",
+      title: "Serve variation",
+      summary: "Limited spin variation on second serve",
+      metric: "Add topspin, backspin, or sidespin to second serve",
+      clips: clipRefs,
+    },
+  ];
 
   // Early returns AFTER all hooks
   if (playerLoading) {
@@ -373,8 +410,8 @@ export default function PlayerProfilePage() {
         </div>
 
         {/* Center: large name overlay */}
-        <div className="flex-1 flex items-start pt-20 px-10 pb-48">
-          <div>
+        <div className="flex-1 flex flex-col items-start pt-20 px-10">
+          <div className="mb-8">
             <p className="text-xs uppercase tracking-[0.3em] text-foreground/50 mb-3">{player.position || "Player"}</p>
             <h1 className="text-5xl md:text-6xl font-light text-foreground tracking-tight leading-[1.1]">
               {player.name.split(" ").map((word, i) => (
@@ -407,6 +444,157 @@ export default function PlayerProfilePage() {
                 <span className={player.handedness === "right" ? "text-primary font-semibold" : ""}>Right</span>
               </button>
             </div>
+          </div>
+
+          {/* Tips - two column layout under name */}
+          <div className="max-w-[700px] overflow-x-visible">
+            {recordingsLoading ? (
+              <div className="flex items-center justify-center h-20">
+                <Loader2 className="w-3 h-3 text-primary animate-spin" />
+              </div>
+            ) : (
+              <div className="grid grid-cols-2 gap-6">
+                {/* Strengths */}
+                {insights.filter(i => i.kind === "strength").length > 0 && (
+                  <div className="space-y-2">
+                    <div className="flex items-center gap-2 px-1">
+                      <div className="w-2 h-2 rounded-full bg-[#6B8E6B]" />
+                      <span className="text-sm uppercase tracking-wider text-[#6B8E6B] font-semibold">Strengths</span>
+                    </div>
+                    <div className="space-y-2">
+                      {insights.filter(i => i.kind === "strength").map((insight) => (
+                        <div key={insight.id} className="relative group">
+                          <div className="text-left p-3 rounded-lg bg-content1/30 backdrop-blur-xl hover:bg-content1/40 transition-all">
+                            <h4 className="text-sm font-semibold text-foreground/95 mb-1 leading-tight">
+                              {insight.title}
+                            </h4>
+                            <p className="text-xs text-foreground/60 line-clamp-2 leading-snug mb-2">
+                              {insight.summary}
+                            </p>
+                            {insight.metric && (
+                              <div className="flex items-center gap-1">
+                                <p className="text-[10px] text-[#6B8E6B] font-medium flex-1">
+                                  {insight.metric}
+                                </p>
+                                {insight.clips.length > 0 && (
+                                  <span className="text-[9px] text-foreground/40">
+                                    {insight.clips.length} clip{insight.clips.length > 1 ? 's' : ''}
+                                  </span>
+                                )}
+                              </div>
+                            )}
+                          </div>
+
+                          {/* Hover panel for clips */}
+                          {insight.clips.length > 0 && (
+                            <div className="absolute left-full top-0 ml-2 z-50 w-64 rounded-lg bg-content1/95 backdrop-blur-xl shadow-2xl overflow-hidden opacity-0 invisible group-hover:opacity-100 group-hover:visible transition-all duration-200">
+                              <div className="p-2.5 space-y-1.5">
+                                <div className="px-2 py-1 text-[10px] uppercase tracking-wider text-foreground/60 font-semibold">
+                                  Source clips
+                                </div>
+                                {insight.clips.map((clip) => (
+                                  <button
+                                    key={clip.id}
+                                    onClick={() => handleClipOpen(clip, insight.tipMatch)}
+                                    className="w-full flex items-center gap-2 rounded-md bg-content1/40 p-2 text-left hover:bg-content1/60 transition-colors"
+                                  >
+                                    {clip.videoUrl && (
+                                      <div className="relative w-14 h-10 rounded overflow-hidden shrink-0 bg-background">
+                                        <video src={clip.videoUrl} className="w-full h-full object-cover" muted />
+                                        <div className="absolute inset-0 flex items-center justify-center bg-black/20">
+                                          <Play className="w-3.5 h-3.5 text-white/80" />
+                                        </div>
+                                      </div>
+                                    )}
+                                    <div className="flex-1 min-w-0">
+                                      <p className="text-xs text-foreground/90 truncate font-medium">{clip.label}</p>
+                                      {clip.timestamp && (
+                                        <p className="text-[10px] text-foreground/50">{clip.timestamp}</p>
+                                      )}
+                                    </div>
+                                    <ChevronRight className="w-3.5 h-3.5 text-foreground/40 shrink-0" />
+                                  </button>
+                                ))}
+                              </div>
+                            </div>
+                          )}
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                )}
+
+                {/* Areas to improve */}
+                {insights.filter(i => i.kind === "weakness").length > 0 && (
+                  <div className="space-y-2">
+                    <div className="flex items-center gap-2 px-1">
+                      <div className="w-2 h-2 rounded-full bg-[#C45C5C]" />
+                      <span className="text-sm uppercase tracking-wider text-[#C45C5C] font-semibold">Areas to improve</span>
+                    </div>
+                    <div className="space-y-2">
+                      {insights.filter(i => i.kind === "weakness").map((insight) => (
+                        <div key={insight.id} className="relative group">
+                          <div className="text-left p-3 rounded-lg bg-content1/30 backdrop-blur-xl hover:bg-content1/40 transition-all">
+                            <h4 className="text-sm font-semibold text-foreground/95 mb-1 leading-tight">
+                              {insight.title}
+                            </h4>
+                            <p className="text-xs text-foreground/60 line-clamp-2 leading-snug mb-2">
+                              {insight.summary}
+                            </p>
+                            {insight.metric && (
+                              <div className="flex items-center gap-1">
+                                <p className="text-[10px] text-[#C45C5C] font-medium flex-1">
+                                  {insight.metric}
+                                </p>
+                                {insight.clips.length > 0 && (
+                                  <span className="text-[9px] text-foreground/40">
+                                    {insight.clips.length} clip{insight.clips.length > 1 ? 's' : ''}
+                                  </span>
+                                )}
+                              </div>
+                            )}
+                          </div>
+
+                          {/* Hover panel for clips */}
+                          {insight.clips.length > 0 && (
+                            <div className="absolute left-full top-0 ml-2 z-50 w-64 rounded-lg bg-content1/95 backdrop-blur-xl shadow-2xl overflow-hidden opacity-0 invisible group-hover:opacity-100 group-hover:visible transition-all duration-200">
+                              <div className="p-2.5 space-y-1.5">
+                                <div className="px-2 py-1 text-[10px] uppercase tracking-wider text-foreground/60 font-semibold">
+                                  Source clips
+                                </div>
+                                {insight.clips.map((clip) => (
+                                  <button
+                                    key={clip.id}
+                                    onClick={() => handleClipOpen(clip, insight.tipMatch)}
+                                    className="w-full flex items-center gap-2 rounded-md bg-content1/40 p-2 text-left hover:bg-content1/60 transition-colors"
+                                  >
+                                    {clip.videoUrl && (
+                                      <div className="relative w-14 h-10 rounded overflow-hidden shrink-0 bg-background">
+                                        <video src={clip.videoUrl} className="w-full h-full object-cover" muted />
+                                        <div className="absolute inset-0 flex items-center justify-center bg-black/20">
+                                          <Play className="w-3.5 h-3.5 text-white/80" />
+                                        </div>
+                                      </div>
+                                    )}
+                                    <div className="flex-1 min-w-0">
+                                      <p className="text-xs text-foreground/90 truncate font-medium">{clip.label}</p>
+                                      {clip.timestamp && (
+                                        <p className="text-[10px] text-foreground/50">{clip.timestamp}</p>
+                                      )}
+                                    </div>
+                                    <ChevronRight className="w-3.5 h-3.5 text-foreground/40 shrink-0" />
+                                  </button>
+                                ))}
+                              </div>
+                            </div>
+                          )}
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                )}
+              </div>
+            )}
           </div>
         </div>
 

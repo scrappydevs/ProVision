@@ -54,7 +54,10 @@ export default function LandingPage() {
         className="fixed top-0 left-0 right-0 z-50 px-8 py-6"
       >
         <div className="max-w-7xl mx-auto flex items-center justify-between">
-          <span className="text-sm font-medium tracking-wide">ProVision</span>
+          <div className="flex items-center gap-2.5">
+            <img src="/logo.png" alt="ProVision" className="w-5 h-5 dark:invert" />
+            <span className="text-sm font-medium tracking-wide">ProVision</span>
+          </div>
           <div className="flex items-center gap-8">
             <a href="#how" className="text-sm text-muted-foreground hover:text-foreground transition-colors">How it works</a>
             <a href="#features" className="text-sm text-muted-foreground hover:text-foreground transition-colors">Features</a>
@@ -243,7 +246,10 @@ export default function LandingPage() {
       {/* Footer */}
       <footer className="py-8 px-8 border-t border-border">
         <div className="max-w-5xl mx-auto flex items-center justify-between text-sm text-muted-foreground">
-          <span>ProVision</span>
+          <div className="flex items-center gap-2">
+            <img src="/logo.png" alt="ProVision" className="w-4 h-4 dark:invert" />
+            <span>ProVision</span>
+          </div>
           <div className="flex items-center gap-6 text-xs">
             <span>EgoX</span>
             <span>SAM2</span>

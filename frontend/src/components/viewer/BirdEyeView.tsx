@@ -96,27 +96,37 @@ function videoToTable(px: number, py: number, videoW = 1280, videoH = 828): [num
   return [x, y, z];
 }
 
-// Compute predicted trajectory arc from velocity
+// Compute predicted trajectory arc from velocity.
+// Uses averaged velocity over a wider window to avoid jitter.
 function computePrediction(
   points: { pos: [number, number, number]; frame: number }[],
   currentFrame: number,
   steps = 40
 ): [number, number, number][] {
-  const recent = points.filter((p) => p.frame <= currentFrame).slice(-8);
-  if (recent.length < 3) return [];
+  const recent = points.filter((p) => p.frame <= currentFrame).slice(-12);
+  if (recent.length < 4) return [];
 
-  const last = recent[recent.length - 1].pos;
-  const prev = recent[recent.length - 3].pos;
-  const dt = 0.033; // ~30fps time step
-  const frameGap = 2;
+  const last = recent[recent.length - 1];
 
-  // Velocity in table coords (m/frame)
-  const vx = (last[0] - prev[0]) / frameGap;
-  const vz = (last[2] - prev[2]) / frameGap;
+  // Average velocity over multiple consecutive pairs for stability
+  let sumVx = 0, sumVz = 0, pairs = 0;
+  for (let i = 1; i < recent.length; i++) {
+    const frameDiff = recent[i].frame - recent[i - 1].frame;
+    if (frameDiff > 0 && frameDiff < 10) {
+      sumVx += (recent[i].pos[0] - recent[i - 1].pos[0]) / frameDiff;
+      sumVz += (recent[i].pos[2] - recent[i - 1].pos[2]) / frameDiff;
+      pairs++;
+    }
+  }
+  if (pairs === 0) return [];
+
+  const vx = sumVx / pairs;
+  const vz = sumVz / pairs;
   const vy = 0.05; // small upward arc assumption
+  const dt = 0.033; // ~30fps time step
 
-  const path: [number, number, number][] = [last];
-  let x = last[0], y = last[1], z = last[2];
+  const path: [number, number, number][] = [last.pos];
+  let x = last.pos[0], y = last.pos[1], z = last.pos[2];
   let cvx = vx, cvy = vy, cvz = vz;
 
   for (let i = 0; i < steps; i++) {
@@ -195,13 +205,38 @@ function BallTrajectory({
   const videoW = trajectoryData?.video_info?.width ?? 1280;
   const videoH = trajectoryData?.video_info?.height ?? 828;
 
+  // Max 3D distance between consecutive points before treating it as tracking noise.
+  // Table is ~2.74m wide; a fast rally moves ~0.3m per frame max.
+  const jump3D = 0.45;
+
   const points3D = useMemo(() => {
     if (!trajectoryData?.frames?.length) return [];
-    return trajectoryData.frames.map((f: TrajectoryPoint) => ({
+    const raw = trajectoryData.frames.map((f: TrajectoryPoint) => ({
       frame: f.frame,
       pos: videoToTable(f.x, f.y, videoW, videoH),
     }));
-  }, [trajectoryData, videoW, videoH]);
+    // Filter out points that jump unreasonably far from their predecessor
+    const filtered: typeof raw = [];
+    for (let i = 0; i < raw.length; i++) {
+      if (filtered.length === 0) {
+        filtered.push(raw[i]);
+        continue;
+      }
+      const prev = filtered[filtered.length - 1].pos;
+      const cur = raw[i].pos;
+      const dx = cur[0] - prev[0];
+      const dy = cur[1] - prev[1];
+      const dz = cur[2] - prev[2];
+      const dist = Math.sqrt(dx * dx + dy * dy + dz * dz);
+      if (dist < jump3D || raw[i].frame - filtered[filtered.length - 1].frame > 10) {
+        // Accept if distance is small, or enough frames have passed that a
+        // large move is plausible (e.g. after a long gap in detections)
+        filtered.push(raw[i]);
+      }
+      // Otherwise skip this noisy point entirely
+    }
+    return filtered;
+  }, [trajectoryData, videoW, videoH, jump3D]);
 
   const trailPath = useMemo((): [number, number, number][] => {
     return points3D.filter((p) => p.frame <= currentFrame).map((p) => p.pos);
@@ -209,14 +244,24 @@ function BallTrajectory({
 
   const recentTrail = useMemo((): [number, number, number][] => trailPath.slice(-60), [trailPath]);
 
+  // Smoothed target position — average the last few valid 3D points to
+  // avoid the ball marker swashing around from frame-to-frame noise.
   const targetPos = useMemo(() => {
     if (!points3D.length) return null;
-    let closest = points3D[0];
-    for (const p of points3D) {
-      if (p.frame <= currentFrame) closest = p;
-      else break;
+    const visible = points3D.filter((p) => p.frame <= currentFrame);
+    if (!visible.length) return points3D[0].pos;
+    // Average the last 3 positions for a stable target
+    const tail = visible.slice(-3);
+    const avg: [number, number, number] = [0, 0, 0];
+    for (const p of tail) {
+      avg[0] += p.pos[0];
+      avg[1] += p.pos[1];
+      avg[2] += p.pos[2];
     }
-    return closest.pos;
+    avg[0] /= tail.length;
+    avg[1] /= tail.length;
+    avg[2] /= tail.length;
+    return avg;
   }, [points3D, currentFrame]);
 
   // Predicted path
@@ -249,9 +294,10 @@ function BallTrajectory({
     if (mode === "whatif" && whatIfStart) {
       ballRef.current.position.set(whatIfStart[0], whatIfStart[1], whatIfStart[2]);
     } else {
-      ballRef.current.position.x = THREE.MathUtils.lerp(ballRef.current.position.x, targetPos[0], 0.2);
-      ballRef.current.position.y = THREE.MathUtils.lerp(ballRef.current.position.y, targetPos[1], 0.2);
-      ballRef.current.position.z = THREE.MathUtils.lerp(ballRef.current.position.z, targetPos[2], 0.2);
+      // Higher lerp factor since targetPos is already smoothed (averaged over last 3 points)
+      ballRef.current.position.x = THREE.MathUtils.lerp(ballRef.current.position.x, targetPos[0], 0.35);
+      ballRef.current.position.y = THREE.MathUtils.lerp(ballRef.current.position.y, targetPos[1], 0.35);
+      ballRef.current.position.z = THREE.MathUtils.lerp(ballRef.current.position.z, targetPos[2], 0.35);
     }
     if (glowRef.current) {
       glowRef.current.position.copy(ballRef.current.position);

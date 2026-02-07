@@ -814,6 +814,9 @@ export interface AnalyticsData {
 export const getSessionAnalytics = (sessionId: string) =>
   api.get<AnalyticsData>(`/api/analytics/${sessionId}`);
 
+export const getRunpodArtifacts = (sessionId: string) =>
+  api.get<RunpodDashboardData>(`/api/analytics/${sessionId}/runpod-artifacts`);
+
 export const runRunpodDashboard = (sessionId: string, force: boolean = false) =>
   api.post<RunpodDashboardData>(
     `/api/analytics/${sessionId}/runpod-dashboard`,

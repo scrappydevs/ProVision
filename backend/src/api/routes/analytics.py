@@ -6,6 +6,7 @@ Provides comprehensive performance metrics and visualizations.
 from fastapi import APIRouter, HTTPException, Depends
 from typing import Dict, Any
 import logging
+import time
 
 from ..database.supabase import get_supabase, get_current_user_id
 from ..services.analytics_service import compute_session_analytics
@@ -14,6 +15,67 @@ from ..services.runpod_dashboard_service import runpod_dashboard_service
 logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/api/analytics", tags=["analytics"])
+
+
+# ── Health / diagnostics (no auth required) ────────────────────────
+@router.get("/dashboard-health")
+async def dashboard_health() -> Dict[str, Any]:
+    """Quick diagnostic endpoint to verify RunPod dashboard pipeline is operational.
+
+    Checks:
+      1. SSH config is present
+      2. SSH connection + basic remote commands work
+      3. Inference repo & script exist on the GPU
+      4. Supabase Storage bucket is reachable
+
+    Hit via: GET /api/analytics/dashboard-health
+    """
+    checks: Dict[str, Any] = {}
+
+    # 1. SSH config
+    cfg = runpod_dashboard_service._ssh_config
+    checks["ssh_configured"] = cfg.is_configured()
+    checks["ssh_host"] = cfg.SSH_HOST or "(not set)"
+    checks["ssh_port"] = cfg.SSH_PORT
+
+    # 2. SSH connection + remote probe
+    if cfg.is_configured():
+        try:
+            t0 = time.time()
+            with runpod_dashboard_service.runner.ssh_session() as ssh:
+                probe_cmd = (
+                    "echo OK && "
+                    "hostname && "
+                    f"test -d {runpod_dashboard_service.repo_dir} && echo repo_exists=YES || echo repo_exists=NO && "
+                    f"test -f {runpod_dashboard_service.repo_dir}/run_inference_full_video.py && echo script_exists=YES || echo script_exists=NO && "
+                    "python3 --version 2>&1 && "
+                    "nvidia-smi --query-gpu=name,memory.total,memory.free --format=csv,noheader 2>/dev/null || echo gpu=N/A"
+                )
+                exit_code, stdout, stderr = ssh.execute_command(probe_cmd, timeout=15)
+            elapsed = round(time.time() - t0, 2)
+            checks["ssh_connection"] = "ok" if exit_code == 0 else f"exit_code={exit_code}"
+            checks["ssh_latency_sec"] = elapsed
+            checks["remote_probe"] = stdout.strip() if stdout else stderr.strip()
+        except Exception as exc:
+            checks["ssh_connection"] = f"failed: {exc}"
+    else:
+        checks["ssh_connection"] = "skipped (not configured)"
+
+    # 3. Supabase Storage bucket
+    try:
+        supabase = get_supabase()
+        # listing root of the bucket is the cheapest check
+        supabase.storage.from_(runpod_dashboard_service.bucket_name).list("", {"limit": 1})
+        checks["supabase_bucket"] = "ok"
+    except Exception as exc:
+        checks["supabase_bucket"] = f"failed: {exc}"
+
+    checks["all_ok"] = (
+        checks.get("ssh_configured") is True
+        and checks.get("ssh_connection") == "ok"
+        and checks.get("supabase_bucket") == "ok"
+    )
+    return checks
 
 
 def _with_runpod_dashboard(
@@ -148,6 +210,36 @@ async def get_session_analytics(
 
     return _with_runpod_dashboard(
         analytics,
+        user_id=user_id,
+        session_id=session_id,
+    )
+
+
+@router.get("/{session_id}/runpod-artifacts")
+async def get_runpod_artifacts(
+    session_id: str,
+    user_id: str = Depends(get_current_user_id),
+) -> Dict[str, Any]:
+    """Lightweight poll-friendly endpoint: list RunPod dashboard artifacts.
+
+    Unlike the full analytics endpoint this does NOT require trajectory data,
+    so it can be polled immediately after video upload while tracking is still
+    running.
+    """
+    supabase = get_supabase()
+    # Verify ownership
+    session_result = (
+        supabase.table("sessions")
+        .select("id")
+        .eq("id", session_id)
+        .eq("user_id", user_id)
+        .limit(1)
+        .execute()
+    )
+    if not session_result.data:
+        raise HTTPException(status_code=404, detail="Session not found")
+
+    return runpod_dashboard_service.get_dashboard_payload(
         user_id=user_id,
         session_id=session_id,
     )

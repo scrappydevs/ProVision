@@ -2,12 +2,13 @@
 
 import { useAnalytics } from "@/hooks/useAnalytics";
 import { usePoseAnalysis } from "@/hooks/usePoseData";
-import { runRunpodDashboard } from "@/lib/api";
+import { useRunpodArtifacts } from "@/hooks/useRunpodArtifacts";
+import { runRunpodDashboard, type RunpodDashboardArtifact } from "@/lib/api";
 import { Button } from "@/components/ui/button";
 import { useMutation, useQueryClient } from "@tanstack/react-query";
-import { Loader2, AlertCircle, Activity, TrendingUp, Zap, Target, ExternalLink, RefreshCw } from "lucide-react";
+import { Loader2, AlertCircle, Activity, TrendingUp, Zap, Target, RefreshCw, Play, RotateCcw } from "lucide-react";
 import { LineChart, Line, BarChart, Bar, ScatterChart, Scatter, RadarChart, PolarGrid, PolarAngleAxis, PolarRadiusAxis, Radar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, Legend, Cell, Area, AreaChart } from "recharts";
-import { useCallback, useEffect, useMemo, useRef } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
 interface AnalyticsDashboardProps {
   sessionId: string;
@@ -37,13 +38,16 @@ export function AnalyticsDashboard({ sessionId, onSeekToTime }: AnalyticsDashboa
   const queryClient = useQueryClient();
   const { data: analytics, isLoading, error } = useAnalytics(sessionId);
   const { data: poseData } = usePoseAnalysis(sessionId, 1000, 0);
+  const { data: runpodData, isLoading: runpodLoading } = useRunpodArtifacts(sessionId);
   const autoRunRef = useRef(false);
+  const [expandedShot, setExpandedShot] = useState<number | null>(null);
   const runpodMutation = useMutation({
     mutationFn: async (force: boolean = false) => {
       const response = await runRunpodDashboard(sessionId, force);
       return response.data;
     },
     onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["runpod-artifacts", sessionId] });
       queryClient.invalidateQueries({ queryKey: ["analytics", sessionId] });
     },
   });
@@ -121,20 +125,81 @@ export function AnalyticsDashboard({ sessionId, onSeekToTime }: AnalyticsDashboa
 
   const formatSecondsTick = useCallback((value: number) => `${value.toFixed(1)}s`, []);
 
-  const runpodDashboard = analytics?.runpod_dashboard;
+  // Merge RunPod data from dedicated polling hook and analytics payload
+  const runpodDashboard = runpodData ?? analytics?.runpod_dashboard;
   const runpodArtifacts = runpodDashboard?.artifacts || [];
+
+  // Classify artifacts for structured display
+  const classifiedArtifacts = useMemo(() => {
+    const bounceMap = runpodArtifacts.find((a) => a.name === "bounce_map.png");
+    const annotatedVideo = runpodArtifacts.find(
+      (a) => a.name === "annotated_full_video.mp4" || a.name === "annotated_video.mp4"
+    );
+    const trajectory3d = runpodArtifacts.find((a) => a.name === "trajectory_3d.png");
+    const trajectoryReprojected = runpodArtifacts.find((a) => a.name === "trajectory_reprojected.png");
+    const summaryJson = runpodArtifacts.find((a) => a.name === "summary.json");
+    const bouncesJson = runpodArtifacts.find((a) => a.name === "bounces.json");
+    const resultsJson = runpodArtifacts.find((a) => a.name === "results.json");
+
+    // Group shot files by shot index
+    const shotFiles: Record<number, { image?: RunpodDashboardArtifact; video?: RunpodDashboardArtifact; json?: RunpodDashboardArtifact; image3d?: RunpodDashboardArtifact }> = {};
+    for (const a of runpodArtifacts) {
+      const match = a.name.match(/^shot_(\d+)(?:_(3d|video))?\.(\w+)$/);
+      if (!match) continue;
+      const idx = parseInt(match[1], 10);
+      if (!shotFiles[idx]) shotFiles[idx] = {};
+      if (match[2] === "3d") shotFiles[idx].image3d = a;
+      else if (match[2] === "video") shotFiles[idx].video = a;
+      else if (match[3] === "json") shotFiles[idx].json = a;
+      else if (match[3] === "png") shotFiles[idx].image = a;
+    }
+
+    return {
+      bounceMap,
+      annotatedVideo,
+      trajectory3d,
+      trajectoryReprojected,
+      summaryJson,
+      bouncesJson,
+      resultsJson,
+      shots: Object.entries(shotFiles)
+        .sort(([a], [b]) => Number(a) - Number(b))
+        .map(([idx, files]) => ({ index: Number(idx), ...files })),
+    };
+  }, [runpodArtifacts]);
+
+  // Parse summary.json from URL
+  const [summaryData, setSummaryData] = useState<Record<string, unknown> | null>(null);
+  const [bouncesData, setBouncesData] = useState<{ bounces: Array<Record<string, unknown>> } | null>(null);
+
+  useEffect(() => {
+    if (!classifiedArtifacts.summaryJson?.url) { setSummaryData(null); return; }
+    fetch(classifiedArtifacts.summaryJson.url)
+      .then((r) => r.json())
+      .then(setSummaryData)
+      .catch(() => setSummaryData(null));
+  }, [classifiedArtifacts.summaryJson?.url]);
+
+  useEffect(() => {
+    if (!classifiedArtifacts.bouncesJson?.url) { setBouncesData(null); return; }
+    fetch(classifiedArtifacts.bouncesJson.url)
+      .then((r) => r.json())
+      .then(setBouncesData)
+      .catch(() => setBouncesData(null));
+  }, [classifiedArtifacts.bouncesJson?.url]);
 
   useEffect(() => {
     autoRunRef.current = false;
   }, [sessionId]);
 
+  // Auto-trigger analysis if no artifacts are present
   useEffect(() => {
-    if (!analytics) return;
     if (autoRunRef.current) return;
     if (runpodArtifacts.length > 0) return;
+    if (runpodLoading) return;
     autoRunRef.current = true;
     runpodMutation.mutate(false);
-  }, [analytics, runpodArtifacts.length, runpodMutation]);
+  }, [runpodArtifacts.length, runpodLoading, runpodMutation]);
 
   if (isLoading) {
     return (
@@ -652,17 +717,20 @@ export function AnalyticsDashboard({ sessionId, onSeekToTime }: AnalyticsDashboa
         </div>
       )}
 
-      {/* RunPod Dashboard Outputs */}
-      <div className="bg-[#282729]/40 backdrop-blur-xl rounded-xl p-4 border border-[#363436]/30">
-        <div className="flex items-start justify-between gap-3 mb-3">
+      {/* ─── Advanced Analysis (RunPod) ─── */}
+      <div className="space-y-4">
+        {/* Header + Status */}
+        <div className="flex items-center justify-between">
           <div>
-            <h3 className="text-xs font-medium text-[#E8E6E3]">RunPod Dashboard Outputs</h3>
-            <p className="text-[10px] text-[#8A8885] mt-1">
+            <h2 className="text-sm font-semibold text-[#E8E6E3]">Advanced Shot Analysis</h2>
+            <p className="text-[10px] text-[#8A8885] mt-0.5">
               {runpodMutation.isPending
-                ? "Processing dashboard game video on RunPod..."
+                ? "Running analysis on RunPod GPU..."
                 : runpodArtifacts.length > 0
-                ? `${runpodArtifacts.length} artifact(s) synced from ${runpodDashboard?.folder ?? "runpod-dashboard"}`
-                : "No synced outputs yet. Triggering run automatically."}
+                ? `${runpodArtifacts.length} artifact(s) available`
+                : runpodLoading
+                ? "Checking for results..."
+                : "Waiting for analysis to complete. Polling every 30s."}
             </p>
           </div>
           <Button
@@ -675,64 +743,230 @@ export function AnalyticsDashboard({ sessionId, onSeekToTime }: AnalyticsDashboa
             {runpodMutation.isPending ? (
               <Loader2 className="w-3 h-3 mr-1 animate-spin" />
             ) : (
-              <RefreshCw className="w-3 h-3 mr-1" />
+              <RotateCcw className="w-3 h-3 mr-1" />
             )}
             Re-run
           </Button>
         </div>
 
         {runpodDashboard?.error && (
-          <p className="text-[10px] text-[#C45C5C] mb-2">
+          <p className="text-[10px] text-[#C45C5C] bg-[#C45C5C]/10 border border-[#C45C5C]/20 rounded-lg px-3 py-2">
             {runpodDashboard.error}
           </p>
         )}
 
         {runpodArtifacts.length === 0 ? (
-          <div className="rounded-lg border border-dashed border-[#4A4846] p-3 text-[10px] text-[#8A8885]">
-            Waiting for uploaded outputs from `/workspace/UpliftingTableTennis/file`.
+          <div className="bg-[#282729]/40 backdrop-blur-xl rounded-xl p-8 border border-dashed border-[#4A4846] flex flex-col items-center justify-center gap-3">
+            {runpodMutation.isPending || runpodLoading ? (
+              <Loader2 className="w-6 h-6 animate-spin text-[#9B7B5B]" />
+            ) : (
+              <Activity className="w-6 h-6 text-[#4A4846]" />
+            )}
+            <p className="text-xs text-[#8A8885] text-center max-w-xs">
+              {runpodMutation.isPending
+                ? "Processing video on RunPod GPU. This may take a few minutes..."
+                : "Analysis results will appear here automatically. Polling every 30 seconds."}
+            </p>
           </div>
         ) : (
-          <div className="space-y-3">
-            {runpodArtifacts.map((artifact) => (
-              <div key={artifact.path} className="rounded-lg bg-[#1E1D1F]/40 border border-[#363436]/40 p-3">
-                <div className="flex items-start justify-between gap-2 mb-2">
-                  <div className="min-w-0">
-                    <p className="text-[11px] text-[#E8E6E3] truncate">{artifact.name}</p>
-                    <p className="text-[10px] text-[#8A8885]">
-                      {artifact.kind.toUpperCase()} • {formatBytes(artifact.size)}
-                    </p>
+          <>
+            {/* ── Summary Stats from summary.json ── */}
+            {summaryData && (
+              <div className="bg-[#282729]/40 backdrop-blur-xl rounded-xl p-4 border border-[#363436]/30">
+                <h3 className="text-xs font-medium text-[#E8E6E3] mb-3">Match Summary</h3>
+                <div className="grid grid-cols-4 gap-3">
+                  <div className="bg-[#1E1D1F]/60 rounded-lg p-3 border border-[#363436]/20">
+                    <div className="text-[10px] text-[#8A8885]">Shots</div>
+                    <div className="text-xl font-bold text-[#E8E6E3]">{String(summaryData.num_shots ?? 0)}</div>
                   </div>
-                  {artifact.url && (
-                    <a
-                      href={artifact.url}
-                      target="_blank"
-                      rel="noopener noreferrer"
-                      className="inline-flex items-center gap-1 text-[10px] text-[#9B7B5B] hover:text-[#C3A07B]"
-                    >
-                      <ExternalLink className="w-3 h-3" />
-                      Open
-                    </a>
-                  )}
+                  <div className="bg-[#1E1D1F]/60 rounded-lg p-3 border border-[#363436]/20">
+                    <div className="text-[10px] text-[#8A8885]">Rallies</div>
+                    <div className="text-xl font-bold text-[#E8E6E3]">{String(summaryData.num_rallies ?? 0)}</div>
+                  </div>
+                  <div className="bg-[#1E1D1F]/60 rounded-lg p-3 border border-[#363436]/20">
+                    <div className="text-[10px] text-[#8A8885]">Duration</div>
+                    <div className="text-xl font-bold text-[#E8E6E3]">{Number(summaryData.total_duration_sec ?? 0).toFixed(1)}s</div>
+                  </div>
+                  <div className="bg-[#1E1D1F]/60 rounded-lg p-3 border border-[#363436]/20">
+                    <div className="text-[10px] text-[#8A8885]">FPS</div>
+                    <div className="text-xl font-bold text-[#E8E6E3]">{Number(summaryData.fps ?? 0).toFixed(0)}</div>
+                  </div>
                 </div>
 
-                {artifact.kind === "video" && artifact.url && (
-                  <video
-                    controls
-                    src={artifact.url}
-                    className="w-full max-h-72 rounded-md bg-black/40"
-                  />
-                )}
-
-                {artifact.kind === "image" && artifact.url && (
-                  <img
-                    src={artifact.url}
-                    alt={artifact.name}
-                    className="w-full max-h-72 object-contain rounded-md bg-black/40"
-                  />
+                {/* Shot Spin Breakdown */}
+                {Array.isArray(summaryData.shots) && (summaryData.shots as Array<Record<string, unknown>>).length > 0 && (
+                  <div className="mt-3 space-y-1.5">
+                    <h4 className="text-[10px] font-medium text-[#8A8885] uppercase tracking-wider">Shot Details</h4>
+                    {(summaryData.shots as Array<Record<string, unknown>>).map((shot, idx) => (
+                      <div key={idx} className="flex items-center gap-3 bg-[#1E1D1F]/40 rounded-lg px-3 py-2">
+                        <span className="text-[10px] font-medium text-[#9B7B5B] w-12">Shot {Number(shot.shot_index ?? idx) + 1}</span>
+                        <span className={`text-[10px] font-medium px-2 py-0.5 rounded-full ${
+                          shot.spin_type === "Topspin" ? "bg-[#5B9B7B]/20 text-[#5B9B7B]" :
+                          shot.spin_type === "Backspin" ? "bg-[#C45C5C]/20 text-[#C45C5C]" :
+                          "bg-[#9B7B5B]/20 text-[#9B7B5B]"
+                        }`}>{String(shot.spin_type ?? "Unknown")}</span>
+                        <span className="text-[10px] text-[#8A8885]">{Number(shot.spin_rpm ?? 0).toFixed(0)} RPM</span>
+                        <span className="text-[10px] text-[#6A6865] ml-auto">{Number(shot.duration_sec ?? 0).toFixed(2)}s</span>
+                      </div>
+                    ))}
+                  </div>
                 )}
               </div>
-            ))}
-          </div>
+            )}
+
+            {/* ── Bounce Map ── */}
+            {classifiedArtifacts.bounceMap?.url && (
+              <div className="bg-[#282729]/40 backdrop-blur-xl rounded-xl p-4 border border-[#363436]/30">
+                <h3 className="text-xs font-medium text-[#E8E6E3] mb-3">Bounce Map</h3>
+                <img
+                  src={classifiedArtifacts.bounceMap.url}
+                  alt="Bounce Map"
+                  className="w-full rounded-lg bg-black/40 border border-[#363436]/20"
+                />
+                {bouncesData?.bounces && (
+                  <div className="mt-3 grid grid-cols-3 gap-2">
+                    {bouncesData.bounces.map((b, i) => (
+                      <div key={i} className="bg-[#1E1D1F]/60 rounded-lg p-2 border border-[#363436]/20 text-center">
+                        <div className="text-[9px] text-[#8A8885]">Bounce {i + 1}</div>
+                        <div className="text-[10px] text-[#E8E6E3] font-medium">Frame {String(b.frame_global_estimate)}</div>
+                        <div className="text-[9px] text-[#6A6865]">
+                          x={Number(b.x).toFixed(2)} y={Number(b.y).toFixed(2)}
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                )}
+              </div>
+            )}
+
+            {/* ── Annotated Video ── */}
+            {classifiedArtifacts.annotatedVideo?.url && (
+              <div className="bg-[#282729]/40 backdrop-blur-xl rounded-xl p-4 border border-[#363436]/30">
+                <h3 className="text-xs font-medium text-[#E8E6E3] mb-3">Annotated Video</h3>
+                <video
+                  controls
+                  src={classifiedArtifacts.annotatedVideo.url}
+                  className="w-full rounded-lg bg-black/40 border border-[#363436]/20"
+                />
+              </div>
+            )}
+
+            {/* ── 3D Trajectory Views ── */}
+            {(classifiedArtifacts.trajectory3d?.url || classifiedArtifacts.trajectoryReprojected?.url) && (
+              <div className="bg-[#282729]/40 backdrop-blur-xl rounded-xl p-4 border border-[#363436]/30">
+                <h3 className="text-xs font-medium text-[#E8E6E3] mb-3">3D Trajectory</h3>
+                <div className="grid grid-cols-2 gap-3">
+                  {classifiedArtifacts.trajectory3d?.url && (
+                    <div>
+                      <p className="text-[10px] text-[#8A8885] mb-1.5">3D View</p>
+                      <img
+                        src={classifiedArtifacts.trajectory3d.url}
+                        alt="3D Trajectory"
+                        className="w-full rounded-lg bg-black/40 border border-[#363436]/20"
+                      />
+                    </div>
+                  )}
+                  {classifiedArtifacts.trajectoryReprojected?.url && (
+                    <div>
+                      <p className="text-[10px] text-[#8A8885] mb-1.5">Reprojected View</p>
+                      <img
+                        src={classifiedArtifacts.trajectoryReprojected.url}
+                        alt="Reprojected Trajectory"
+                        className="w-full rounded-lg bg-black/40 border border-[#363436]/20"
+                      />
+                    </div>
+                  )}
+                </div>
+              </div>
+            )}
+
+            {/* ── Individual Shots ── */}
+            {classifiedArtifacts.shots.length > 0 && (
+              <div className="bg-[#282729]/40 backdrop-blur-xl rounded-xl p-4 border border-[#363436]/30">
+                <h3 className="text-xs font-medium text-[#E8E6E3] mb-3">Shot-by-Shot Analysis</h3>
+                <div className="space-y-3">
+                  {classifiedArtifacts.shots.map(({ index, image, video, image3d }) => {
+                    const isExpanded = expandedShot === index;
+                    const shotSummary = Array.isArray(summaryData?.shots)
+                      ? (summaryData.shots as Array<Record<string, unknown>>).find(
+                          (s) => Number(s.shot_index) === index
+                        )
+                      : null;
+
+                    return (
+                      <div
+                        key={index}
+                        className="rounded-lg bg-[#1E1D1F]/40 border border-[#363436]/40 overflow-hidden"
+                      >
+                        {/* Shot Header */}
+                        <button
+                          className="w-full flex items-center gap-3 px-4 py-2.5 text-left hover:bg-[#1E1D1F]/60 transition-colors"
+                          onClick={() => setExpandedShot(isExpanded ? null : index)}
+                        >
+                          <span className="text-xs font-medium text-[#9B7B5B]">Shot {index + 1}</span>
+                          {shotSummary && (
+                            <>
+                              <span className={`text-[10px] font-medium px-2 py-0.5 rounded-full ${
+                                shotSummary.spin_type === "Topspin" ? "bg-[#5B9B7B]/20 text-[#5B9B7B]" :
+                                shotSummary.spin_type === "Backspin" ? "bg-[#C45C5C]/20 text-[#C45C5C]" :
+                                "bg-[#9B7B5B]/20 text-[#9B7B5B]"
+                              }`}>{String(shotSummary.spin_type)}</span>
+                              <span className="text-[10px] text-[#8A8885]">{Number(shotSummary.spin_rpm ?? 0).toFixed(0)} RPM</span>
+                              <span className="text-[10px] text-[#6A6865]">{String(shotSummary.frames ?? "")}</span>
+                            </>
+                          )}
+                          <span className="ml-auto text-[10px] text-[#6A6865]">{isExpanded ? "Collapse" : "Expand"}</span>
+                        </button>
+
+                        {/* Shot Content */}
+                        {isExpanded && (
+                          <div className="px-4 pb-4 space-y-3">
+                            {/* 2D trajectory + 3D side-by-side */}
+                            <div className="grid grid-cols-2 gap-3">
+                              {image?.url && (
+                                <div>
+                                  <p className="text-[10px] text-[#8A8885] mb-1.5">2D Trajectory</p>
+                                  <img
+                                    src={image.url}
+                                    alt={`Shot ${index + 1} trajectory`}
+                                    className="w-full rounded-lg bg-black/40 border border-[#363436]/20"
+                                  />
+                                </div>
+                              )}
+                              {image3d?.url && (
+                                <div>
+                                  <p className="text-[10px] text-[#8A8885] mb-1.5">3D Reconstruction</p>
+                                  <img
+                                    src={image3d.url}
+                                    alt={`Shot ${index + 1} 3D`}
+                                    className="w-full rounded-lg bg-black/40 border border-[#363436]/20"
+                                  />
+                                </div>
+                              )}
+                            </div>
+
+                            {/* Shot video */}
+                            {video?.url && (
+                              <div>
+                                <p className="text-[10px] text-[#8A8885] mb-1.5 flex items-center gap-1">
+                                  <Play className="w-3 h-3" /> Shot Clip
+                                </p>
+                                <video
+                                  controls
+                                  src={video.url}
+                                  className="w-full rounded-lg bg-black/40 border border-[#363436]/20"
+                                />
+                              </div>
+                            )}
+                          </div>
+                        )}
+                      </div>
+                    );
+                  })}
+                </div>
+              </div>
+            )}
+          </>
         )}
       </div>
     </div>
