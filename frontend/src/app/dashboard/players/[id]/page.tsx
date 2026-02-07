@@ -15,6 +15,7 @@ import {
   usePlayer, usePlayerGames, useUploadAvatar, useUpdatePlayer,
   useSyncITTF, usePlayerRecordings, useCreateRecording,
   useDeleteRecording, useCreateClip, useAnalyzeRecording,
+  usePlayerInsights,
 } from "@/hooks/usePlayers";
 import { GameTimeline } from "@/components/players/GameTimeline";
 import { createSession, GamePlayerInfo, RecordingType, Recording } from "@/lib/api";
@@ -91,6 +92,7 @@ export default function PlayerProfilePage() {
     playerId,
     recordingFilter === "all" ? undefined : recordingFilter
   );
+  const { data: playerInsights } = usePlayerInsights(playerId);
   const latestGame = useMemo(() => {
     if (!games?.length) return null;
     return [...games].sort((a, b) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime())[0];
@@ -263,71 +265,42 @@ export default function PlayerProfilePage() {
     };
   });
 
-  // Generate player-specific insights from recent game data
+  // Generate player-specific insights from API data
   const insights: Insight[] = useMemo(() => {
-    // For now, show general coaching tips with disclaimer
-    // TODO: Generate from actual stroke analytics when available
-    const baseInsights: Insight[] = [];
-    
-    // Add note if no data available
-    if (!recentGames.length || !clipRefs.length) {
-      return baseInsights; // No insights without game data
+    if (!playerInsights || !clipRefs.length) {
+      return []; // No insights without data
     }
     
-    // General insights with actual clip references
-    return [
-      {
-        id: "strength-forehand",
+    const results: Insight[] = [];
+    
+    // Add strengths from API
+    playerInsights.strengths.forEach((strength, idx) => {
+      results.push({
+        id: `strength-${idx}`,
         kind: "strength",
-        title: "Forehand power",
-        summary: "Explosive hip rotation and clean wrist snap on fast rallies",
-        metric: "Maintain in multi-ball and shadow drills",
-        tipMatch: "forehand",
+        title: strength.title,
+        summary: strength.summary,
+        metric: strength.metric,
+        tipMatch: strength.title.toLowerCase().includes("forehand") ? "forehand" : strength.title.toLowerCase().includes("backhand") ? "backhand" : undefined,
         clips: clipRefs,
-      },
-      {
-        id: "strength-footwork",
-        kind: "strength",
-        title: "Recovery speed",
-        summary: "Quick reset to neutral stance after wide exchanges",
-        metric: "Add lateral recovery between shots in drills",
-        clips: clipRefs,
-      },
-      {
-        id: "strength-placement",
-        kind: "strength",
-        title: "Shot placement",
-        summary: "Consistent targeting of opponent's weak zones",
-        metric: "Target corners and body in practice games",
-        clips: clipRefs,
-      },
-      {
-        id: "strength-anticipation",
-        kind: "strength",
-        title: "Ball anticipation",
-        summary: "Early read on opponent's shot direction",
-        metric: "Watch opponent racket angle before contact",
-        clips: clipRefs,
-      },
-      {
-        id: "weakness-backhand",
+      });
+    });
+    
+    // Add weaknesses from API
+    playerInsights.weaknesses.forEach((weakness, idx) => {
+      results.push({
+        id: `weakness-${idx}`,
         kind: "weakness",
-        title: "Backhand depth",
-        summary: "Contact point drifts high under pressure",
-        metric: "Contact ball earlier, in front of body",
-        tipMatch: "backhand",
+        title: weakness.title,
+        summary: weakness.summary,
+        metric: weakness.metric,
+        tipMatch: weakness.title.toLowerCase().includes("forehand") ? "forehand" : weakness.title.toLowerCase().includes("backhand") ? "backhand" : undefined,
         clips: clipRefs,
-      },
-      {
-        id: "weakness-serve",
-        kind: "weakness",
-        title: "Serve variation",
-        summary: "Limited spin variation on second serve",
-        metric: "Add topspin, backspin, or sidespin to second serve",
-        clips: clipRefs,
-      },
-    ];
-  }, [clipRefs, recentGames]);
+      });
+    });
+    
+    return results;
+  }, [playerInsights, clipRefs]);
 
   const handleClipOpen = (clip: InsightClip, tipMatch?: string) => {
     if (clip.sessionId) {
