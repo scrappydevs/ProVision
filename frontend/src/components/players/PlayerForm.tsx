@@ -126,7 +126,7 @@ export function PlayerForm({
               type="text"
               value={position}
               onChange={(e) => setPosition(e.target.value)}
-              placeholder="e.g., Forward, Goalkeeper, etc."
+              placeholder="e.g., Attacker, All-rounder, Defender"
               className="w-full px-3 py-2 bg-background border border-border rounded-lg text-foreground placeholder-muted-foreground focus:outline-none focus:border-primary"
             />
           </div>
