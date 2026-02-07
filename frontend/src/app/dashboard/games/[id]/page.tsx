@@ -1522,29 +1522,29 @@ export default function GameViewerPage() {
                           : "bg-[#1E1D1F]"
                       )}>
                         {activeStroke ? (
-                          <div className="flex items-center gap-2">
+                          <div className="flex items-center gap-2.5">
                             <div className={cn(
-                              "w-2 h-2 rounded-full animate-pulse",
+                              "w-2.5 h-2.5 rounded-full animate-pulse",
                               activeStroke.stroke_type === "forehand" ? "bg-[#9B7B5B]"
                               : activeStroke.stroke_type === "backhand" ? "bg-[#5B9B7B]"
                               : "bg-[#8A8885]"
                             )} />
                             <span className={cn(
-                              "text-sm font-medium capitalize",
+                              "text-base font-medium capitalize",
                               activeStroke.stroke_type === "forehand" ? "text-[#9B7B5B]"
                               : activeStroke.stroke_type === "backhand" ? "text-[#5B9B7B]"
                               : "text-[#8A8885]"
                             )}>
                               {activeStroke.stroke_type}
                             </span>
-                            <span className="text-[10px] text-[#6A6865] ml-auto">
+                            <span className="text-sm text-[#6A6865] ml-auto">
                               Form {activeStroke.form_score.toFixed(0)}
                             </span>
                           </div>
                         ) : lastStroke ? (
-                          <div className="flex items-center gap-2">
-                            <div className="w-2 h-2 rounded-full bg-[#363436]" />
-                            <span className="text-xs text-[#6A6865]">
+                          <div className="flex items-center gap-2.5">
+                            <div className="w-2.5 h-2.5 rounded-full bg-[#363436]" />
+                            <span className="text-sm text-[#6A6865]">
                               Last: <span className={cn(
                                 "capitalize",
                                 lastStroke.stroke_type === "forehand" ? "text-[#9B7B5B]"
@@ -1552,12 +1552,12 @@ export default function GameViewerPage() {
                                 : "text-[#8A8885]"
                               )}>{lastStroke.stroke_type}</span>
                             </span>
-                            <span className="text-[10px] text-[#6A6865] ml-auto">
+                            <span className="text-sm text-[#6A6865] ml-auto">
                               Form {lastStroke.form_score.toFixed(0)}
                             </span>
                           </div>
                         ) : (
-                          <p className="text-[10px] text-[#6A6865] text-center">Play video to see live stroke detection</p>
+                          <p className="text-xs text-[#6A6865] text-center">Play video to see live stroke detection</p>
                         )}
                       </div>
                     )}
@@ -1569,25 +1569,25 @@ export default function GameViewerPage() {
                         activePointEvent ? "bg-[#C45C5C]/15 ring-1 ring-[#C45C5C]/40" : "bg-[#1E1D1F]"
                       )}>
                         {activePointEvent ? (
-                          <div className="flex items-center gap-2">
-                            <div className="w-2 h-2 rounded-full bg-[#C45C5C] animate-pulse" />
-                            <span className="text-sm font-medium text-[#C45C5C]">Point scored</span>
-                            <span className="text-[10px] text-[#6A6865] ml-auto">
+                          <div className="flex items-center gap-2.5">
+                            <div className="w-2.5 h-2.5 rounded-full bg-[#C45C5C] animate-pulse" />
+                            <span className="text-base font-medium text-[#C45C5C]">Point scored</span>
+                            <span className="text-sm text-[#6A6865] ml-auto">
                               {fmtTime(activePointEvent.timestamp)}
                             </span>
                           </div>
                         ) : lastPointEvent ? (
-                          <div className="flex items-center gap-2">
-                            <div className="w-2 h-2 rounded-full bg-[#363436]" />
-                            <span className="text-xs text-[#6A6865]">
+                          <div className="flex items-center gap-2.5">
+                            <div className="w-2.5 h-2.5 rounded-full bg-[#363436]" />
+                            <span className="text-sm text-[#6A6865]">
                               Last point: <span className="text-[#C45C5C]">{fmtTime(lastPointEvent.timestamp)}</span>
                             </span>
-                            <span className="text-[10px] text-[#6A6865] ml-auto capitalize">
+                            <span className="text-sm text-[#6A6865] ml-auto capitalize">
                               {lastPointEvent.reason.replace(/_/g, " ")}
                             </span>
                           </div>
                         ) : (
-                          <p className="text-[10px] text-[#6A6865] text-center">Play video to see point events</p>
+                          <p className="text-xs text-[#6A6865] text-center">Play video to see point events</p>
                         )}
                       </div>
                     )}
@@ -1596,7 +1596,7 @@ export default function GameViewerPage() {
                     {hasPose && !isPoseProcessing && (
                       <>
                         {hasStrokes ? (
-                          <div className="space-y-2">
+                          <div className="flex flex-col gap-2 min-h-0 flex-1">
                             {/* Camera facing toggle + Re-analyze */}
                             <div className="flex items-center justify-between">
                               <p className="text-[10px] text-[#6A6865] uppercase tracking-wider">Stroke Breakdown</p>
@@ -1631,52 +1631,52 @@ export default function GameViewerPage() {
                                 </button>
                               </div>
                             </div>
-                            <div className="grid grid-cols-2 gap-1.5">
-                              <div className="p-2 rounded-lg bg-[#1E1D1F] text-center">
-                                <p className="text-lg font-light text-[#9B7B5B]">{strokeSummary?.forehand_count ?? 0}</p>
-                                <p className="text-[9px] text-[#6A6865]">Forehand</p>
+                            <div className="grid grid-cols-2 gap-2">
+                              <div className="p-2.5 rounded-lg bg-[#1E1D1F] text-center">
+                                <p className="text-2xl font-light text-[#9B7B5B]">{strokeSummary?.forehand_count ?? 0}</p>
+                                <p className="text-[11px] text-[#6A6865] mt-0.5">Forehand</p>
                               </div>
-                              <div className="p-2 rounded-lg bg-[#1E1D1F] text-center">
-                                <p className="text-lg font-light text-[#5B9B7B]">{strokeSummary?.backhand_count ?? 0}</p>
-                                <p className="text-[9px] text-[#6A6865]">Backhand</p>
+                              <div className="p-2.5 rounded-lg bg-[#1E1D1F] text-center">
+                                <p className="text-2xl font-light text-[#5B9B7B]">{strokeSummary?.backhand_count ?? 0}</p>
+                                <p className="text-[11px] text-[#6A6865] mt-0.5">Backhand</p>
                               </div>
                             </div>
                             {/* FH/BH ratio bar */}
                             {(strokeSummary?.total_strokes ?? 0) > 0 && (
                               <div>
-                                <div className="flex h-1.5 rounded-full overflow-hidden bg-[#363436]">
+                                <div className="flex h-2 rounded-full overflow-hidden bg-[#363436]">
                                   <div className="bg-[#9B7B5B] transition-all" style={{ width: `${((strokeSummary?.forehand_count ?? 0) / (strokeSummary?.total_strokes ?? 1)) * 100}%` }} />
                                   <div className="bg-[#5B9B7B] transition-all" style={{ width: `${((strokeSummary?.backhand_count ?? 0) / (strokeSummary?.total_strokes ?? 1)) * 100}%` }} />
                                 </div>
-                                <div className="flex justify-between mt-1">
-                                  <span className="text-[9px] text-[#9B7B5B]">FH {Math.round(((strokeSummary?.forehand_count ?? 0) / (strokeSummary?.total_strokes ?? 1)) * 100)}%</span>
-                                  <span className="text-[9px] text-[#5B9B7B]">BH {Math.round(((strokeSummary?.backhand_count ?? 0) / (strokeSummary?.total_strokes ?? 1)) * 100)}%</span>
+                                <div className="flex justify-between mt-1.5">
+                                  <span className="text-xs font-medium text-[#9B7B5B]">FH {Math.round(((strokeSummary?.forehand_count ?? 0) / (strokeSummary?.total_strokes ?? 1)) * 100)}%</span>
+                                  <span className="text-xs font-medium text-[#5B9B7B]">BH {Math.round(((strokeSummary?.backhand_count ?? 0) / (strokeSummary?.total_strokes ?? 1)) * 100)}%</span>
                                 </div>
                               </div>
                             )}
                             {/* Form metrics */}
-                            <div className="space-y-1">
-                              <div className="flex justify-between text-[10px]">
-                                <span className="text-[#8A8885]">Avg Form</span>
-                                <span className="text-[#E8E6E3] font-mono">{strokeSummary?.average_form_score?.toFixed(1)}</span>
+                            <div className="space-y-1.5">
+                              <div className="flex justify-between items-center">
+                                <span className="text-xs text-[#8A8885]">Avg Form</span>
+                                <span className="text-lg font-mono font-medium text-[#E8E6E3]">{strokeSummary?.average_form_score?.toFixed(1)}</span>
                               </div>
-                              <div className="flex justify-between text-[10px]">
-                                <span className="text-[#8A8885]">Best Form</span>
-                                <span className="text-[#9B7B5B] font-mono">{strokeSummary?.best_form_score?.toFixed(1)}</span>
+                              <div className="flex justify-between items-center">
+                                <span className="text-xs text-[#8A8885]">Best Form</span>
+                                <span className="text-lg font-mono font-medium text-[#9B7B5B]">{strokeSummary?.best_form_score?.toFixed(1)}</span>
                               </div>
-                              <div className="flex justify-between text-[10px]">
-                                <span className="text-[#8A8885]">Consistency</span>
-                                <span className="text-[#E8E6E3] font-mono">{strokeSummary?.consistency_score?.toFixed(1)}</span>
+                              <div className="flex justify-between items-center">
+                                <span className="text-xs text-[#8A8885]">Consistency</span>
+                                <span className="text-lg font-mono font-medium text-[#E8E6E3]">{strokeSummary?.consistency_score?.toFixed(1)}</span>
                               </div>
                             </div>
 
                             {/* All Insights throughout the video */}
                             {videoTips.length > 0 && (
-                              <div>
-                                <p className="text-[10px] text-[#6A6865] uppercase tracking-wider mb-1.5">
+                              <div className="flex flex-col min-h-0 flex-1">
+                                <p className="text-[11px] text-[#6A6865] uppercase tracking-wider mb-1.5 shrink-0">
                                   Insights ({videoTips.filter(t => !t.id.includes("follow") && !t.id.includes("summary")).length})
                                 </p>
-                                <div className="space-y-1 max-h-[200px] overflow-y-auto pr-1">
+                                <div className="space-y-1.5 overflow-y-auto pr-1 flex-1">
                                   {videoTips
                                     .filter(t => !t.id.includes("follow") && !t.id.includes("summary"))
                                     .map((tip) => {
@@ -1689,7 +1689,7 @@ export default function GameViewerPage() {
                                             handleTipSeek(tip);
                                           }}
                                           className={cn(
-                                            "w-full text-left p-2 rounded-lg transition-all",
+                                            "w-full text-left p-2.5 rounded-lg transition-all",
                                             isActive
                                               ? "bg-[#9B7B5B]/15 ring-1 ring-[#9B7B5B]/40"
                                               : isPast
@@ -1699,13 +1699,13 @@ export default function GameViewerPage() {
                                         >
                                           <div className="flex items-center gap-2">
                                             <span className={cn(
-                                              "text-[10px] font-mono shrink-0",
+                                              "text-[11px] font-mono shrink-0",
                                               isActive ? "text-[#9B7B5B]" : "text-[#6A6865]"
                                             )}>
                                               {fmtTime(tip.timestamp)}
                                             </span>
                                             <span className={cn(
-                                              "text-[11px] truncate",
+                                              "text-xs font-medium truncate",
                                               isActive ? "text-[#E8E6E3]" : isPast ? "text-[#8A8885]" : "text-[#E8E6E3]"
                                             )}>
                                               {tip.title}
@@ -1713,7 +1713,7 @@ export default function GameViewerPage() {
                                           </div>
                                           {tip.message && (
                                             <p className={cn(
-                                              "text-[10px] mt-1 line-clamp-2",
+                                              "text-[11px] mt-1 line-clamp-3 leading-relaxed",
                                               isActive ? "text-[#8A8885]" : "text-[#6A6865]"
                                             )}>
                                               {tip.message}
