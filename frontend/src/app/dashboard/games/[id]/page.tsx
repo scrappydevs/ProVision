@@ -213,6 +213,27 @@ export default function GameViewerPage() {
     return past.length > 0 ? past[past.length - 1] : null;
   }, [strokeSummary?.strokes, currentFrame]);
 
+  // Get player position for current frame (for positioning stroke indicator)
+  const playerPosition = useMemo(() => {
+    if (!poseData?.frames || !videoBounds) return null;
+
+    const frameData = poseData.frames.find(f => f.frame === currentFrame);
+    if (!frameData?.landmarks || frameData.landmarks.length === 0) return null;
+
+    // Get shoulder keypoint (index 5 or 6 for right/left shoulder in COCO format)
+    const shoulder = frameData.landmarks[5] || frameData.landmarks[6];
+    if (!shoulder) return null;
+
+    // Convert normalized coordinates to video pixel coordinates
+    const videoWidth = videoBounds.width;
+    const videoHeight = videoBounds.height;
+
+    return {
+      x: shoulder.x * videoWidth,
+      y: shoulder.y * videoHeight,
+    };
+  }, [poseData?.frames, currentFrame, videoBounds]);
+
 
   const computedTrajectoryFps = useMemo(() => {
     const frames = session?.trajectory_data?.frames?.length ?? 0;
@@ -1193,19 +1214,25 @@ export default function GameViewerPage() {
                   onTipChange={handleTipChange}
                 />
 
-                {/* Live Stroke Indicator - Glass overlay on video */}
-                {hasStrokes && (activeStroke || lastStroke) && (
-                  <div className="absolute bottom-6 left-6 pointer-events-none z-20">
+                {/* Live Stroke Indicator - Next to player */}
+                {hasStrokes && (activeStroke || lastStroke) && playerPosition && videoBounds && (
+                  <div
+                    className="fixed pointer-events-none z-20 transition-all duration-200"
+                    style={{
+                      left: `${videoBounds.left + playerPosition.x + 80}px`, // Offset to the right of player
+                      top: `${videoBounds.top + playerPosition.y - 40}px`, // Slightly above shoulder
+                    }}
+                  >
                     <div className={cn(
-                      "glass-shot-card px-4 py-2.5 flex items-center gap-2.5 transition-all duration-300",
+                      "glass-shot-card px-3 py-1.5 flex items-center gap-2 transition-all duration-300",
                       activeStroke
                         ? activeStroke.stroke_type === "forehand"
                           ? "ring-1 ring-[#9B7B5B]/40"
                           : "ring-1 ring-[#5B9B7B]/40"
-                        : "opacity-60"
+                        : "opacity-70"
                     )}>
                       <div className={cn(
-                        "w-2.5 h-2.5 rounded-full",
+                        "w-1.5 h-1.5 rounded-full",
                         activeStroke
                           ? activeStroke.stroke_type === "forehand"
                             ? "bg-[#9B7B5B] animate-pulse"
@@ -1213,7 +1240,7 @@ export default function GameViewerPage() {
                           : "bg-[#363436]"
                       )} />
                       <span className={cn(
-                        "text-sm font-medium capitalize",
+                        "text-xs font-medium capitalize",
                         activeStroke
                           ? activeStroke.stroke_type === "forehand"
                             ? "text-[#9B7B5B]"
