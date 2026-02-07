@@ -1,12 +1,11 @@
 import os
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.middleware.gzip import GZipMiddleware
 from dotenv import load_dotenv
 
 load_dotenv()
 
-from .routes import sessions, sam2, sam3d, egox, pose, stroke, players, ai_chat, recordings, tournaments, videos, wtt_data
+from .routes import sessions, sam2, sam3d, egox, pose, stroke, players, ai_chat, recordings, tournaments, analytics, videos
 
 app = FastAPI(
     title="ProVision API",
@@ -16,7 +15,6 @@ app = FastAPI(
 
 cors_origins = os.getenv("CORS_ORIGINS", "http://localhost:3000").split(",")
 
-app.add_middleware(GZipMiddleware, minimum_size=500)
 app.add_middleware(
     CORSMiddleware,
     allow_origins=cors_origins,
@@ -35,8 +33,8 @@ app.include_router(players.router, prefix="/api/players", tags=["players"])
 app.include_router(ai_chat.router, prefix="/api/ai", tags=["ai"])
 app.include_router(recordings.router, prefix="/api/recordings", tags=["recordings"])
 app.include_router(tournaments.router, prefix="/api/tournaments", tags=["tournaments"])
+app.include_router(analytics.router, tags=["analytics"])  # Already has /api/analytics prefix
 app.include_router(videos.router, prefix="/api/videos", tags=["videos"])
-app.include_router(wtt_data.router, prefix="/api/wtt", tags=["wtt"])
 
 
 @app.get("/")
