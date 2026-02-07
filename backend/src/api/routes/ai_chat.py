@@ -14,7 +14,7 @@ router = APIRouter()
 # System prompt
 # ─────────────────────────────────────────────────────────────────────────────
 
-SYSTEM_PROMPT = """You are an elite AI coaching analyst embedded inside the ProVision table tennis analytics platform.
+SYSTEM_PROMPT = """You are an elite AI coaching analyst embedded inside the PROVISION table tennis analytics platform.
 You have FULL access to the coach's database through your tools. You can query any player, session, recording,
 stroke, tournament, or analytics data in real time.
 
@@ -41,7 +41,7 @@ stroke, tournament, or analytics data in real time.
 
 ## APP CAPABILITIES — the frontend can do these things
 
-The ProVision app has:
+The PROVISION app has:
 - A video player at /dashboard/games/{session_id} that shows match footage, pose overlays, ball tracking, and stroke-by-stroke analysis
 - Player profiles at /dashboard/players/{player_id}
 - Recording management per player

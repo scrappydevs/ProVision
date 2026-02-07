@@ -776,7 +776,7 @@ start_time = time.time()
 async def lifespan(app: FastAPI):
     """Application lifespan handler for model loading/cleanup."""
     # Startup: Load models
-    logger.info("Starting ProVision Model Server...")
+    logger.info("Starting PROVISION Model Server...")
     
     for model_name in config.models_to_load:
         model_name = model_name.strip().lower()
@@ -842,7 +842,7 @@ async def lifespan(app: FastAPI):
 
 
 app = FastAPI(
-    title="ProVision Model Server",
+    title="PROVISION Model Server",
     description="GPU-accelerated SAM2 and SAM3D inference server",
     version="1.0.0",
     lifespan=lifespan
@@ -2023,7 +2023,7 @@ async def sam3d_status(job_id: str):
 if __name__ == "__main__":
     import argparse
     
-    parser = argparse.ArgumentParser(description="ProVision Model Server")
+    parser = argparse.ArgumentParser(description="PROVISION Model Server")
     parser.add_argument("--port", type=int, default=config.port, help="Server port")
     parser.add_argument("--host", type=str, default=config.host, help="Server host")
     parser.add_argument("--models", type=str, default="sam2", help="Models to load (comma-separated)")

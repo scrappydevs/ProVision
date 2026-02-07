@@ -8,7 +8,7 @@ load_dotenv()
 from .routes import sessions, sam2, sam3d, egox, pose, stroke, players, ai_chat, recordings, tournaments, analytics, videos, youtube_clips
 
 app = FastAPI(
-    title="ProVision API",
+    title="PROVISION API",
     description="AI-powered sports analysis backend",
     version="0.1.0",
 )
@@ -40,7 +40,7 @@ app.include_router(youtube_clips.router, prefix="/api/youtube-clips", tags=["you
 
 @app.get("/")
 async def root():
-    return {"message": "ProVision API", "version": "0.1.0"}
+    return {"message": "PROVISION API", "version": "0.1.0"}
 
 
 @app.get("/health")

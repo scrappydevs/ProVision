@@ -16,9 +16,9 @@ export function Header() {
         {/* Left: Logo centered within sidebar-width column (w-14 = 56px) + title */}
         <div className="flex items-center shrink-0">
           <div className="w-14 flex justify-center shrink-0">
-            <img src="/logo.png" alt="ProVision" className="w-10 h-10 dark:invert" />
+            <img src="/logo.png" alt="PROVISION" className="w-10 h-10 dark:invert" />
           </div>
-          <span className="text-lg font-bold tracking-wide text-foreground">ProVision</span>
+          <span className="text-lg font-bold tracking-wide text-foreground">PROVISION</span>
         </div>
 
         {/* Spacer */}
