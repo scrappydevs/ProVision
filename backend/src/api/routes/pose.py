@@ -157,11 +157,12 @@ def process_pose_analysis(session_id: str, video_path: str, video_url: str, targ
         
         # Auto-trigger stroke detection after pose analysis completes
         try:
-            from ..routes.stroke import detect_strokes_background
+            from ..routes.stroke import process_stroke_detection
             print(f"[PoseAnalysis] Auto-triggering stroke detection for session: {session_id}")
-            detect_strokes_background(session_id)
+            process_stroke_detection(session_id)
         except Exception as stroke_err:
             print(f"[PoseAnalysis] Warning: Failed to auto-trigger stroke detection: {str(stroke_err)}")
+            print(f"[PoseAnalysis] Stroke detection error: {traceback.format_exc()}")
 
     except Exception as e:
         print(f"[PoseAnalysis] Error processing session {session_id}: {str(e)}", flush=True)
