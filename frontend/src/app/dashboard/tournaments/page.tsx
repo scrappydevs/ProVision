@@ -12,6 +12,8 @@ import {
   TrendingUp,
   ChevronRight,
   Search,
+  Play,
+  Video,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Tournament, TournamentCreate } from "@/lib/api";
@@ -48,6 +50,55 @@ const formatDate = (d?: string) => {
     day: "numeric",
     year: "numeric",
   });
+};
+
+const extractYouTubeId = (url: string) => {
+  const patterns = [
+    /(?:youtube\.com\/watch\?v=|youtu\.be\/|youtube\.com\/embed\/|youtube\.com\/v\/)([a-zA-Z0-9_-]{11})/,
+    /youtube\.com\/shorts\/([a-zA-Z0-9_-]{11})/,
+  ];
+  for (const pattern of patterns) {
+    const match = url.match(pattern);
+    if (match) return match[1];
+  }
+  return null;
+};
+
+const getMetaString = (meta: Record<string, unknown> | undefined, key: string) => {
+  const value = meta?.[key];
+  if (typeof value === "string" && value.trim()) return value;
+  return null;
+};
+
+const getTournamentPreview = (tournament: Tournament) => {
+  const meta = tournament.metadata;
+  
+  // Check for YouTube URL first and use it as preview source
+  const youtubeUrl = 
+    getMetaString(meta, "youtube_url") ||
+    getMetaString(meta, "hero_video_url") ||
+    getMetaString(meta, "preview_video_url") ||
+    getMetaString(meta, "video_url");
+  
+  const youtubeId = youtubeUrl ? extractYouTubeId(youtubeUrl) : null;
+  
+  // Use thumbnail from metadata or generate from YouTube ID
+  let imageUrl =
+    getMetaString(meta, "thumbnail_url") ||
+    getMetaString(meta, "cover_url") ||
+    getMetaString(meta, "preview_image_url");
+  
+  if (!imageUrl && youtubeId) {
+    imageUrl = `https://i.ytimg.com/vi/${youtubeId}/hqdefault.jpg`;
+  }
+
+  return { videoUrl: youtubeUrl, imageUrl, youtubeId };
+};
+
+const getTournamentInitials = (name: string) => {
+  const parts = name.split(" ").filter(Boolean);
+  const initials = parts.slice(0, 2).map((p) => p[0]?.toUpperCase() || "").join("");
+  return initials || "TT";
 };
 
 export default function TournamentsPage() {
@@ -121,40 +172,36 @@ export default function TournamentsPage() {
 
       {/* Stats Bar */}
       {stats && (
-        <div className="grid grid-cols-2 sm:grid-cols-3 gap-3">
-          <div className="rounded-xl bg-card border border-border p-3.5">
-            <div className="flex items-center gap-2 mb-1.5">
-              <Trophy className="w-3.5 h-3.5 text-[#9B7B5B]" />
-              <span className="text-[10px] text-muted-foreground uppercase tracking-wider">Tournaments</span>
+        <div className="flex flex-wrap items-center gap-6">
+          <div className="flex items-center gap-3">
+            <Trophy className="w-3.5 h-3.5 text-[#9B7B5B]" />
+            <div>
+              <p className="text-[10px] text-foreground/40 uppercase tracking-wider">Tournaments</p>
+              <p className="text-xl font-light text-foreground">{stats.total_tournaments}</p>
             </div>
-            <p className="text-xl font-light text-foreground">{stats.total_tournaments}</p>
           </div>
-          <div className="rounded-xl bg-card border border-border p-3.5">
-            <div className="flex items-center gap-2 mb-1.5">
-              <Swords className="w-3.5 h-3.5 text-[#9B7B5B]" />
-              <span className="text-[10px] text-muted-foreground uppercase tracking-wider">Matches</span>
+          <div className="flex items-center gap-3">
+            <Swords className="w-3.5 h-3.5 text-[#9B7B5B]" />
+            <div>
+              <p className="text-[10px] text-foreground/40 uppercase tracking-wider">Matches</p>
+              <p className="text-xl font-light text-foreground">{stats.total_matchups}</p>
+              <p className="text-[10px] text-foreground/40 mt-0.5">{stats.pending_matchups} pending</p>
             </div>
-            <p className="text-xl font-light text-foreground">{stats.total_matchups}</p>
-            <p className="text-[10px] text-muted-foreground mt-0.5">
-              {stats.pending_matchups} pending
-            </p>
           </div>
-          <div className="rounded-xl bg-card border border-border p-3.5">
-            <div className="flex items-center gap-2 mb-1.5">
-              <TrendingUp className="w-3.5 h-3.5 text-green-400" />
-              <span className="text-[10px] text-muted-foreground uppercase tracking-wider">Win Rate</span>
+          <div className="flex items-center gap-3">
+            <TrendingUp className="w-3.5 h-3.5 text-green-400" />
+            <div>
+              <p className="text-[10px] text-foreground/40 uppercase tracking-wider">Win Rate</p>
+              <p className="text-xl font-light text-foreground">{stats.win_rate}%</p>
+              <p className="text-[10px] text-foreground/40 mt-0.5">{stats.wins}W – {stats.losses}L</p>
             </div>
-            <p className="text-xl font-light text-foreground">{stats.win_rate}%</p>
-            <p className="text-[10px] text-muted-foreground mt-0.5">
-              {stats.wins}W – {stats.losses}L
-            </p>
           </div>
         </div>
       )}
 
       {/* Tabs + Search */}
       <div className="flex items-center gap-4">
-        <div className="flex items-center bg-card rounded-lg border border-border p-0.5">
+        <div className="flex items-center gap-2">
           {(
             [
               { key: "all", label: "All", count: filteredTournaments.length },
@@ -164,10 +211,10 @@ export default function TournamentsPage() {
             <button
               key={tab.key}
               onClick={() => setActiveTab(tab.key)}
-              className={`px-3 py-1.5 text-xs rounded-md transition-colors ${
+              className={`px-1.5 pb-1 text-xs transition-colors border-b ${
                 activeTab === tab.key
-                  ? "bg-[#9B7B5B]/20 text-[#9B7B5B]"
-                  : "text-muted-foreground hover:text-foreground"
+                  ? "border-[#9B7B5B] text-[#9B7B5B]"
+                  : "border-transparent text-foreground/40 hover:text-foreground"
               }`}
             >
               {tab.label}
@@ -177,13 +224,13 @@ export default function TournamentsPage() {
         </div>
 
         <div className="relative flex-1 max-w-xs">
-          <Search className="absolute left-2.5 top-1/2 -translate-y-1/2 w-3.5 h-3.5 text-muted-foreground" />
+          <Search className="absolute left-0 top-1/2 -translate-y-1/2 w-3.5 h-3.5 text-foreground/30" />
           <input
             type="text"
             value={search}
             onChange={(e) => setSearch(e.target.value)}
             placeholder="Search tournaments..."
-            className="w-full bg-card border border-border rounded-lg pl-8 pr-3 py-1.5 text-xs text-foreground placeholder:text-muted-foreground focus:outline-none focus:border-primary transition-colors"
+            className="w-full bg-transparent border-b border-white/10 pl-6 pr-3 py-1.5 text-xs text-foreground placeholder:text-foreground/30 focus:outline-none focus:border-[#9B7B5B]/60 transition-colors"
           />
         </div>
       </div>
@@ -217,7 +264,7 @@ export default function TournamentsPage() {
           )}
         </div>
       ) : (
-        <div className="space-y-2">
+        <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-4">
           {filteredTournaments.map((tournament, i) => (
             <motion.div
               key={tournament.id}
@@ -225,11 +272,48 @@ export default function TournamentsPage() {
               animate={{ opacity: 1, y: 0 }}
               transition={{ delay: i * 0.03 }}
               onClick={() => setSelectedTournament(tournament)}
-              className="rounded-xl bg-card border border-border hover:border-primary/30 p-4 cursor-pointer transition-all group"
+              className="rounded-2xl bg-foreground/[0.02] hover:bg-foreground/5 ring-1 ring-white/5 p-4 cursor-pointer transition-all group"
             >
-              <div className="flex items-center justify-between">
+              <div className="flex flex-col gap-4">
+                {(() => {
+                  const preview = getTournamentPreview(tournament);
+                  return (
+                    <div className="relative w-full aspect-video overflow-hidden rounded-xl bg-foreground/10 group/preview">
+                      {preview.imageUrl ? (
+                        <>
+                          <img
+                            src={preview.imageUrl}
+                            alt={`${tournament.name} preview`}
+                            className="h-full w-full object-cover transition-transform duration-300 group-hover/preview:scale-105"
+                          />
+                          {preview.youtubeId && (
+                            <div className="absolute inset-0 flex items-center justify-center bg-black/30 opacity-0 group-hover/preview:opacity-100 transition-opacity">
+                              <div className="w-12 h-12 rounded-full bg-red-600/90 flex items-center justify-center">
+                                <Play className="w-6 h-6 text-white ml-0.5" fill="white" />
+                              </div>
+                            </div>
+                          )}
+                        </>
+                      ) : (
+                        <div className="h-full w-full flex items-center justify-center bg-gradient-to-br from-[#1C1B1D] via-[#242326] to-[#1A191B]">
+                          <span className="text-2xl font-light text-foreground/30">
+                            {getTournamentInitials(tournament.name)}
+                          </span>
+                        </div>
+                      )}
+                      <div className="absolute inset-0 bg-gradient-to-t from-background/70 via-transparent to-transparent pointer-events-none" />
+                      {preview.youtubeId && (
+                        <div className="absolute bottom-2 left-2 flex items-center gap-1 text-[10px] text-foreground/70 pointer-events-none">
+                          <Video className="w-3 h-3" />
+                          Video available
+                        </div>
+                      )}
+                    </div>
+                  );
+                })()}
+
                 <div className="min-w-0 flex-1">
-                  <div className="flex items-center gap-2 mb-1">
+                  <div className="flex items-center gap-2 mb-1.5">
                     <h3 className="text-sm font-medium text-foreground truncate">
                       {tournament.name}
                     </h3>
@@ -243,7 +327,7 @@ export default function TournamentsPage() {
                     )}
                   </div>
 
-                  <div className="flex items-center gap-3 text-[11px] text-muted-foreground">
+                  <div className="flex items-center gap-3 text-[11px] text-foreground/45">
                     {tournament.location && (
                       <span className="flex items-center gap-1">
                         <MapPin className="w-3 h-3" />
@@ -262,9 +346,9 @@ export default function TournamentsPage() {
 
                 <div className="flex items-center gap-4 shrink-0">
                   <div className="text-right">
-                    <span className="text-xs text-muted-foreground">{tournament.matchup_count ?? 0} matches</span>
+                    <span className="text-xs text-foreground/45">{tournament.matchup_count ?? 0} matches</span>
                   </div>
-                  <ChevronRight className="w-4 h-4 text-border group-hover:text-[#9B7B5B] transition-colors" />
+                  <ChevronRight className="w-4 h-4 text-foreground/20 group-hover:text-[#9B7B5B] transition-colors" />
                 </div>
               </div>
             </motion.div>

@@ -86,11 +86,12 @@ export function PlayerSelection({
   const isVideoOverlay = !isModal && videoRef && videoViewportRef;
   
   const { previewData, selectedPlayers, setSelectedPlayers, setPreviewData } = usePlayerSelectionStore(sessionId);
-  const requiresOpponent = (previewData?.players.length ?? 0) > 1;
+  const hasMultiplePlayers = (previewData?.players.length ?? 0) > 1;
   const selectedPlayer = selectedPlayers.find((p) => p.role === "player");
   const selectedOpponent = selectedPlayers.find((p) => p.role === "opponent");
+  // Opponent is always optional — show the step but don't block confirm
   const currentStep: "player" | "opponent" | "done" =
-    selectedPlayer ? (requiresOpponent ? (selectedOpponent ? "done" : "opponent") : "done") : "player";
+    selectedPlayer ? (hasMultiplePlayers ? (selectedOpponent ? "done" : "opponent") : "done") : "player";
   const hoverAccentClass =
     currentStep === "opponent"
       ? "hover:border-[#5B9B7B]/70 hover:bg-[#5B9B7B]/10"
@@ -174,7 +175,7 @@ export function PlayerSelection({
   };
 
   const handleConfirm = async () => {
-    if (!selectedPlayer || (requiresOpponent && !selectedOpponent)) return;
+    if (!selectedPlayer) return;
 
     setSubmitting(true);
     try {
@@ -270,16 +271,12 @@ export function PlayerSelection({
               <div className="flex items-center justify-between gap-2">
                 <div>
                   <p className="text-[10px] text-[#8A8885] uppercase tracking-wider">
-                    {currentStep === "player" ? "Step 1 of 2" : "Step 2 of 2"}
+                    {currentStep === "player" ? "Step 1" : currentStep === "opponent" ? "Step 2 (optional)" : "Ready"}
                   </p>
                   <p className="text-xs text-[#E8E6E3] font-medium">
                     {currentStep === "player" && "Click a box to set the Player"}
-                    {currentStep === "opponent" && "Click a box to set the Opponent"}
-                    {currentStep === "done" && (
-                      requiresOpponent
-                        ? "Opponent set. Click Change Opponent, then click a box to update."
-                        : "Player set. Click Confirm to proceed."
-                    )}
+                    {currentStep === "opponent" && "Pick an opponent or confirm to continue"}
+                    {currentStep === "done" && "All set. Click Confirm to proceed."}
                   </p>
                 </div>
                 {selectedPlayer && currentStep !== "player" && (
@@ -367,7 +364,7 @@ export function PlayerSelection({
             <div className="flex items-center justify-end pt-2 border-t border-[#363436]/30">
               <button
                 onClick={handleConfirm}
-                disabled={!selectedPlayer || (requiresOpponent && !selectedOpponent) || submitting}
+                disabled={!selectedPlayer || submitting}
                 className="text-xs px-4 py-2 rounded-lg bg-[#9B7B5B] hover:bg-[#8A6B4B] text-[#1E1D1F] font-medium transition-colors disabled:opacity-50 disabled:cursor-not-allowed flex items-center gap-2"
               >
                 {submitting ? (
@@ -404,11 +401,11 @@ export function PlayerSelectionOverlays({
   sessionId: string;
 }) {
   const { previewData, selectedPlayers, setSelectedPlayers } = usePlayerSelectionStore(sessionId);
-  const requiresOpponent = (previewData?.players.length ?? 0) > 1;
+  const hasMultiplePlayers = (previewData?.players.length ?? 0) > 1;
   const selectedPlayer = selectedPlayers.find((p) => p.role === "player");
   const selectedOpponent = selectedPlayers.find((p) => p.role === "opponent");
   const currentStep: "player" | "opponent" | "done" =
-    selectedPlayer ? (requiresOpponent ? (selectedOpponent ? "done" : "opponent") : "done") : "player";
+    selectedPlayer ? (hasMultiplePlayers ? (selectedOpponent ? "done" : "opponent") : "done") : "player";
   const groupHoverAccentClass =
     currentStep === "opponent"
       ? "group-hover:border-[#5B9B7B] group-hover:bg-[#5B9B7B]/10"

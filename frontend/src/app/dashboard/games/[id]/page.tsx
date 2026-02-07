@@ -103,7 +103,7 @@ export default function GameViewerPage() {
   const [isPlaying, setIsPlaying] = useState(false);
   const [currentTime, setCurrentTime] = useState(0);
   const [duration, setDuration] = useState(0);
-  const [isMuted, setIsMuted] = useState(true);
+  const [isMuted, setIsMuted] = useState(false);
   const [currentFrame, setCurrentFrame] = useState(0);
   const [videoFps, setVideoFps] = useState(30);
   const [playbackRate, setPlaybackRate] = useState(1);
@@ -112,7 +112,6 @@ export default function GameViewerPage() {
   const [videoBounds, setVideoBounds] = useState<{ top: number; left: number; right: number; width: number; height: number } | null>(null);
   const isResizing = useRef(false);
   const [activeTip, setActiveTip] = useState<VideoTip | null>(null);
-  const [liveTipCycleIndex, setLiveTipCycleIndex] = useState(0);
 
   const [showPlayerSelection, setShowPlayerSelection] = useState(false);
   const playerSelectionAutoOpened = useRef(false);
@@ -270,160 +269,50 @@ export default function GameViewerPage() {
     return null;
   }, [poseData?.frames]);
 
-  // Generate video tips from stroke data with opponent context
+  // Generate video tips from stroke data
   const videoTips = useMemo(() => {
-    // Build opponent context if we have multiple selected players and stored pose data
-    let opponentContext: { playerPoses: PersonPose[]; opponentPoses: PersonPose[] } | undefined;
-    if (selectedPersonIds.length >= 2 && poseData?.frames?.length) {
-      const playerId = selectedPersonIds[0];
-      const opponentId = selectedPersonIds[1];
+    const firstPlayer = session?.players?.[0];
+    const tipFps = poseBasedFps ?? fps;
+    const tips = generateTipsFromStrokes(strokeSummary?.strokes || [], tipFps, firstPlayer?.name);
 
-      // Helper to convert frame data to PersonPose for a specific person at a specific frame
-      const getPoseForFrame = (frameNumber: number, personId: number): PersonPose | null => {
-        const frameRow = poseData.frames.find(
-          (f) => f.frame_number === frameNumber && (f.person_id ?? 1) === personId
-        );
-        if (!frameRow || !frameRow.keypoints) return null;
-
-        // Build PersonPose from keypoints object
-        const keypoints = Object.entries(frameRow.keypoints).map(([name, kp]) => ({
-          x: kp.x * videoW,
-          y: kp.y * videoH,
-          conf: kp.visibility ?? 0.5,
-          name,
-        }));
-
-        // Compute bbox from keypoints
-        const xs = keypoints.map((kp) => kp.x);
-        const ys = keypoints.map((kp) => kp.y);
-        const bbox: [number, number, number, number] = [
-          Math.min(...xs),
-          Math.min(...ys),
-          Math.max(...xs),
-          Math.max(...ys),
-        ];
-
-        return {
-          id: personId,
-          bbox,
-          confidence: keypoints.reduce((sum, kp) => sum + kp.conf, 0) / keypoints.length,
-          keypoints,
-        };
-      };
-
-      // Get poses for both players across frames relevant to strokes
-      const playerPoses: PersonPose[] = [];
-      const opponentPoses: PersonPose[] = [];
-
-      // Collect poses at key stroke frames
-      if (strokeSummary?.strokes) {
-        for (const stroke of strokeSummary.strokes) {
-          const playerPose = getPoseForFrame(stroke.peak_frame, playerId);
-          const opponentPose = getPoseForFrame(stroke.peak_frame, opponentId);
-          if (playerPose) playerPoses.push(playerPose);
-          if (opponentPose) opponentPoses.push(opponentPose);
+    // Fix timestamps by looking up actual pose-data timestamps (bypasses fps math)
+    if (poseData?.frames?.length && strokeSummary?.strokes?.length) {
+      const playerFrames = poseData.frames.filter((f) => (f.person_id ?? 0) === 0);
+      for (const tip of tips) {
+        const stroke = strokeSummary.strokes.find((s) => tip.strokeId === s.id);
+        if (!stroke) continue;
+        // Find closest pose frame to peak_frame / start_frame and use its timestamp
+        let peakDist = Infinity;
+        let peakTs: number | null = null;
+        let startDist = Infinity;
+        let startTs: number | null = null;
+        for (const f of playerFrames) {
+          const pd = Math.abs(f.frame_number - stroke.peak_frame);
+          if (pd < peakDist) { peakDist = pd; peakTs = f.timestamp; }
+          const sd = Math.abs(f.frame_number - stroke.start_frame);
+          if (sd < startDist) { startDist = sd; startTs = f.timestamp; }
         }
+        if (peakTs !== null && peakDist < 5) tip.timestamp = peakTs;
+        if (startTs !== null && startDist < 5) tip.seekTime = startTs;
       }
-
-      opponentContext = { playerPoses, opponentPoses };
     }
 
-    const firstPlayer = session?.players?.[0];
-    // Use pose-derived fps for stroke timing (stroke frame numbers come from pose analysis)
-    const tipFps = poseBasedFps ?? fps;
-    const tips = generateTipsFromStrokes(strokeSummary?.strokes || [], tipFps, opponentContext, firstPlayer?.name);
+    // Drop tips that start in the last 20% of the video (dead time after action ends)
+    const cutoff = duration > 0 ? duration * 0.8 : Infinity;
+    const filtered = tips.filter((t) => t.timestamp <= cutoff);
+
     console.log('[VideoTips] Generated tips:', {
       strokeCount: strokeSummary?.strokes?.length || 0,
-      tipCount: tips.length,
+      tipCount: filtered.length,
+      dropped: tips.length - filtered.length,
       tipFps,
-      hasOpponentContext: !!opponentContext,
-      selectedPlayers: selectedPersonIds,
-      tips: tips.map(t => ({ id: t.id, timestamp: t.timestamp, title: t.title }))
+      poseBasedFps,
+      videoDuration: duration,
+      tips: filtered.map(t => ({ id: t.id, ts: t.timestamp.toFixed(2), title: t.title }))
     });
-    return tips;
-  }, [strokeSummary?.strokes, fps, poseBasedFps, selectedPersonIds, poseData?.frames, videoW, videoH, session?.trajectory_data]);
+    return filtered;
+  }, [strokeSummary?.strokes, fps, poseBasedFps, selectedPersonIds, poseData?.frames, videoW, videoH, session?.trajectory_data, duration]);
 
-  // Live pose-based insight — rotates through categories between stroke tips
-  const currentPoseFrame = useMemo(() => {
-    if (!poseData?.frames?.length) return null;
-    // Find the closest player (person_id=0) frame to currentFrame
-    let best: typeof poseData.frames[0] | null = null;
-    let bestDist = Infinity;
-    for (const f of poseData.frames) {
-      if ((f.person_id ?? 0) !== 0) continue;
-      const d = Math.abs(f.frame_number - currentFrame);
-      if (d < bestDist) { bestDist = d; best = f; }
-    }
-    if (bestDist > 10) return null;
-    return best;
-  }, [poseData?.frames, currentFrame]);
-
-  // Cycle live tips every 2.5s when no stroke tip is active
-  useEffect(() => {
-    if (activeTip || !currentPoseFrame) return;
-    const timer = setInterval(() => {
-      setLiveTipCycleIndex((i) => i + 1);
-    }, 2500);
-    return () => clearInterval(timer);
-  }, [activeTip, currentPoseFrame]);
-
-  const livePoseInsight = useMemo((): { title: string; message: string } | null => {
-    if (activeTip || !currentPoseFrame) return null;
-    const ja = currentPoseFrame.joint_angles ?? {};
-    const bm = currentPoseFrame.body_metrics ?? {};
-
-    const rKnee = ja.right_knee;
-    const lKnee = ja.left_knee;
-    const rElbow = ja.right_elbow;
-    const lElbow = ja.left_elbow;
-    const hipRot = bm.hip_rotation;
-    const shoulderRot = bm.shoulder_rotation;
-    const spineLean = bm.spine_lean;
-
-    type Insight = { title: string; message: string };
-    const insights: Insight[] = [];
-
-    // Only flag things that are genuinely off — skip normal ranges
-
-    // Standing too upright
-    if (rKnee != null && lKnee != null) {
-      const avgKnee = (rKnee + lKnee) / 2;
-      if (avgKnee > 168) {
-        insights.push({ title: "Stance", message: "Legs are too straight — bend your knees to get lower and push off faster" });
-      } else if (avgKnee < 125) {
-        insights.push({ title: "Stance", message: "You're crouching very deep — rise up slightly so you can move laterally" });
-      }
-    }
-
-    // Arms too straight or too tucked between rallies
-    if (rElbow != null && lElbow != null) {
-      const avgElbow = (rElbow + lElbow) / 2;
-      if (avgElbow > 160) {
-        insights.push({ title: "Ready Position", message: "Arms are hanging straight — keep your elbows bent and racket up for quicker preparation" });
-      } else if (avgElbow < 60) {
-        insights.push({ title: "Ready Position", message: "Arms are very tucked in — relax them slightly so you can react to either side" });
-      }
-    }
-
-    // Loading rotational energy
-    if (shoulderRot != null && hipRot != null) {
-      const separation = Math.abs(shoulderRot - hipRot);
-      if (separation > 18) {
-        insights.push({ title: "Torso", message: "Upper body is winding up — good rotational loading for the next shot" });
-      }
-    }
-
-    // Leaning too far
-    if (spineLean != null) {
-      const lean = Math.abs(spineLean);
-      if (lean > 12) {
-        insights.push({ title: "Balance", message: `Leaning ${spineLean > 0 ? "forward" : "backward"} quite a lot — center your weight for better recovery` });
-      }
-    }
-
-    if (insights.length === 0) return null;
-    return insights[liveTipCycleIndex % insights.length];
-  }, [activeTip, currentPoseFrame, liveTipCycleIndex]);
 
   const tipSeekTime = useMemo(() => {
     if (!tipParam || videoTips.length === 0) return null;
@@ -481,7 +370,7 @@ export default function GameViewerPage() {
   const showCourt = activeTab === "court";
   const showAnalytics = activeTab === "analytics";
   const showSidePanel =
-    showCourt || activeTab === "pose" || showAnalytics;
+    showTrack || showCourt || activeTab === "pose" || showAnalytics;
 
   const updateVideoDisplayWidth = useCallback(() => {
     const viewport = videoViewportRef.current;
@@ -545,17 +434,6 @@ export default function GameViewerPage() {
     };
   }, [updateVideoDisplayWidth, videoUrl, showSidePanel, panelWidth]);
 
-  // Get current stroke data for visual overlay
-  const currentStroke = useMemo(() => {
-    if (!activeTip || !strokeSummary?.strokes) return null;
-
-    // Extract stroke ID from tip ID (format: "stroke-{id}-contact" or "stroke-{id}-follow")
-    const match = activeTip.id.match(/stroke-([^-]+)-/);
-    if (!match) return null;
-
-    const strokeId = match[1];
-    return strokeSummary.strokes.find(s => s.id === strokeId) || null;
-  }, [activeTip, strokeSummary?.strokes]);
   // Debug mode: annotate current frame
   const debugAnnotate = useCallback(async (label: "forehand" | "backhand" | "false_positive" | "missed") => {
     if (!gameId || debugLoading) return;
@@ -900,7 +778,11 @@ export default function GameViewerPage() {
   // Primary: full-video tracking (no click needed)
   const hasStoredPose = !!(poseData?.frames?.length);
 
+  // How many players did the user actually select? (1 = player only, 2 = player + opponent)
+  const selectedPlayerCount = session?.players?.length ?? 1;
+
   // Convert stored pose data to PersonPose[] for the current frame
+  // Only include persons the user selected (person_id 0 = player, 1 = opponent)
   const storedPersonsForFrame = useMemo((): PersonPose[] => {
     if (!hasStoredPose || !poseData?.frames) return [];
     // Find closest frames to currentFrame
@@ -917,6 +799,8 @@ export default function GameViewerPage() {
     const personMap = new Map<number, typeof frameRows>();
     for (const row of frameRows) {
       const pid = row.person_id ?? 1;
+      // Only include persons the user selected
+      if (pid >= selectedPlayerCount) continue;
       if (!personMap.has(pid)) personMap.set(pid, []);
       personMap.get(pid)!.push(row);
     }
@@ -945,21 +829,21 @@ export default function GameViewerPage() {
       persons.push({ id: pid, bbox, confidence: 0.9, keypoints: keypointsList });
     }
     return persons;
-  }, [hasStoredPose, poseData, currentFrame, videoW, videoH]);
+  }, [hasStoredPose, poseData, currentFrame, videoW, videoH, selectedPlayerCount]);
 
   // Use stored data when available, otherwise fall back to live detection
   useEffect(() => {
     if (showPoseOverlay && storedPersonsForFrame.length > 0) {
       setDetectedPersons(storedPersonsForFrame);
       if (selectedPersonIds.length === 0 && storedPersonsForFrame.length > 0) {
-        // Auto-select up to 2 players for comparative analysis
+        // Only auto-select as many players as the user originally chose
         const toSelect = storedPersonsForFrame
-          .slice(0, Math.min(2, storedPersonsForFrame.length))
+          .slice(0, Math.min(selectedPlayerCount, storedPersonsForFrame.length))
           .map(p => p.id);
         setSelectedPersonIds(toSelect);
       }
     }
-  }, [showPoseOverlay, storedPersonsForFrame, selectedPersonIds.length]);
+  }, [showPoseOverlay, storedPersonsForFrame, selectedPersonIds.length, selectedPlayerCount]);
 
   // Fallback: live GPU detection when no stored data
   const handleDetectPose = useCallback((frame?: number) => {
@@ -972,9 +856,8 @@ export default function GameViewerPage() {
       .then((res) => {
         setDetectedPersons(res.data.persons);
         if (res.data.persons.length > 0 && selectedPersonIds.length === 0) {
-          // Auto-select up to 2 players for comparative analysis
           const toSelect = res.data.persons
-            .slice(0, Math.min(2, res.data.persons.length))
+            .slice(0, Math.min(selectedPlayerCount, res.data.persons.length))
             .map(p => p.id);
           setSelectedPersonIds(toSelect);
         }
@@ -1287,7 +1170,6 @@ export default function GameViewerPage() {
                   tips={videoTips}
                   isPlaying={isPlaying}
                   onTipChange={handleTipChange}
-                  liveTip={livePoseInsight}
                 />
 
                 {/* Live Stroke Indicator - Top-left of video */}

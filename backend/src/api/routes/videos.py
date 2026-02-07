@@ -270,6 +270,17 @@ def _analyze_youtube_background(
         except Exception:
             pass
 
+        # Trigger local pose analysis (runs YOLO locally, no GPU server needed)
+        try:
+            from ..routes.pose import process_pose_analysis
+            from ..utils.video_utils import extract_video_path_from_url
+            video_storage_path = extract_video_path_from_url(video_url)
+            logger.info(f"[VideoAnalyze] Starting local pose analysis for session {session_id}")
+            process_pose_analysis(session_id, video_storage_path, video_url)
+            logger.info(f"[VideoAnalyze] Pose analysis completed for session {session_id}")
+        except Exception as pose_err:
+            logger.warning(f"[VideoAnalyze] Local pose analysis failed for {session_id}: {pose_err}")
+
     except Exception as e:
         logger.error(f"[VideoAnalyze] Failed for video {video_id}: {e}")
         try:

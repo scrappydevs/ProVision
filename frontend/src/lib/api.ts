@@ -1061,5 +1061,58 @@ export const createAndAnalyzeVideo = async (
   return { videoId: video.id, sessionId: analyzeResp.data.session_id };
 };
 
+// YouTube Clips
+export interface YouTubeClip {
+  id: string;
+  coach_id: string;
+  youtube_url: string;
+  youtube_video_id: string;
+  title?: string;
+  thumbnail_url?: string;
+  clip_start_time: number;
+  clip_end_time: number;
+  duration: number;
+  video_storage_path?: string;
+  video_public_url?: string;
+  session_id?: string;
+  status: "pending" | "processing" | "completed" | "failed";
+  error_message?: string;
+  metadata?: Record<string, unknown>;
+  created_at: string;
+  updated_at?: string;
+}
+
+export interface YouTubeClipCreate {
+  youtube_url: string;
+  clip_start_time: number;
+  clip_end_time: number;
+  title?: string;
+}
+
+export const createYouTubeClip = (data: YouTubeClipCreate) =>
+  api.post<YouTubeClip>("/api/youtube-clips", data);
+
+export const listYouTubeClips = () =>
+  api.get<YouTubeClip[]>("/api/youtube-clips");
+
+export const getYouTubeClip = (clipId: string) =>
+  api.get<YouTubeClip>(`/api/youtube-clips/${clipId}`);
+
+export const analyzeYouTubeClip = (clipId: string) =>
+  api.post<{ message: string; session_id: string }>(
+    `/api/youtube-clips/${clipId}/analyze`
+  );
+
+export const deleteYouTubeClip = (clipId: string) =>
+  api.delete(`/api/youtube-clips/${clipId}`);
+
+export const getClipStreamingUrl = (clipId: string) =>
+  api.get<{
+    streaming_url: string;
+    start_time: number;
+    http_headers: Record<string, string>;
+    expires: string;
+  }>(`/api/youtube-clips/${clipId}/streaming-url`);
+
 export { api };
 export default api;

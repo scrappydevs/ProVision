@@ -5,7 +5,7 @@ from dotenv import load_dotenv
 
 load_dotenv()
 
-from .routes import sessions, sam2, sam3d, egox, pose, stroke, players, ai_chat, recordings, tournaments, analytics, videos
+from .routes import sessions, sam2, sam3d, egox, pose, stroke, players, ai_chat, recordings, tournaments, analytics, videos, youtube_clips
 
 app = FastAPI(
     title="ProVision API",
@@ -35,6 +35,7 @@ app.include_router(recordings.router, prefix="/api/recordings", tags=["recording
 app.include_router(tournaments.router, prefix="/api/tournaments", tags=["tournaments"])
 app.include_router(analytics.router, tags=["analytics"])  # Already has /api/analytics prefix
 app.include_router(videos.router, prefix="/api/videos", tags=["videos"])
+app.include_router(youtube_clips.router, prefix="/api/youtube-clips", tags=["youtube-clips"])
 
 
 @app.get("/")

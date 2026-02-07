@@ -291,10 +291,11 @@ export function AnalyticsDashboard({ sessionId, onSeekToTime, playerName }: Anal
     );
   }
 
-  const ballSpeed = analytics.ball_analytics.speed;
-  const trajectory = analytics.ball_analytics.trajectory;
-  const movement = analytics.pose_analytics.movement;
-  const contact = analytics.pose_analytics.contact;
+  // Safely extract analytics with null checks
+  const ballSpeed = analytics?.ball_analytics?.speed || { avg: 0, max: 0, min: 0 };
+  const trajectory = analytics?.ball_analytics?.trajectory || { spin: "Unknown", height_variation: 0, lateral_movement: 0 };
+  const movement = analytics?.pose_analytics?.movement || { footwork_score: 0, balance_score: 0, timing_score: 0 };
+  const contact = analytics?.pose_analytics?.contact || { racket_angle: 0, follow_through: 0, body_rotation: 0 };
 
   // --- Derived stats ---
 
@@ -544,7 +545,7 @@ export function AnalyticsDashboard({ sessionId, onSeekToTime, playerName }: Anal
               <span style={{ fontSize: 12, color: '#8A8885', marginLeft: 6 }}>consistency</span>
             </div>
           )}
-          {analytics.ball_analytics.spin?.estimate && (
+          {analytics?.ball_analytics?.spin?.estimate && (
             <div className="flex items-center gap-1.5">
               <Zap className="w-3.5 h-3.5 text-[#9B7B5B]" />
               <span style={{ fontSize: 12, color: '#8A8885' }}>Spin:</span>

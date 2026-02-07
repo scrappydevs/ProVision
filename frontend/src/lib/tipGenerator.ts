@@ -1,10 +1,5 @@
 import { VideoTip } from "@/components/viewer/VideoTips";
-import { Stroke, PersonPose } from "@/lib/api";
-
-export interface OpponentContext {
-  playerPoses: PersonPose[];
-  opponentPoses: PersonPose[];
-}
+import { Stroke } from "@/lib/api";
 
 /**
  * Generate coaching tips from strokes — natural language, actionable feedback.
@@ -15,7 +10,6 @@ export interface OpponentContext {
 export function generateTipsFromStrokes(
   strokes: Stroke[],
   fps: number = 30,
-  opponentContext?: OpponentContext,
   playerName?: string
 ): VideoTip[] {
   const tips: VideoTip[] = [];
@@ -24,10 +18,10 @@ export function generateTipsFromStrokes(
     return tips;
   }
 
-  strokes.forEach((stroke, index) => {
+  strokes.forEach((stroke) => {
     const contactTime = stroke.peak_frame / fps;
 
-    const contactTip = generateStrokeTip(stroke, index, opponentContext, playerName);
+    const contactTip = generateStrokeTip(stroke, playerName);
     if (contactTip) {
       tips.push({
         id: `stroke-${stroke.id}-contact`,
@@ -54,40 +48,6 @@ export function generateTipsFromStrokes(
 }
 
 /**
- * Get opponent position context for a given stroke
- */
-function getOpponentPositionContext(
-  strokeIndex: number,
-  opponentContext?: OpponentContext
-): { hasOpponent: boolean; opponentPosition?: string; distanceContext?: string } {
-  if (!opponentContext || opponentContext.opponentPoses.length === 0) {
-    return { hasOpponent: false };
-  }
-
-  const opponentPose = opponentContext.opponentPoses[strokeIndex];
-  if (!opponentPose) {
-    return { hasOpponent: false };
-  }
-
-  const [x1, , x2] = opponentPose.bbox;
-  const centerX = (x1 + x2) / 2;
-  const frameWidth = 1920;
-
-  let position = "center";
-  if (centerX < frameWidth * 0.33) {
-    position = "left side";
-  } else if (centerX > frameWidth * 0.67) {
-    position = "right side";
-  }
-
-  return {
-    hasOpponent: true,
-    opponentPosition: position,
-    distanceContext: "within rally distance",
-  };
-}
-
-/**
  * Check if an average-form stroke (75-85) has any single metric that stands
  * out enough to warrant a tip. Returns true if something is noteworthy.
  */
@@ -107,39 +67,18 @@ function hasNotableIssue(metrics: Stroke["metrics"], strokeType: string): boolea
  */
 function generateStrokeTip(
   stroke: Stroke,
-  strokeIndex: number,
-  opponentContext?: OpponentContext,
   playerName?: string
 ): { title: string; message: string } | null {
   const { stroke_type, form_score, metrics } = stroke;
   const strokeName = stroke_type.charAt(0).toUpperCase() + stroke_type.slice(1);
   const prefix = playerName ? `${playerName.split(" ")[0]}'s` : "Your";
 
-  const oppContext = getOpponentPositionContext(strokeIndex, opponentContext);
-
-  // Skip average strokes that don't have any standout issue
-  if (form_score >= 75 && form_score <= 85 && !hasNotableIssue(metrics, stroke_type)) {
+  // Only show tips for strokes with something to improve
+  if (form_score > 85) {
     return null;
   }
-
-  // Excellent form — positive reinforcement
-  if (form_score > 85) {
-    const strengths: string[] = [];
-    if (metrics.elbow_angle >= 130) strengths.push("full arm extension");
-    if (Math.abs(metrics.hip_rotation_range) >= 15) strengths.push("strong hip rotation");
-    if (Math.abs(metrics.shoulder_rotation_range) >= 20) strengths.push("good shoulder turn");
-    if (metrics.elbow_range >= 50) strengths.push("complete follow-through");
-
-    const detail = strengths.length > 0
-      ? strengths.join(" with ")
-      : "smooth and well-coordinated";
-
-    return {
-      title: `${prefix} ${strokeName} — Excellent`,
-      message: oppContext.hasOpponent
-        ? `Great shot — ${detail}. Opponent at ${oppContext.opponentPosition}`
-        : `Great shot — ${detail}`,
-    };
+  if (form_score >= 75 && form_score <= 85 && !hasNotableIssue(metrics, stroke_type)) {
+    return null;
   }
 
   // Priority issues — find the most important thing to fix
