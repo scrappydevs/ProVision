@@ -90,35 +90,29 @@ def get_youtube_metadata(url: str) -> Optional[dict]:
     import yt_dlp
 
     # Try yt-dlp (PO Token plugin handles bot bypass automatically if installed)
-    try:
-        ydl_opts = _inject_cookies({
-            "quiet": True,
-            "no_warnings": True,
-            "skip_download": True,
-        })
+    # IMPORTANT: Don't specify format for metadata — it causes "Requested format
+    # is not available" when cookies authenticate as a premium/restricted user.
+    # Use extract_flat or skip_download without format to get metadata only.
+    for attempt_name, use_cookies in [("cookies", True), ("no_cookies", False)]:
+        try:
+            ydl_opts = {
+                "quiet": True,
+                "no_warnings": True,
+                "skip_download": True,
+                "format": None,           # Explicitly no format selection
+                "extract_flat": "discard",  # Don't resolve formats at all
+            }
+            if use_cookies:
+                ydl_opts = _inject_cookies(ydl_opts)
 
-        with yt_dlp.YoutubeDL(ydl_opts) as ydl:
-            info = ydl.extract_info(url, download=False)
-            if info:
-                return _extract_metadata_from_info(info)
-    except Exception as e:
-        logger.warning(f"yt-dlp metadata (with cookies) failed for {url}: {e}")
-
-    # Retry without cookies — PO Token plugin may still handle bot bypass
-    try:
-        ydl_opts = {
-            "quiet": True,
-            "no_warnings": True,
-            "skip_download": True,
-        }
-
-        with yt_dlp.YoutubeDL(ydl_opts) as ydl:
-            info = ydl.extract_info(url, download=False)
-            if info:
-                logger.info(f"yt-dlp metadata succeeded without cookies for {url}")
-                return _extract_metadata_from_info(info)
-    except Exception as e:
-        logger.warning(f"yt-dlp metadata (no cookies) also failed for {url}: {e}")
+            with yt_dlp.YoutubeDL(ydl_opts) as ydl:
+                info = ydl.extract_info(url, download=False)
+                if info:
+                    if not use_cookies:
+                        logger.info(f"yt-dlp metadata succeeded without cookies for {url}")
+                    return _extract_metadata_from_info(info)
+        except Exception as e:
+            logger.warning(f"yt-dlp metadata ({attempt_name}) failed for {url}: {e}")
 
     # Fallback: use YouTube oEmbed API (not blocked by bot detection)
     logger.info(f"Falling back to oEmbed for metadata: {video_id}")
@@ -163,33 +157,47 @@ def get_youtube_streaming_url(url: str) -> Optional[dict]:
     Returns dict with 'url', 'title', 'duration', 'http_headers' for direct playback.
     Note: URLs expire after ~6 hours and require headers for playback.
     """
-    try:
-        import yt_dlp
+    import yt_dlp
 
-        ydl_opts = _inject_cookies({
-            "format": "best[ext=mp4][height<=720]/best[ext=mp4]/bestvideo[height<=720]+bestaudio/best",
-            "quiet": True,
-            "no_warnings": True,
-            "skip_download": True,
-            "extract_flat": False,
-        })
+    # Try with progressively more lenient format strings
+    format_attempts = [
+        "best[ext=mp4][height<=720]",
+        "best[ext=mp4]",
+        "bestvideo[height<=720]+bestaudio/best",
+        "best",
+    ]
 
-        with yt_dlp.YoutubeDL(ydl_opts) as ydl:
-            info = ydl.extract_info(url, download=False)
-            if not info:
-                return None
+    for attempt_name, use_cookies in [("cookies", True), ("no_cookies", False)]:
+        for fmt in format_attempts:
+            try:
+                ydl_opts = {
+                    "format": fmt,
+                    "quiet": True,
+                    "no_warnings": True,
+                    "skip_download": True,
+                    "extract_flat": False,
+                }
+                if use_cookies:
+                    ydl_opts = _inject_cookies(ydl_opts)
 
-            return {
-                "url": info.get("url"),  # Direct streaming URL
-                "title": info.get("title"),
-                "duration": info.get("duration"),
-                "thumbnail": info.get("thumbnail"),
-                "http_headers": info.get("http_headers", {}),
-                "formats": info.get("formats", []),
-            }
-    except Exception as e:
-        logger.error(f"Failed to get streaming URL for {url}: {e}")
-        return None
+                with yt_dlp.YoutubeDL(ydl_opts) as ydl:
+                    info = ydl.extract_info(url, download=False)
+                    if not info:
+                        continue
+
+                    return {
+                        "url": info.get("url"),
+                        "title": info.get("title"),
+                        "duration": info.get("duration"),
+                        "thumbnail": info.get("thumbnail"),
+                        "http_headers": info.get("http_headers", {}),
+                        "formats": info.get("formats", []),
+                    }
+            except Exception as e:
+                logger.warning(f"Streaming URL ({attempt_name}, format={fmt}) failed: {e}")
+
+    logger.error(f"Failed to get streaming URL for {url} (all attempts exhausted)")
+    return None
 
 
 def download_youtube_video(
@@ -224,37 +232,46 @@ def download_youtube_video(
 
         # Fallback: Download full video
         output_path = os.path.join(temp_dir, "video.mp4")
-        base_opts = {
-            "format": "best[ext=mp4][height<=720]/best[ext=mp4]/bestvideo[height<=720]+bestaudio/best",
-            "merge_output_format": "mp4",
-            "outtmpl": output_path,
-            "quiet": True,
-            "no_warnings": True,
-            "max_filesize": 500 * 1024 * 1024,
-        }
 
-        # Try with cookies first, then without if cookies cause format issues
-        for attempt, use_cookies in enumerate(["cookies", "no_cookies"]):
-            try:
-                opts = _inject_cookies(dict(base_opts)) if use_cookies == "cookies" else dict(base_opts)
-                logger.info(f"[VideoDownload] Attempt {attempt+1} ({use_cookies}) for {url}")
-                with yt_dlp.YoutubeDL(opts) as ydl:
-                    ydl.download([url])
+        # Progressive format fallback — most specific first, most lenient last
+        format_attempts = [
+            "best[ext=mp4][height<=720]",
+            "best[ext=mp4]",
+            "bestvideo[height<=720]+bestaudio/best",
+            "best",
+        ]
 
-                downloaded = _find_downloaded_file(temp_dir, output_path)
-                if downloaded:
-                    return downloaded
-                logger.error(f"Download completed ({use_cookies}) but no video file found")
-            except Exception as dl_err:
-                logger.warning(f"[VideoDownload] {use_cookies} failed: {dl_err}")
-                # Clean up partial downloads before retry
-                for f in os.listdir(temp_dir):
-                    try:
-                        os.unlink(os.path.join(temp_dir, f))
-                    except Exception:
-                        pass
-                if use_cookies == "no_cookies":
-                    raise  # both attempts failed, re-raise
+        # Try cookies first (authenticated), then without (PO Token handles bot bypass)
+        for use_cookies in ["cookies", "no_cookies"]:
+            for fmt in format_attempts:
+                try:
+                    opts = {
+                        "format": fmt,
+                        "merge_output_format": "mp4",
+                        "outtmpl": output_path,
+                        "quiet": True,
+                        "no_warnings": True,
+                        "max_filesize": 500 * 1024 * 1024,
+                    }
+                    if use_cookies == "cookies":
+                        opts = _inject_cookies(opts)
+
+                    logger.info(f"[VideoDownload] {use_cookies}, format={fmt} for {url}")
+                    with yt_dlp.YoutubeDL(opts) as ydl:
+                        ydl.download([url])
+
+                    downloaded = _find_downloaded_file(temp_dir, output_path)
+                    if downloaded:
+                        return downloaded
+                    logger.warning(f"Download completed ({use_cookies}, {fmt}) but no video file found")
+                except Exception as dl_err:
+                    logger.warning(f"[VideoDownload] {use_cookies}/{fmt} failed: {dl_err}")
+                    # Clean up partial downloads before retry
+                    for f in os.listdir(temp_dir):
+                        try:
+                            os.unlink(os.path.join(temp_dir, f))
+                        except Exception:
+                            pass
 
         logger.error("All download attempts failed")
         return None
