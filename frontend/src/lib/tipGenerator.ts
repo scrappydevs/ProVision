@@ -16,6 +16,18 @@ function isReliableOpponentStroke(stroke: Stroke): boolean {
   return Number.isFinite(confidence) && confidence >= 0.75;
 }
 
+function isReliablePlayerStroke(stroke: Stroke): boolean {
+  const owner = String(stroke.ai_insight_data?.shot_owner ?? stroke.metrics?.event_hitter ?? "").toLowerCase();
+  if (owner === "opponent") return false;
+  if (owner === "player") {
+    const rawConfidence = stroke.ai_insight_data?.shot_owner_confidence ?? stroke.metrics?.event_hitter_confidence;
+    const confidence = typeof rawConfidence === "number" ? rawConfidence : Number(rawConfidence);
+    return !Number.isFinite(confidence) || confidence >= 0.55;
+  }
+  // Legacy rows may not have owner metadata yet; keep them eligible.
+  return owner.length === 0;
+}
+
 /**
  * Generate coaching tips from strokes — natural language, actionable feedback.
  * Tips are generated for strokes that are notably good, notably weak, or have
@@ -35,6 +47,7 @@ export function generateTipsFromStrokes(
 
   strokes.forEach((stroke) => {
     if (isReliableOpponentStroke(stroke)) return;
+    if (!isReliablePlayerStroke(stroke)) return;
 
     const contactTime = stroke.peak_frame / fps;
 
@@ -81,6 +94,7 @@ function hasNotableIssue(metrics: Stroke["metrics"], strokeType: string): boolea
 /**
  * Generate a natural-language coaching tip for a stroke.
  * Returns null for average strokes with nothing notable.
+ * Enhanced to provide more specific, varied feedback based on actual metric values.
  */
 function generateStrokeTip(
   stroke: Stroke,
@@ -98,62 +112,95 @@ function generateStrokeTip(
     return null;
   }
 
-  // Priority issues — find the most important thing to fix
+  // Collect all issues with specific values for more varied, data-driven feedback
+  const issues: Array<{ priority: number; message: string }> = [];
 
+  // Elbow angle issues (CRITICAL — affects power and consistency)
   if (metrics.elbow_angle < 120) {
-    return {
-      title: `${prefix} ${strokeName}`,
-      message: `Extend your arm more at contact — a longer lever creates more racket-head speed through the ball`,
-    };
+    const angle = Math.round(metrics.elbow_angle);
+    issues.push({
+      priority: 1,
+      message: `Your elbow is bent at ${angle}° at contact — extending to 140-150° would increase racket-head speed and generate more ball spin`,
+    });
+  } else if (metrics.elbow_angle > 165) {
+    issues.push({
+      priority: 2,
+      message: `Your arm is too straight at contact (${Math.round(metrics.elbow_angle)}°) — a slight bend gives better control and reduces injury risk`,
+    });
   }
 
+  // Hip rotation (POWER SOURCE)
   const hipRot = Math.abs(metrics.hip_rotation_range);
   if (hipRot < 10) {
-    return {
-      title: `${prefix} ${strokeName}`,
-      message: `Rotate your hips more into the shot — the pelvis drives the kinetic chain for power transfer`,
-    };
+    issues.push({
+      priority: 1,
+      message: `Your hips rotated only ${Math.round(hipRot)}° — increase to 25-35° to drive power from your core into the shot`,
+    });
   }
 
+  // Follow-through (CONTROL & SPIN)
   if (metrics.elbow_range < 40) {
-    return {
-      title: `${prefix} ${strokeName}`,
-      message: `Finish the swing — a full follow-through keeps the racket accelerating and adds topspin control`,
-    };
+    const range = Math.round(metrics.elbow_range);
+    issues.push({
+      priority: 2,
+      message: `Your elbow extends only ${range}° through the swing — a full follow-through (60-80°) keeps the racket accelerating and adds topspin`,
+    });
   }
 
+  // Shoulder rotation (UPPER BODY ENGAGEMENT)
   const shoulderRot = Math.abs(metrics.shoulder_rotation_range);
   if (shoulderRot < 15) {
-    return {
-      title: `${prefix} ${strokeName}`,
-      message: `Turn your shoulders more through the shot — upper-body torque adds pace without extra arm effort`,
-    };
+    issues.push({
+      priority: 2,
+      message: `Your shoulders turned only ${Math.round(shoulderRot)}° — coil more (30-45°) to add pace without extra arm strain`,
+    });
   }
 
+  // Knee bend (STANCE & BALANCE)
   if (metrics.knee_angle < 130) {
-    return {
-      title: `${prefix} ${strokeName}`,
-      message: `You're crouching too low — stand up slightly for better balance and quicker recovery between shots`,
-    };
+    issues.push({
+      priority: 3,
+      message: `You're crouching too low (knee at ${Math.round(metrics.knee_angle)}°) — stand up to 140-150° for quicker recovery and better balance`,
+    });
+  } else if (metrics.knee_angle > 170) {
+    issues.push({
+      priority: 2,
+      message: `Your stance is too upright (knee at ${Math.round(metrics.knee_angle)}°) — bend to 145-155° for better power transfer and mobility`,
+    });
   }
 
-  if (metrics.knee_angle > 170) {
-    return {
-      title: `${prefix} ${strokeName}`,
-      message: `Bend your knees more — a lower stance gives you faster lateral movement and better weight transfer`,
-    };
+  // Spine lean (WEIGHT TRANSFER — critical for forehand)
+  const spineLean = Math.abs(metrics.spine_lean);
+  if (stroke_type === "forehand" && spineLean < 3) {
+    issues.push({
+      priority: 1,
+      message: `Your spine is nearly vertical (${Math.round(spineLean)}° lean) — shift your weight forward 8-12° at contact to transfer momentum through the ball`,
+    });
+  } else if (spineLean > 20) {
+    issues.push({
+      priority: 1,
+      message: `You're leaning too far forward (${Math.round(spineLean)}° spine lean) — this causes rushed contact and mishits. Stay at 8-12° for controlled power`,
+    });
   }
 
-  if (stroke_type === "forehand" && Math.abs(metrics.spine_lean) < 3) {
-    return {
-      title: `${prefix} ${strokeName}`,
-      message: `Shift your weight forward through the ball — leaning into contact transfers more momentum`,
-    };
+  // No notable issues — skip the tip
+  if (issues.length === 0) {
+    return null;
   }
 
-  // Weak form with no single standout issue — general guidance
+  // Sort by priority and take the top issue
+  issues.sort((a, b) => a.priority - b.priority);
+  const primaryIssue = issues[0];
+
+  // Add context from a secondary issue if available for richer feedback
+  let message = primaryIssue.message;
+  if (issues.length > 1 && issues[1].priority <= 2) {
+    const secondaryHint = issues[1].message.split("—")[0].trim(); // Just the observation part
+    message = `${primaryIssue.message.split("—")[0].trim()} and ${secondaryHint.toLowerCase()}`;
+  }
+
   return {
     title: `${prefix} ${strokeName}`,
-    message: `Focus on connecting the chain — drive from legs through hips and torso into the racket`,
+    message,
   };
 }

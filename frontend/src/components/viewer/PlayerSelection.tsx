@@ -2,7 +2,8 @@
 
 import { useState, useEffect } from "react";
 import { Loader2, Check, X, RefreshCw } from "lucide-react";
-import api, {
+import {
+  api,
   getPlayerPreview,
   selectPlayer,
   analyzePose,
@@ -116,7 +117,11 @@ export function PlayerSelection({
       setPreviewData(response.data);
     } catch (err: any) {
       console.error("[PlayerSelection] Error loading preview:", err);
-      const errorMessage = err?.response?.data?.detail || err?.message || "Failed to load player preview";
+      // Distinguish connection failures from server errors
+      const isNetworkError = err?.message === "Network Error" || err?.code === "ERR_NETWORK" || err?.code === "ECONNREFUSED";
+      const errorMessage = isNetworkError
+        ? "Backend unavailable — is the server running?"
+        : (err?.response?.data?.detail || err?.message || "Failed to load player preview");
       setError(errorMessage);
     } finally {
       setLoading(false);
@@ -124,12 +129,13 @@ export function PlayerSelection({
   };
 
   // Load preview when dialog opens or in video overlay mode
+  // Don't auto-retry after a failure — let the user click Retry manually
   useEffect(() => {
     const shouldLoad = isModal ? isOpen : true;
-    if (shouldLoad && !previewData && !loading) {
+    if (shouldLoad && !previewData && !loading && !error) {
       loadPreview();
     }
-  }, [isOpen, isModal, previewData, loading]);
+  }, [isOpen, isModal, previewData, loading, error]);
 
   // Reset state when dialog closes
   useEffect(() => {

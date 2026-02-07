@@ -78,37 +78,71 @@ def _stroke_metrics(stroke_row: Dict[str, Any]) -> Dict[str, Any]:
     return metrics if isinstance(metrics, dict) else {}
 
 
+def _stroke_ai_insight_data(stroke_row: Dict[str, Any]) -> Dict[str, Any]:
+    payload = stroke_row.get("ai_insight_data")
+    return payload if isinstance(payload, dict) else {}
+
+
+def _stroke_owner_fields(stroke_row: Dict[str, Any]) -> Tuple[str, float, str, str]:
+    metrics = _stroke_metrics(stroke_row)
+    ai_data = _stroke_ai_insight_data(stroke_row)
+
+    hitter = str(ai_data.get("shot_owner") or metrics.get("event_hitter") or "").strip().lower()
+    if hitter not in {"player", "opponent"}:
+        hitter = "unknown"
+
+    confidence_raw = ai_data.get("shot_owner_confidence", metrics.get("event_hitter_confidence", 0.0))
+    try:
+        confidence = max(0.0, min(1.0, float(confidence_raw)))
+    except (TypeError, ValueError):
+        confidence = 0.0
+
+    method = str(ai_data.get("shot_owner_method") or metrics.get("event_hitter_method") or "").strip().lower()
+    reason = str(ai_data.get("shot_owner_reason") or metrics.get("event_hitter_reason") or "").strip().lower()
+    return hitter, confidence, method, reason
+
+
 def _stroke_hitter(stroke_row: Dict[str, Any]) -> str:
     """
     Returns one of: "player", "opponent", "unknown".
     """
-    metrics = _stroke_metrics(stroke_row)
-    hitter = str(metrics.get("event_hitter") or "").strip().lower()
-    if hitter in {"player", "opponent"}:
-        return hitter
-    return "unknown"
+    hitter, _, _, _ = _stroke_owner_fields(stroke_row)
+    return hitter
 
 
 def _stroke_hitter_confidence(stroke_row: Dict[str, Any]) -> float:
-    metrics = _stroke_metrics(stroke_row)
-    try:
-        return max(0.0, min(1.0, float(metrics.get("event_hitter_confidence", 0.0))))
-    except (TypeError, ValueError):
-        return 0.0
+    _, confidence, _, _ = _stroke_owner_fields(stroke_row)
+    return confidence
 
 
 def _is_reliable_opponent_stroke(stroke_row: Dict[str, Any]) -> bool:
-    if _stroke_hitter(stroke_row) != "opponent":
+    hitter, confidence, method, reason = _stroke_owner_fields(stroke_row)
+    if hitter != "opponent":
         return False
 
-    metrics = _stroke_metrics(stroke_row)
-    method = str(metrics.get("event_hitter_method") or "").strip().lower()
-    reason = str(metrics.get("event_hitter_reason") or "").strip().lower()
     if method == "proximity_10_percent" and reason.startswith("player_outside_"):
         # Legacy ownership rule was too aggressive; don't trust it.
         return False
 
-    return _stroke_hitter_confidence(stroke_row) >= 0.75
+    return confidence >= 0.75
+
+
+def _has_explicit_hitter_signal(stroke_row: Dict[str, Any]) -> bool:
+    metrics = _stroke_metrics(stroke_row)
+    ai_data = _stroke_ai_insight_data(stroke_row)
+    raw_owner = str(ai_data.get("shot_owner") or metrics.get("event_hitter") or "").strip().lower()
+    return raw_owner in {"player", "opponent", "unknown"}
+
+
+def _is_player_stroke_for_insights(stroke_row: Dict[str, Any]) -> bool:
+    hitter, confidence, _, _ = _stroke_owner_fields(stroke_row)
+    if hitter == "player":
+        # Player labels from hitter inference are meaningful even in single-player tracking runs.
+        return confidence >= 0.55
+    if hitter == "opponent":
+        return False
+    # Legacy rows may not include hitter metadata at all; keep them eligible.
+    return not _has_explicit_hitter_signal(stroke_row)
 
 
 def _is_player_stroke(stroke_row: Dict[str, Any]) -> bool:
@@ -125,44 +159,94 @@ def _generate_timeline_tips_from_insights(
     """
     Build one timeline tip per fixed-duration video bucket by sampling
     from generated per-stroke AI insights.
+    Enhanced to avoid repetitive messages and add stroke-specific context.
     """
     bucket_sec = max(0.5, min(5.0, _read_env_float("STROKE_TIMELINE_TIP_INTERVAL_SEC", 1.5)))
     duration_sec = _estimate_session_duration_seconds(trajectory_data, strokes)
     bucket_count = max(1, int(math.ceil(duration_sec / bucket_sec)))
 
     def _normalize_tip_message(raw: str) -> str:
+        """Extract first 2-3 sentences for variety, not just one."""
         cleaned = " ".join(str(raw or "").split())
         if not cleaned:
             return "Recover to neutral quickly and prepare your next contact point."
-        parts = re.split(r"(?<=[.!?])\s+", cleaned, maxsplit=1)
-        first_sentence = parts[0].strip()
-        message = first_sentence or cleaned
+        # Take up to 3 sentences instead of just 1
+        parts = re.split(r"(?<=[.!?])\s+", cleaned, maxsplit=3)
+        if len(parts) >= 2:
+            message = " ".join(parts[:2]).strip()  # 2 sentences
+        else:
+            message = parts[0].strip() if parts else cleaned
         return message[:220]
 
+    # Build unique candidates with deduplication by message content
     candidates: List[Dict[str, Any]] = []
+    seen_messages: set[str] = set()
+    
     for s in strokes:
-        if not _is_player_stroke(s):
+        if not _is_player_stroke_for_insights(s):
             continue
         ai_insight = str(s.get("ai_insight") or "").strip()
         if not ai_insight:
             continue
+        
+        normalized_message = _normalize_tip_message(ai_insight)
+        # Skip if we've seen the exact same message (case-insensitive)
+        message_key = normalized_message.lower()[:100]  # First 100 chars as key
+        if message_key in seen_messages:
+            continue
+        seen_messages.add(message_key)
+        
         stroke_type = str(s.get("stroke_type") or "").strip().lower()
-        if stroke_type in {"forehand", "backhand"}:
-            title = f"{stroke_type.title()} Insight"
+        # Get stroke owner info for better titles
+        metrics = _stroke_metrics(s)
+        form_score = s.get("form_score", 0)
+        
+        # More specific titles with form score context
+        if stroke_type == "forehand":
+            if form_score >= 85:
+                title = "Strong Forehand"
+            elif form_score >= 70:
+                title = "Forehand Form"
+            else:
+                title = "Forehand Tip"
+        elif stroke_type == "backhand":
+            if form_score >= 85:
+                title = "Strong Backhand"
+            elif form_score >= 70:
+                title = "Backhand Form"
+            else:
+                title = "Backhand Tip"
         else:
-            title = "AI Insight"
+            title = "Form Tip"
+        
         candidates.append(
             {
                 "id": s.get("id"),
                 "title": title,
-                "message": _normalize_tip_message(ai_insight),
+                "message": normalized_message,
+                "form_score": form_score,
+                "stroke_type": stroke_type,
             }
         )
 
+    # If we have very few unique insights, spread them out
+    if len(candidates) < bucket_count // 3:
+        # Clone the best insights to fill gaps
+        high_quality = [c for c in candidates if c.get("form_score", 0) >= 75]
+        if high_quality and len(candidates) < bucket_count:
+            # Add clones of high-quality insights with varied titles
+            for hq in high_quality[:min(5, bucket_count - len(candidates))]:
+                clone = dict(hq)
+                clone["id"] = f"{clone['id']}_repeat"
+                candidates.append(clone)
+
     out: List[Dict[str, Any]] = []
     prev_candidate_id: Optional[str] = None
+    prev_message: Optional[str] = None
+    used_messages: set[str] = set()
     rng = random.Random()
     rng.seed(f"{session_id}:{datetime.now(timezone.utc).isoformat()}")
+    
     for bucket_index in range(bucket_count):
         timestamp = round(bucket_index * bucket_sec, 3)
         selected: Optional[Dict[str, Any]] = None
@@ -171,13 +255,34 @@ def _generate_timeline_tips_from_insights(
             if len(candidates) == 1:
                 selected = candidates[0]
             else:
-                selected = rng.choice(candidates)
-                # Avoid immediate repeats when possible.
-                if selected.get("id") == prev_candidate_id:
+                # Try up to 10 times to find a non-repetitive candidate
+                for attempt in range(10):
+                    candidate = rng.choice(candidates)
+                    candidate_msg = str(candidate.get("message", ""))[:50]
+                    
+                    # Skip if same message as previous bucket or already used recently
+                    if candidate_msg == prev_message or candidate_msg in used_messages:
+                        continue
+                    
+                    # Skip if same stroke ID as previous (unless no other choice)
+                    if candidate.get("id") == prev_candidate_id and len(candidates) > 1:
+                        continue
+                    
+                    selected = candidate
+                    break
+                
+                # Fallback: just pick something different from last
+                if not selected:
                     alternatives = [c for c in candidates if c.get("id") != prev_candidate_id]
-                    if alternatives:
-                        selected = rng.choice(alternatives)
-            prev_candidate_id = str(selected.get("id")) if selected else None
+                    selected = rng.choice(alternatives) if alternatives else rng.choice(candidates)
+            
+            if selected:
+                prev_candidate_id = str(selected.get("id"))
+                prev_message = str(selected.get("message", ""))[:50]
+                used_messages.add(prev_message)
+                # Only keep last 5 messages in used set to allow eventual re-use
+                if len(used_messages) > 5:
+                    used_messages.pop()
 
         out.append(
             {
@@ -321,6 +426,8 @@ def generate_insight_for_stroke(
 
     prompt = (
         "You are analyzing a table tennis stroke from video frames to provide coaching insights.\n\n"
+        "Analyze ONLY the selected primary athlete (the user-selected player tracked as person_id=0).\n"
+        "If frames mainly show opponent contact, treat this as out-of-scope and avoid opponent coaching.\n\n"
         f"Current classification: {stroke_type} (from elbow-trend heuristic)\n"
         f"Player handedness: {handedness}\n"
         f"Camera facing: {camera_facing}\n"
@@ -341,9 +448,16 @@ def generate_insight_for_stroke(
         "   If visual evidence is inconclusive, keep the current classification instead of guessing a third category.\n"
         "   - FOREHAND: Racket on dominant-hand side (right for right-hander)\n"
         "   - BACKHAND: Racket crosses to non-dominant side, arm across body\n"
-        "2. Provide a 2-4 sentence coaching insight about the player's form on this specific stroke.\n"
-        "   Focus on: racket angle, footwork, weight transfer, follow-through, body rotation.\n"
-        "   Be specific and actionable — reference what you see in the frames.\n\n"
+        "2. Provide a 1-3 sentence coaching insight about the player's form on this specific stroke.\n"
+        "   IMPORTANT: Be specific and varied. Analyze what's actually visible in the frames:\n"
+        "   - Body position: stance width, knee bend, weight distribution, spine lean/posture\n"
+        "   - Arm mechanics: elbow angle at contact, arm extension, wrist position, follow-through path\n"
+        "   - Rotation: hip rotation, shoulder rotation, torso coil\n"
+        "   - Footwork: ready position, step timing, balance\n"
+        "   - Contact point: height, distance from body, racket angle\n"
+        "   DO NOT use generic advice. Describe what you SEE and how it affects the stroke.\n"
+        "   Example: Instead of 'Extend your arm more', say 'Your elbow is bent at 110° at contact — \n"
+        "   extending to 140-150° would increase racket-head speed and ball spin.'\n\n"
         "Return ONLY valid JSON:\n"
         "{\n"
         '  "stroke_type_correct": true/false,\n'
@@ -527,15 +641,16 @@ def generate_insights_for_session(
 
             insight_start = perf_counter()
             try:
-                metrics = _stroke_metrics(stroke_row)
+                hitter = _stroke_hitter(stroke_row)
                 hitter_confidence = _stroke_hitter_confidence(stroke_row)
+                _, _, owner_method, owner_reason = _stroke_owner_fields(stroke_row)
 
                 if _is_reliable_opponent_stroke(stroke_row):
                     ai_insight_data = {
                         "shot_owner": "opponent",
                         "shot_owner_confidence": round(hitter_confidence, 3),
-                        "shot_owner_reason": str(metrics.get("event_hitter_reason") or ""),
-                        "shot_owner_method": str(metrics.get("event_hitter_method") or ""),
+                        "shot_owner_reason": owner_reason,
+                        "shot_owner_method": owner_method,
                         "model": "rule_based_hitter_inference",
                         "generated_at": datetime.now(timezone.utc).isoformat(),
                     }
@@ -548,6 +663,26 @@ def generate_insights_for_session(
                     completed += 1
                     elapsed = (perf_counter() - insight_start) * 1000
                     print(f"[StrokeInsight]   Marked as opponent stroke in {elapsed:.0f}ms")
+                    continue
+
+                if not _is_player_stroke_for_insights(stroke_row):
+                    ai_insight_data = {
+                        "shot_owner": hitter,
+                        "shot_owner_confidence": round(hitter_confidence, 3),
+                        "shot_owner_reason": owner_reason,
+                        "shot_owner_method": owner_method,
+                        "model": "rule_based_hitter_inference",
+                        "generated_at": datetime.now(timezone.utc).isoformat(),
+                    }
+                    supabase.table("stroke_analytics").update(
+                        {
+                            "ai_insight": "Unattributed contact event. Excluded from player-only insight timeline.",
+                            "ai_insight_data": ai_insight_data,
+                        }
+                    ).eq("id", stroke_id).execute()
+                    completed += 1
+                    elapsed = (perf_counter() - insight_start) * 1000
+                    print(f"[StrokeInsight]   Marked as non-player event in {elapsed:.0f}ms")
                     continue
 
                 result = generate_insight_for_stroke(
@@ -605,8 +740,8 @@ def generate_insights_for_session(
                     "reclassification_blocked_reason": reclassification_blocked_reason,
                     "shot_owner": "player",
                     "shot_owner_confidence": round(hitter_confidence, 3),
-                    "shot_owner_reason": str(metrics.get("event_hitter_reason") or ""),
-                    "shot_owner_method": str(metrics.get("event_hitter_method") or ""),
+                    "shot_owner_reason": owner_reason,
+                    "shot_owner_method": owner_method,
                     "model": model,
                     "generated_at": datetime.now(timezone.utc).isoformat(),
                 }

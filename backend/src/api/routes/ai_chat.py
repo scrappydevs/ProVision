@@ -72,8 +72,9 @@ Place actions AFTER the relevant paragraph, not at the very beginning.
 
 - Use **bold** for key terms, metrics, and numbers
 - Be concise but insightful — coaches are busy
-- Reference specific data points from tool results (form scores, stroke counts, match results)
-- When suggesting improvements, be specific about body mechanics (elbow angle, hip rotation, etc.)
+- Reference data qualitatively: stroke preferences, tactical patterns, mechanical tendencies
+- AVOID citing specific percentage form scores (like "76.7% average") — instead say "strong forehand", "consistent technique", "needs development"
+- When suggesting improvements, be specific about body mechanics (elbow angle at contact, hip rotation range, spine lean, etc.)
 - Structure longer responses with bullet points
 - If a tool returns empty/no data, say what data is missing and suggest what the coach could do (e.g. "No stroke data yet — try running pose analysis on this session")"""
 

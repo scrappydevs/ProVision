@@ -1,15 +1,10 @@
 import uuid
-import asyncio
-import logging
-import threading
 from typing import List, Optional
 from fastapi import APIRouter, Depends, HTTPException, UploadFile, File, Form
 from pydantic import BaseModel
 from datetime import datetime
 
 from ..database.supabase import get_supabase, get_current_user_id
-
-logger = logging.getLogger(__name__)
 
 router = APIRouter()
 
@@ -68,6 +63,8 @@ async def create_recording(
     video: Optional[UploadFile] = File(None),
     user_id: str = Depends(get_current_user_id),
 ):
+    print(f"[Recording] create_recording called: title={title}, player_id={player_id}, type={type}, has_video={video is not None}")
+    
     if type not in VALID_TYPES:
         raise HTTPException(status_code=400, detail=f"Invalid recording type. Must be one of: {', '.join(VALID_TYPES)}")
 
@@ -125,8 +122,13 @@ async def create_recording(
 
     try:
         result = supabase.table("recordings").insert(recording_data).execute()
+        if not result.data or len(result.data) == 0:
+            raise ValueError("Supabase insert returned empty data - possible RLS policy issue or constraint violation")
         return RecordingResponse(**result.data[0])
     except Exception as e:
+        import traceback
+        error_details = f"Failed to create recording: {str(e)}\n{traceback.format_exc()}"
+        print(f"[Recording] Error: {error_details}")
         raise HTTPException(status_code=500, detail=f"Failed to create recording: {str(e)}")
 
 
@@ -302,34 +304,6 @@ async def analyze_recording(
             "session_id": session_id,
             "updated_at": datetime.utcnow().isoformat(),
         }).eq("id", recording_id).execute()
-
-        # Fire background analysis tasks in separate threads so they don't
-        # block the event loop. This ensures the response returns immediately
-        # and the frontend can redirect + load the game page while analysis runs.
-        # Pose analysis is NOT auto-triggered — the frontend opens the
-        # PlayerSelection modal so the user picks which person to track.
-        from .sessions import _run_tracknet_background, _run_dashboard_analysis_background
-
-        def _run_task(coro_func, *args):
-            try:
-                asyncio.run(coro_func(*args))
-            except Exception as e:
-                logger.warning(f"[Recording {recording_id}] Background task failed: {e}")
-
-        try:
-            threading.Thread(
-                target=_run_task,
-                args=(_run_tracknet_background, session_id, video_path),
-                daemon=True,
-            ).start()
-            threading.Thread(
-                target=_run_task,
-                args=(_run_dashboard_analysis_background, session_id, user_id, video_path),
-                daemon=True,
-            ).start()
-            logger.info(f"[Recording {recording_id}] TrackNet + Dashboard threads started for session {session_id}")
-        except Exception as bg_error:
-            logger.warning(f"[Recording {recording_id}] Failed to start background threads: {bg_error}")
 
         return AnalyzeResponse(
             session_id=session_id,
