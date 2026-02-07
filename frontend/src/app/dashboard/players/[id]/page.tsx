@@ -621,8 +621,13 @@ export default function PlayerProfilePage() {
 
         {/* Right: recordings — larger and more prominent */}
         <div className="absolute right-6 top-[15%] bottom-6 w-[560px] flex flex-col z-20">
+          {/* Smooth gradient background */}
+          <div className="absolute inset-0 rounded-3xl bg-gradient-to-br from-[#2a3f3f]/90 via-[#1e2d2d]/95 to-[#1a2525]/95 shadow-2xl" />
+          
+          {/* Content */}
+          <div className="relative flex flex-col h-full">
           {/* Header with enhanced styling */}
-          <div className="flex flex-col gap-3 mb-5 px-4 py-3 bg-content1/80 rounded-3xl border border-foreground/15">
+          <div className="flex flex-col gap-3 mb-5 px-4 py-3 rounded-t-3xl border-b border-foreground/10">
             <div className="flex items-center justify-between">
               <div className="flex items-center gap-3">
                 <span className="text-xs uppercase tracking-[0.25em] text-foreground/70">Recordings</span>
@@ -724,6 +729,7 @@ export default function PlayerProfilePage() {
                 <p className="text-xs text-foreground/30">No recordings yet</p>
               </div>
             )}
+          </div>
           </div>
         </div>
       </div>
