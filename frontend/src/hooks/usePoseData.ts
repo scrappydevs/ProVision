@@ -47,6 +47,11 @@ export function usePoseAnalysis(sessionId: string, limit = 1000, offset = 0) {
     },
     enabled: !!sessionId,
     staleTime: 5 * 60 * 1000, // 5 minutes
+    retry: (failureCount, error: any) => {
+      // Don't retry on 404 — no pose data exists yet (expected)
+      if (error?.response?.status === 404) return false;
+      return failureCount < 2;
+    },
   });
 }
 
@@ -59,5 +64,9 @@ export function usePoseSummary(sessionId: string) {
     },
     enabled: !!sessionId,
     staleTime: 5 * 60 * 1000, // 5 minutes
+    retry: (failureCount, error: any) => {
+      if (error?.response?.status === 404) return false;
+      return failureCount < 2;
+    },
   });
 }
