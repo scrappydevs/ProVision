@@ -945,25 +945,6 @@ export default function GameViewerPage() {
     ctx.globalAlpha = 1.0;
   }, [detectedPersons, showPoseOverlay, selectedPersonIds, SKELETON_CONNECTIONS, PERSON_COLORS]);
 
-  const handleTrackNetTrack = useCallback(() => {
-    setIsTracking(true);
-    trackWithTrackNet(gameId)
-      .then((res) => {
-        const tracked = res.data.frames_tracked ?? 0;
-        if (tracked > 0) {
-          queryClient.invalidateQueries({ queryKey: sessionKeys.detail(gameId) });
-        } else {
-          // TrackNet found nothing — fall back to YOLO+SAM2
-          handleAutoDetect();
-        }
-      })
-      .catch(() => {
-        // TrackNet failed — fall back to YOLO+SAM2
-        handleAutoDetect();
-      })
-      .finally(() => setIsTracking(false));
-  }, [gameId, queryClient]);
-
   // Fallback: Auto-detect balls with YOLO (then user confirms for SAM2)
   const handleAutoDetect = useCallback(() => {
     setIsDetecting(true);
@@ -981,6 +962,28 @@ export default function GameViewerPage() {
       })
       .finally(() => setIsDetecting(false));
   }, [gameId, currentFrame]);
+
+  const handleTrackNetTrack = useCallback(() => {
+    console.log("[Track] Starting ball tracking for session:", gameId);
+    setIsTracking(true);
+    trackWithTrackNet(gameId)
+      .then((res) => {
+        const tracked = res.data.frames_tracked ?? 0;
+        console.log("[Track] TrackNet result:", tracked, "frames tracked");
+        if (tracked > 0) {
+          queryClient.invalidateQueries({ queryKey: sessionKeys.detail(gameId) });
+        } else {
+          // TrackNet found nothing — fall back to YOLO+SAM2
+          handleAutoDetect();
+        }
+      })
+      .catch((err) => {
+        console.error("[Track] TrackNet failed, falling back:", err);
+        // TrackNet failed — fall back to YOLO+SAM2
+        handleAutoDetect();
+      })
+      .finally(() => setIsTracking(false));
+  }, [gameId, queryClient, handleAutoDetect]);
 
   // Confirm a YOLO detection and run SAM2 tracking with its bbox
   const handleConfirmDetection = useCallback((detection: BallDetection) => {
@@ -1016,7 +1019,7 @@ export default function GameViewerPage() {
       if (!showPoseOverlay) handleDetectPose(); // detect on first enable
     }
     if (tabId === "track" && !hasTrajectory) handleTrackNetTrack();
-  }, []);
+  }, [showPoseOverlay, handleDetectPose, hasTrajectory, handleTrackNetTrack]);
 
   // Auto-widen panel for court view and analytics
   useEffect(() => {
@@ -1289,7 +1292,7 @@ export default function GameViewerPage() {
                     </div>
                   ) : (
                     <div className="text-center py-8">
-                      {isProcessing ? (
+                      {(isTracking || isProcessing) ? (
                         <>
                           <Loader2 className="w-6 h-6 text-[#9B7B5B] mx-auto mb-3 animate-spin" />
                           <p className="text-sm text-[#E8E6E3] font-medium">Tracking ball...</p>
@@ -1299,7 +1302,15 @@ export default function GameViewerPage() {
                         <>
                           <Crosshair className="w-7 h-7 text-[#9B7B5B] mx-auto mb-3" />
                           <p className="text-sm text-[#E8E6E3] font-medium mb-1">Ready to track</p>
-                          <p className="text-xs text-[#8A8885]">Click Track in the toolbar to detect ball trajectory</p>
+                          <Button
+                            variant="outline"
+                            size="sm"
+                            onClick={handleTrackNetTrack}
+                            className="mt-2 text-xs"
+                          >
+                            <Crosshair className="w-3 h-3 mr-1" />
+                            Track Ball
+                          </Button>
                         </>
                       )}
                     </div>
