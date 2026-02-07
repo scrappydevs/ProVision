@@ -89,7 +89,7 @@ def get_youtube_metadata(url: str) -> Optional[dict]:
 
     import yt_dlp
 
-    # Try yt-dlp with cookies first (full metadata, authenticated)
+    # Try yt-dlp (PO Token plugin handles bot bypass automatically if installed)
     try:
         ydl_opts = _inject_cookies({
             "quiet": True,
@@ -104,7 +104,7 @@ def get_youtube_metadata(url: str) -> Optional[dict]:
     except Exception as e:
         logger.warning(f"yt-dlp metadata (with cookies) failed for {url}: {e}")
 
-    # Try yt-dlp WITHOUT cookies (avoids premium format issues)
+    # Retry without cookies — PO Token plugin may still handle bot bypass
     try:
         ydl_opts = {
             "quiet": True,
@@ -115,7 +115,7 @@ def get_youtube_metadata(url: str) -> Optional[dict]:
         with yt_dlp.YoutubeDL(ydl_opts) as ydl:
             info = ydl.extract_info(url, download=False)
             if info:
-                logger.info(f"yt-dlp metadata succeeded WITHOUT cookies for {url}")
+                logger.info(f"yt-dlp metadata succeeded without cookies for {url}")
                 return _extract_metadata_from_info(info)
     except Exception as e:
         logger.warning(f"yt-dlp metadata (no cookies) also failed for {url}: {e}")

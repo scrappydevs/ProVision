@@ -37,6 +37,40 @@ if not os.getenv("INFISICAL_INJECTED"):
     else:
         logging.warning("Infisical CLI not found — install from https://infisical.com/docs/cli/overview")
 
+
+# ── Start PO Token server for YouTube bot bypass ──
+# This runs the bgutil Node.js server that generates Proof-of-Origin tokens,
+# allowing yt-dlp to bypass YouTube's "Sign in to confirm you're not a bot".
+_pot_process = None
+
+def _start_pot_server():
+    global _pot_process
+    pot_server_dir = os.path.expanduser("~/bgutil-ytdlp-pot-provider/server")
+    pot_main = os.path.join(pot_server_dir, "build", "main.js")
+
+    if not os.path.exists(pot_main):
+        logging.warning(f"PO Token server not found at {pot_main} — YouTube downloads may be blocked")
+        return
+
+    node = shutil.which("node")
+    if not node:
+        logging.warning("Node.js not found — PO Token server cannot start")
+        return
+
+    try:
+        _pot_process = subprocess.Popen(
+            [node, pot_main],
+            cwd=pot_server_dir,
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.PIPE,
+        )
+        logging.info(f"PO Token server started (pid={_pot_process.pid}) on port 4416")
+    except Exception as e:
+        logging.warning(f"Failed to start PO Token server: {e}")
+
+_start_pot_server()
+
+
 import uvicorn
 
 sys.path.insert(0, os.path.join(SCRIPT_DIR, "src"))
