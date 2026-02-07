@@ -146,7 +146,7 @@ def get_youtube_streaming_url(url: str) -> Optional[dict]:
         import yt_dlp
 
         ydl_opts = _inject_cookies({
-            "format": "best[ext=mp4][height<=720]/best[ext=mp4]/best",
+            "format": "best[ext=mp4][height<=720]/best[ext=mp4]/bestvideo[height<=720]+bestaudio/best",
             "quiet": True,
             "no_warnings": True,
             "skip_download": True,
@@ -204,7 +204,8 @@ def download_youtube_video(
         # Fallback: Download full video
         output_path = os.path.join(temp_dir, "video.mp4")
         ydl_opts = _inject_cookies({
-            "format": "best[ext=mp4][height<=720]/best[ext=mp4]/best",
+            "format": "best[ext=mp4][height<=720]/best[ext=mp4]/bestvideo[height<=720]+bestaudio/best",
+            "merge_output_format": "mp4",
             "outtmpl": output_path,
             "quiet": True,
             "no_warnings": True,
