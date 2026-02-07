@@ -4,7 +4,7 @@ import { useState, useCallback, useRef, useEffect, useMemo } from "react";
 import { useParams, useRouter, useSearchParams } from "next/navigation";
 import { useSession, useTrackObject, useUpdateSession } from "@/hooks/useSessions";
 import { usePoseAnalysis } from "@/hooks/usePoseData";
-import { useStrokeSummary, useAnalyzeStrokes } from "@/hooks/useStrokeData";
+import { useStrokeSummary, useAnalyzeStrokes, useStrokeProgress, strokeKeys } from "@/hooks/useStrokeData";
 import { useAnalytics } from "@/hooks/useAnalytics";
 import { useQueryClient } from "@tanstack/react-query";
 import { sessionKeys } from "@/hooks/useSessions";
@@ -17,7 +17,7 @@ import {
 import Link from "next/link";
 import dynamic from "next/dynamic";
 import { cn } from "@/lib/utils";
-import { appSettingKeys, readStrokeDebugModeSetting } from "@/lib/appSettings";
+import { appSettingKeys, readStrokeDebugModeSetting, readStrokeClaudeClassifierEnabledSetting } from "@/lib/appSettings";
 import {
   TrajectoryPoint,
   detectBalls,
@@ -28,6 +28,7 @@ import {
   Stroke,
   getDebugFrame,
   getSessionAnalytics,
+  getStrokeProgress,
   createSessionClip,
   ActivityRegion,
 } from "@/lib/api";
@@ -124,6 +125,7 @@ export default function GameViewerPage() {
 
   // Debug mode state
   const [debugMode, setDebugMode] = useState(false);
+  const [strokeClaudeClassifierEnabled, setStrokeClaudeClassifierEnabled] = useState(true);
   const [debugLog, setDebugLog] = useState<Array<{ label: string; [key: string]: unknown }>>([]);
   const [debugLoading, setDebugLoading] = useState(false);
   const [debugFlash, setDebugFlash] = useState<string | null>(null);
@@ -132,12 +134,21 @@ export default function GameViewerPage() {
 
   useEffect(() => {
     setDebugMode(readStrokeDebugModeSetting());
+    setStrokeClaudeClassifierEnabled(readStrokeClaudeClassifierEnabledSetting());
     const syncDebugSetting = (event: StorageEvent) => {
       if (event.key && event.key !== appSettingKeys.strokeDebugMode) return;
       setDebugMode(readStrokeDebugModeSetting());
     };
+    const syncClaudeSetting = (event: StorageEvent) => {
+      if (event.key && event.key !== appSettingKeys.strokeClaudeClassifier) return;
+      setStrokeClaudeClassifierEnabled(readStrokeClaudeClassifierEnabledSetting());
+    };
     window.addEventListener("storage", syncDebugSetting);
-    return () => window.removeEventListener("storage", syncDebugSetting);
+    window.addEventListener("storage", syncClaudeSetting);
+    return () => {
+      window.removeEventListener("storage", syncDebugSetting);
+      window.removeEventListener("storage", syncClaudeSetting);
+    };
   }, []);
 
   const { data: session, isLoading } = useSession(gameId);
@@ -151,6 +162,103 @@ export default function GameViewerPage() {
   const hasPose = !!session?.pose_video_path;
   const hasStrokes = !!strokeSummary?.total_strokes;
   const hasTrajectory = !!(session?.trajectory_data?.frames?.length);
+  const isStrokePipelineProcessing =
+    isRecomputingAnalytics ||
+    strokeMutation.isPending ||
+    session?.stroke_analysis_status === "processing";
+  const { data: liveStrokeProgress } = useStrokeProgress(gameId, isStrokePipelineProcessing);
+  const strokePipelineDebugStats = useMemo(() => {
+    if (liveStrokeProgress?.debug_stats && typeof liveStrokeProgress.debug_stats === "object") {
+      return liveStrokeProgress.debug_stats as Record<string, unknown>;
+    }
+    return null;
+  }, [liveStrokeProgress]);
+  const strokePipelineStageRows = useMemo(() => {
+    const defaultStageOrder = [
+      "load_session_metadata",
+      "load_pose_data",
+      "detect_pose_strokes",
+      "detect_trajectory_reversals",
+      "detect_contacts",
+      "merge_detection_events",
+      strokeClaudeClassifierEnabled ? "classify_events_claude" : "classify_events_elbow",
+      "infer_hitter",
+      "build_final_strokes",
+      "persist_results",
+    ];
+    const defaultLabels: Record<string, string> = {
+      load_session_metadata: "Load session metadata",
+      load_pose_data: "Load pose frames",
+      detect_pose_strokes: "Detect pose stroke proposals",
+      detect_trajectory_reversals: "Detect trajectory reversals",
+      detect_contacts: "Detect wrist-ball contacts",
+      merge_detection_events: "Merge detection events",
+      classify_events_claude: "Classify events (Claude)",
+      classify_events_elbow: "Classify events (Elbow trend)",
+      infer_hitter: "Infer hitter (player/opponent)",
+      build_final_strokes: "Build final strokes",
+      persist_results: "Persist stroke analytics",
+    };
+
+    const stageOrder = Array.isArray(strokePipelineDebugStats?.stage_order)
+      ? strokePipelineDebugStats.stage_order.filter((id): id is string => typeof id === "string" && id.length > 0)
+      : defaultStageOrder;
+    const stageLabelsFromStats = (
+      strokePipelineDebugStats?.stage_labels &&
+      typeof strokePipelineDebugStats.stage_labels === "object"
+    )
+      ? (strokePipelineDebugStats.stage_labels as Record<string, unknown>)
+      : {};
+    const stageStatusFromStats = (
+      strokePipelineDebugStats?.stage_statuses &&
+      typeof strokePipelineDebugStats.stage_statuses === "object"
+    )
+      ? (strokePipelineDebugStats.stage_statuses as Record<string, unknown>)
+      : {};
+    const stageTimingsFromStats = (
+      strokePipelineDebugStats?.stage_timings_ms &&
+      typeof strokePipelineDebugStats.stage_timings_ms === "object"
+    )
+      ? (strokePipelineDebugStats.stage_timings_ms as Record<string, unknown>)
+      : {};
+    const currentStage = typeof strokePipelineDebugStats?.current_stage === "string"
+      ? strokePipelineDebugStats.current_stage
+      : null;
+
+    const seen = new Set<string>();
+    return stageOrder
+      .filter((stageId) => {
+        if (seen.has(stageId)) return false;
+        seen.add(stageId);
+        return true;
+      })
+      .map((stageId) => {
+        const labelRaw = stageLabelsFromStats[stageId];
+        const label = typeof labelRaw === "string" && labelRaw.trim().length > 0
+          ? labelRaw
+          : (defaultLabels[stageId] ?? stageId.replace(/_/g, " "));
+        const statusRaw = stageStatusFromStats[stageId];
+        let status: "pending" | "running" | "completed" | "failed" = "pending";
+        if (statusRaw === "running" || statusRaw === "completed" || statusRaw === "failed") {
+          status = statusRaw;
+        } else if (statusRaw === "pending") {
+          status = "pending";
+        } else if (currentStage === stageId) {
+          status = "running";
+        }
+        const durationRaw = stageTimingsFromStats[stageId];
+        const durationMs = (typeof durationRaw === "number" && Number.isFinite(durationRaw)) ? durationRaw : null;
+        if (durationMs !== null && status === "pending") {
+          status = "completed";
+        }
+        return { id: stageId, label, status, durationMs };
+      });
+  }, [strokePipelineDebugStats, strokeClaudeClassifierEnabled]);
+  const strokePipelineElapsedMs = useMemo(() => {
+    const raw = strokePipelineDebugStats?.pipeline_elapsed_ms;
+    if (typeof raw === "number" && Number.isFinite(raw)) return raw;
+    return strokePipelineStageRows.reduce((sum, stage) => sum + (stage.durationMs ?? 0), 0);
+  }, [strokePipelineDebugStats, strokePipelineStageRows]);
   // Pose processing: no pose_video_path yet AND status is processing
   const isPoseProcessing = session?.status === "processing" && !hasPose;
   // General processing for ball tracking / pending
@@ -247,7 +355,6 @@ export default function GameViewerPage() {
     } catch { return videoFps; }
   }, [session?.trajectory_data, videoFps, computedTrajectoryFps]);
 
-
   const frameFromTime = useCallback(
     (time: number) => Math.max(0, Math.round(time * fps)),
     [fps]
@@ -323,7 +430,46 @@ export default function GameViewerPage() {
     return match?.seekTime ?? match?.timestamp ?? null;
   }, [tipParam, videoTips]);
 
-  // strokeMarkers and pointMarkers removed — ActivityTimeline handles visualization directly
+  const strokeMarkers = useMemo(() => {
+    if (isStrokePipelineProcessing) return [];
+    if (!strokeSummary?.strokes?.length) return [];
+    return strokeSummary.strokes.map((stroke) => ({
+      id: stroke.id,
+      time: stroke.peak_frame / fps,
+      type: stroke.stroke_type,
+      formScore: stroke.form_score,
+      frame: stroke.peak_frame,
+    }));
+  }, [strokeSummary?.strokes, fps, isStrokePipelineProcessing]);
+
+  // Reversal markers sourced from backend stroke events.
+  // This keeps UI aligned with the stroke pipeline instead of a separate client-only heuristic.
+  const trajectoryReversalMarkers = useMemo(() => {
+    if (isStrokePipelineProcessing) return [];
+    if (!strokeSummary?.strokes?.length) return [];
+    const out: Array<{ frame: number; time: number }> = [];
+    const seen = new Set<number>();
+
+    for (const stroke of strokeSummary.strokes) {
+      const sourcesRaw = stroke.metrics?.event_sources;
+      const sources = Array.isArray(sourcesRaw)
+        ? sourcesRaw
+        : typeof sourcesRaw === "string"
+          ? [sourcesRaw]
+          : [];
+      if (!sources.includes("trajectory")) continue;
+
+      const frame = Number.isFinite(stroke.metrics?.event_frame)
+        ? Number(stroke.metrics?.event_frame)
+        : stroke.peak_frame;
+      if (!Number.isFinite(frame) || seen.has(frame)) continue;
+      seen.add(frame);
+      out.push({ frame, time: frame / fps });
+    }
+
+    out.sort((a, b) => a.frame - b.frame);
+    return out;
+  }, [strokeSummary?.strokes, fps, isStrokePipelineProcessing]);
 
   const autoSeekTime = startTimeParam ?? tipSeekTime;
   const shouldAutoPlay = startTimeParam !== null && startTimeParam !== undefined;
@@ -467,8 +613,59 @@ export default function GameViewerPage() {
     if (!gameId || isRecomputingAnalytics) return;
     setIsRecomputingAnalytics(true);
     try {
-      const response = await getSessionAnalytics(gameId, { force: true });
-      queryClient.setQueryData(["analytics", gameId], response.data);
+      // Reflect processing state immediately in UI.
+      queryClient.setQueryData(
+        sessionKeys.detail(gameId),
+        (prev: unknown) =>
+          prev && typeof prev === "object"
+            ? { ...(prev as Record<string, unknown>), stroke_analysis_status: "processing" }
+            : prev
+      );
+
+      // 1) Trigger stroke analysis
+      await strokeMutation.mutateAsync();
+
+      // 2) Wait until backend stroke job completes/fails
+      const timeoutMs = 5 * 60 * 1000;
+      const pollMs = 1000;
+      const startedAt = Date.now();
+      let finalStatus: string | undefined;
+      while (true) {
+        const progressResponse = await getStrokeProgress(gameId);
+        const progress = progressResponse.data?.progress;
+        const status = progress?.status;
+
+        if (status === "completed" || status === "failed") {
+          finalStatus = status;
+          break;
+        }
+        if (Date.now() - startedAt > timeoutMs) break;
+        await new Promise((resolve) => setTimeout(resolve, pollMs));
+      }
+
+      if (finalStatus) {
+        queryClient.setQueryData(
+          sessionKeys.detail(gameId),
+          (prev: unknown) =>
+            prev && typeof prev === "object"
+              ? { ...(prev as Record<string, unknown>), stroke_analysis_status: finalStatus }
+              : prev
+        );
+      }
+
+      // 3) Force-refresh analytics and stroke/session caches
+      const analyticsResponse = await getSessionAnalytics(gameId, { force: true });
+      queryClient.setQueryData(["analytics", gameId], analyticsResponse.data);
+      await Promise.all([
+        queryClient.invalidateQueries({ queryKey: strokeKeys.progress(gameId) }),
+        queryClient.invalidateQueries({ queryKey: strokeKeys.summary(gameId) }),
+        queryClient.invalidateQueries({ queryKey: sessionKeys.detail(gameId) }),
+        queryClient.invalidateQueries({ queryKey: ["analytics", gameId] }),
+      ]);
+
+      if (finalStatus === "failed") {
+        console.error("Stroke recompute finished with status=failed");
+      }
     } catch (err) {
       console.error("Analytics recompute failed:", err);
     } finally {
@@ -1012,7 +1209,6 @@ export default function GameViewerPage() {
   }, [detectionResult, currentFrame, trackMutation, queryClient, gameId]);
 
   const togglePlay = useCallback(() => { if (isPlaying) videoRef.current?.pause(); else videoRef.current?.play(); setIsPlaying((p) => !p); }, [isPlaying]);
-  // handleSeek removed — ActivityTimeline handles seeking via onSeek callback
   const skipFrames = useCallback((n: number) => { const t = Math.max(0, Math.min(duration, currentTime + n / fps)); if (videoRef.current) videoRef.current.currentTime = t; }, [duration, currentTime, fps]);
   const fmtTime = (t: number) => `${Math.floor(t / 60)}:${Math.floor(t % 60).toString().padStart(2, "0")}`;
   const handleAnalyticsSeek = useCallback((targetTime: number) => {
@@ -1024,6 +1220,11 @@ export default function GameViewerPage() {
     setCurrentTime(safeTime);
     setCurrentFrame(frameFromTime(safeTime));
   }, [duration, frameFromTime]);
+  const handleSeek = useCallback((e: React.ChangeEvent<HTMLInputElement>) => {
+    const targetTime = Number(e.target.value);
+    if (!Number.isFinite(targetTime)) return;
+    handleAnalyticsSeek(targetTime);
+  }, [handleAnalyticsSeek]);
   const handleTipSeek = useCallback((tip: VideoTip) => {
     if (!videoRef.current) return;
     const targetTime = tip.seekTime ?? tip.timestamp;
@@ -1384,23 +1585,70 @@ export default function GameViewerPage() {
             {/* Controls */}
             <div className="mx-auto mt-2 shrink-0 w-full" style={videoDisplayWidth ? { width: `${videoDisplayWidth}px` } : undefined}>
               <div className="rounded-xl bg-[#282729] p-2.5">
-              {/* Activity Timeline — waveform seek bar */}
-              <ActivityTimeline
-                currentTime={currentTime}
-                duration={duration}
-                strokes={strokeSummary?.strokes ?? []}
-                velocities={session?.trajectory_data?.velocity}
-                activityRegions={analytics?.activity_regions}
-                fps={fps}
-                totalFrames={Math.floor(duration * fps)}
-                onSeek={(time) => {
-                  if (videoRef.current) videoRef.current.currentTime = time;
-                  setCurrentTime(time);
-                  setCurrentFrame(frameFromTime(time));
-                }}
-              />
-              {/* Time labels + controls */}
-              <div className="flex items-center justify-between mt-1.5">
+              <div className="flex items-center gap-3 mb-1.5">
+                <span className="text-[10px] text-[#6A6865] w-10">{fmtTime(currentTime)}</span>
+                <div className="relative flex-1">
+                  <div className="absolute inset-x-0 -top-1.5 h-2 pointer-events-none">
+                    {duration > 0 && strokeMarkers.map((marker) => {
+                      const pct = Math.min(1, Math.max(0, marker.time / duration));
+                      const isActive = activeStroke?.id === marker.id;
+                      const color = marker.type === "forehand" ? "#9B7B5B"
+                        : marker.type === "backhand" ? "#5B9B7B"
+                        : "#8A8885";
+                      return (
+                        <button
+                          key={marker.id}
+                          onClick={() => {
+                            if (videoRef.current) videoRef.current.currentTime = marker.time;
+                          }}
+                          className={cn(
+                            "absolute top-0 -translate-x-1/2 h-3 w-1.5 rounded-full pointer-events-auto transition-transform",
+                            isActive ? "scale-125" : "hover:scale-125"
+                          )}
+                          style={{ left: `${pct * 100}%`, backgroundColor: color }}
+                          title={`${marker.type} — Frame ${marker.frame} — Form ${marker.formScore.toFixed(0)}`}
+                          aria-label={`${marker.type} stroke at ${fmtTime(marker.time)}`}
+                        />
+                      );
+                    })}
+                  </div>
+                  <input
+                    type="range"
+                    min={0}
+                    max={duration || 100}
+                    step={0.01}
+                    value={currentTime}
+                    onChange={handleSeek}
+                    className="w-full h-1 bg-[#363436] rounded-full appearance-none cursor-pointer [&::-webkit-slider-thumb]:appearance-none [&::-webkit-slider-thumb]:w-2.5 [&::-webkit-slider-thumb]:h-2.5 [&::-webkit-slider-thumb]:bg-[#9B7B5B] [&::-webkit-slider-thumb]:rounded-full"
+                  />
+                  {/* Trajectory reversal markers (blue dots below slider) */}
+                  {trajectoryReversalMarkers.length > 0 && (
+                    <div className="absolute inset-x-0 top-2.5 h-2 pointer-events-none">
+                      {duration > 0 && trajectoryReversalMarkers.map((marker, i) => {
+                        const pct = Math.min(1, Math.max(0, marker.time / duration));
+                        return (
+                          <button
+                            key={`rev-${marker.frame}-${i}`}
+                            onClick={() => {
+                              if (videoRef.current) videoRef.current.currentTime = marker.time;
+                            }}
+                            className="absolute top-0 -translate-x-1/2 w-2 h-2 rounded-full pointer-events-auto hover:scale-150 transition-transform"
+                            style={{
+                              left: `${pct * 100}%`,
+                              backgroundColor: "#7B9BC4",
+                              boxShadow: "0 0 4px rgba(123, 155, 196, 0.5)",
+                            }}
+                            title={`Ball direction change — Frame ${marker.frame}`}
+                            aria-label={`Trajectory reversal at ${fmtTime(marker.time)}`}
+                          />
+                        );
+                      })}
+                    </div>
+                  )}
+                </div>
+                <span className="text-[10px] text-[#6A6865] w-10 text-right">{fmtTime(duration)}</span>
+              </div>
+              <div className="flex items-center justify-between">
                 <div className="flex items-center gap-1">
                   <span className="text-[10px] text-[#6A6865] w-10 tabular-nums">{fmtTime(currentTime)}</span>
                   <Button variant="ghost" size="icon" className="h-7 w-7" onClick={() => skipFrames(-10)}><SkipBack className="w-3 h-3" /></Button>
@@ -1537,10 +1785,108 @@ export default function GameViewerPage() {
                       </>
                     )}
 
+                    {/* ── Live Stroke Indicator (synced to video frame) ── */}
+                    {hasStrokes && (
+                      <div className={cn(
+                        "p-2.5 rounded-lg transition-all duration-200",
+                        activeStroke
+                          ? activeStroke.stroke_type === "forehand" ? "bg-[#9B7B5B]/15 ring-1 ring-[#9B7B5B]/40"
+                          : activeStroke.stroke_type === "backhand" ? "bg-[#5B9B7B]/15 ring-1 ring-[#5B9B7B]/40"
+                          : "bg-[#1E1D1F]"
+                          : "bg-[#1E1D1F]"
+                      )}>
+                        {activeStroke ? (
+                          <div className="flex items-center gap-2">
+                            <div className={cn(
+                              "w-2 h-2 rounded-full animate-pulse",
+                              activeStroke.stroke_type === "forehand" ? "bg-[#9B7B5B]"
+                              : activeStroke.stroke_type === "backhand" ? "bg-[#5B9B7B]"
+                              : "bg-[#8A8885]"
+                            )} />
+                            <span className={cn(
+                              "text-xs font-medium capitalize",
+                              activeStroke.stroke_type === "forehand" ? "text-[#9B7B5B]"
+                              : activeStroke.stroke_type === "backhand" ? "text-[#5B9B7B]"
+                              : "text-[#8A8885]"
+                            )}>
+                              {activeStroke.stroke_type}
+                            </span>
+                            <span className="text-[10px] text-[#6A6865] ml-auto">
+                              Form {activeStroke.form_score.toFixed(0)}
+                            </span>
+                          </div>
+                        ) : lastStroke ? (
+                          <div className="flex items-center gap-2">
+                            <div className="w-2 h-2 rounded-full bg-[#363436]" />
+                            <span className="text-xs text-[#6A6865]">
+                              Last: <span className={cn(
+                                "capitalize",
+                                lastStroke.stroke_type === "forehand" ? "text-[#9B7B5B]"
+                                : lastStroke.stroke_type === "backhand" ? "text-[#5B9B7B]"
+                                : "text-[#8A8885]"
+                              )}>{lastStroke.stroke_type}</span>
+                            </span>
+                            <span className="text-[10px] text-[#6A6865] ml-auto">
+                              Form {lastStroke.form_score.toFixed(0)}
+                            </span>
+                          </div>
+                        ) : null}
+                      </div>
+                    )}
+
                     {/* ── Stroke Summary Stats ── */}
                     {hasPose && !isPoseProcessing && (
                       <>
-                        {hasStrokes ? (
+                        {isStrokePipelineProcessing ? (
+                          <div className="rounded-lg bg-[#1E1D1F] ring-1 ring-[#9B7B5B]/30 p-3">
+                            <div className="flex items-center gap-2">
+                              <Loader2 className="w-3.5 h-3.5 text-[#9B7B5B] animate-spin" />
+                              <span className="text-xs font-medium text-[#E8E6E3]">Recomputing stroke insights</span>
+                            </div>
+                            <p className="text-[10px] text-[#8A8885] mt-1">
+                              {strokeClaudeClassifierEnabled
+                                ? "Waiting for Claude classifications, then refreshing timeline and AI insights."
+                                : "Waiting for vision analysis, then refreshing timeline and AI insights."}
+                            </p>
+                            <div className="mt-2 space-y-1.5">
+                              {strokePipelineStageRows.map((stage) => (
+                                <div key={stage.id} className="flex items-center justify-between gap-2 text-[10px]">
+                                  <div className="flex items-center gap-1.5 min-w-0">
+                                    {stage.status === "completed" ? (
+                                      <Check className="w-3 h-3 text-[#5B9B7B] shrink-0" />
+                                    ) : stage.status === "running" ? (
+                                      <Loader2 className="w-3 h-3 text-[#9B7B5B] animate-spin shrink-0" />
+                                    ) : stage.status === "failed" ? (
+                                      <X className="w-3 h-3 text-[#C45C5C] shrink-0" />
+                                    ) : (
+                                      <div className="w-3 h-3 rounded-full bg-[#363436] shrink-0" />
+                                    )}
+                                    <span
+                                      className={cn(
+                                        "truncate",
+                                        stage.status === "running" ? "text-[#E8E6E3]"
+                                        : stage.status === "completed" ? "text-[#8A8885]"
+                                        : stage.status === "failed" ? "text-[#C45C5C]"
+                                        : "text-[#6A6865]"
+                                      )}
+                                    >
+                                      {stage.label}
+                                    </span>
+                                  </div>
+                                  <span className="text-[#6A6865] tabular-nums shrink-0">
+                                    {stage.durationMs !== null ? `${(stage.durationMs / 1000).toFixed(stage.durationMs >= 10000 ? 1 : 2)}s` : "—"}
+                                  </span>
+                                </div>
+                              ))}
+                            </div>
+                            <div className="mt-2 pt-2 border-t border-[#363436]/40 flex items-center justify-between text-[10px]">
+                              <span className="text-[#6A6865]">Elapsed</span>
+                              <span className="text-[#8A8885] tabular-nums">
+                                {(strokePipelineElapsedMs / 1000).toFixed(strokePipelineElapsedMs >= 10000 ? 1 : 2)}s
+                              </span>
+                            </div>
+                          </div>
+                        ) : hasStrokes ? (
                           <div className="flex flex-col gap-2 min-h-0 flex-1">
                             {/* Camera facing toggle + Re-analyze */}
                             <div className="flex items-center justify-between shrink-0">

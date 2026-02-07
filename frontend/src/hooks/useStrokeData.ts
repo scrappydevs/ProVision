@@ -1,11 +1,15 @@
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
-import { analyzeStrokes, getStrokeSummary, StrokeSummary } from "@/lib/api";
+import { analyzeStrokes, getStrokeDebugRuns, getStrokeProgress, getStrokeSummary } from "@/lib/api";
+import { sessionKeys } from "@/hooks/useSessions";
+import { readStrokeClaudeClassifierEnabledSetting } from "@/lib/appSettings";
 
 // Query key factory for stroke data
 export const strokeKeys = {
   all: ["strokes"] as const,
   summaries: () => [...strokeKeys.all, "summaries"] as const,
   summary: (sessionId: string) => [...strokeKeys.summaries(), sessionId] as const,
+  debugRuns: (sessionId: string) => [...strokeKeys.all, "debug-runs", sessionId] as const,
+  progress: (sessionId: string) => [...strokeKeys.all, "progress", sessionId] as const,
 };
 
 /**
@@ -32,26 +36,50 @@ export function useAnalyzeStrokes(sessionId: string) {
 
   return useMutation({
     mutationFn: async () => {
-      const response = await analyzeStrokes(sessionId);
+      const useClaude = readStrokeClaudeClassifierEnabledSetting();
+      const response = await analyzeStrokes(sessionId, { use_claude_classifier: useClaude });
       return response.data;
     },
     onSuccess: () => {
-      // Start polling for stroke data
-      const pollInterval = setInterval(async () => {
-        try {
-          const response = await getStrokeSummary(sessionId);
-          if (response.data) {
-            // Successfully got stroke data, stop polling
-            clearInterval(pollInterval);
-            queryClient.invalidateQueries({ queryKey: strokeKeys.summary(sessionId) });
-          }
-        } catch (error) {
-          // Still processing, continue polling
-        }
-      }, 2000);
-
-      // Stop polling after 30 seconds
-      setTimeout(() => clearInterval(pollInterval), 30000);
+      // Re-sync session state so UI can immediately reflect processing status.
+      queryClient.invalidateQueries({ queryKey: sessionKeys.detail(sessionId) });
+      // Drop stale progress/summary while fresh recompute starts.
+      queryClient.invalidateQueries({ queryKey: strokeKeys.progress(sessionId) });
+      queryClient.invalidateQueries({ queryKey: strokeKeys.summary(sessionId) });
     },
+  });
+}
+
+/**
+ * Hook to fetch latest stroke debug run (used for live pipeline stage status)
+ */
+export function useLatestStrokeDebugRun(sessionId: string, enabled: boolean = true) {
+  return useQuery({
+    queryKey: strokeKeys.debugRuns(sessionId),
+    queryFn: async () => {
+      const response = await getStrokeDebugRuns(sessionId, 1);
+      return (response.data?.runs && response.data.runs.length > 0) ? response.data.runs[0] : null;
+    },
+    enabled: !!sessionId && enabled,
+    staleTime: 0,
+    retry: false,
+    refetchInterval: enabled ? 1500 : false,
+  });
+}
+
+/**
+ * Hook to fetch live in-memory stroke pipeline progress.
+ */
+export function useStrokeProgress(sessionId: string, enabled: boolean = true) {
+  return useQuery({
+    queryKey: strokeKeys.progress(sessionId),
+    queryFn: async () => {
+      const response = await getStrokeProgress(sessionId);
+      return response.data?.progress ?? null;
+    },
+    enabled: !!sessionId && enabled,
+    staleTime: 0,
+    retry: false,
+    refetchInterval: enabled ? 1000 : false,
   });
 }

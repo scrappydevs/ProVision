@@ -176,6 +176,7 @@ export interface Session {
   };
   camera_facing?: "auto" | "toward" | "away";
   status: "pending" | "processing" | "completed" | "failed";
+  stroke_analysis_status?: "pending" | "processing" | "completed" | "failed";
   created_at: string;
   players?: PlayerBrief[];
 }
@@ -301,6 +302,8 @@ export interface StrokeMetrics {
   elbow_range: number;
   hip_rotation_range: number;
   shoulder_rotation_range: number;
+  event_sources?: string | string[];
+  event_frame?: number;
 }
 
 export interface Stroke {
@@ -327,11 +330,58 @@ export interface StrokeSummary {
   strokes: Stroke[];
 }
 
-export const analyzeStrokes = (sessionId: string) =>
-  api.post(`/api/stroke/analyze/${sessionId}`);
+export interface AnalyzeStrokesRequest {
+  use_claude_classifier?: boolean;
+}
+
+export interface StrokeDebugRunSummary {
+  id: string;
+  session_id: string;
+  status: "processing" | "completed" | "failed";
+  started_at?: string;
+  completed_at?: string;
+  handedness?: string;
+  camera_facing?: string;
+  debug_stats?: Record<string, unknown>;
+  storage_path?: string;
+  storage_url?: string;
+  created_at?: string;
+  error?: string;
+}
+
+export interface StrokeDebugRunsResponse {
+  session_id: string;
+  count: number;
+  runs: StrokeDebugRunSummary[];
+}
+
+export interface StrokePipelineProgress {
+  run_id: string;
+  session_id: string;
+  status: "processing" | "completed" | "failed";
+  started_at?: string;
+  completed_at?: string;
+  use_claude_classifier?: boolean;
+  debug_stats?: Record<string, unknown>;
+  error?: string;
+}
+
+export interface StrokeProgressResponse {
+  session_id: string;
+  progress: StrokePipelineProgress | null;
+}
+
+export const analyzeStrokes = (sessionId: string, data?: AnalyzeStrokesRequest) =>
+  api.post(`/api/stroke/analyze/${sessionId}`, data ?? {});
 
 export const getStrokeSummary = (sessionId: string) =>
   api.get<StrokeSummary>(`/api/stroke/summary/${sessionId}`);
+
+export const getStrokeDebugRuns = (sessionId: string, limit: number = 20) =>
+  api.get<StrokeDebugRunsResponse>(`/api/stroke/debug-runs/${sessionId}`, { params: { limit } });
+
+export const getStrokeProgress = (sessionId: string) =>
+  api.get<StrokeProgressResponse>(`/api/stroke/progress/${sessionId}`);
 
 export const getStrokes = (sessionId: string, strokeType?: string) =>
   api.get(`/api/stroke/strokes/${sessionId}`, {
