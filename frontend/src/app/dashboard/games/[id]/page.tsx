@@ -1675,17 +1675,6 @@ export default function GameViewerPage() {
                           Retry with player selection
                         </button>
                       </div>
-                    ) : detectedPersons.length === 0 && !isDetectingPose && !hasPose ? (
-                      <div className="text-center py-6">
-                        <Activity className="w-5 h-5 text-[#363436] mx-auto mb-2" />
-                        <p className="text-xs text-[#6A6865] mb-3">No pose data yet</p>
-                        <button
-                          onClick={() => setShowPlayerSelection(true)}
-                          className="text-[10px] text-[#9B7B5B] hover:text-[#B8956D] transition-colors underline"
-                        >
-                          Run pose estimation
-                        </button>
-                      </div>
                     ) : null}
 
                     {/* ── Per-person pose metrics ── */}

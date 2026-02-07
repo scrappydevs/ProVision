@@ -432,9 +432,9 @@ class PoseProcessor:
         else:
             last_center = None
 
-        # Colors: player = green, opponent = teal (BGR format)
-        PLAYER_COLOR = (107, 142, 107)   # Green
-        OPPONENT_COLOR = (123, 155, 91)   # Teal
+        # Colors: player = green, opponent = orange (BGR format)
+        PLAYER_COLOR = (91, 155, 107)     # Green
+        OPPONENT_COLOR = (91, 123, 205)   # Orange
         BORDER_COLOR = (232, 230, 227)    # Light
 
         fourcc = cv2.VideoWriter_fourcc(*'avc1')
@@ -485,10 +485,11 @@ class PoseProcessor:
                             else:
                                 last_opponent_kpts = None
 
-                # Helper to draw a skeleton with a given color
-                def _draw_skeleton(kpts, color):
+                # Helper to draw a skeleton with a given color and label
+                def _draw_skeleton(kpts, color, label):
                     if kpts is None:
                         return
+                    # Draw skeleton connections
                     for connection in self.SKELETON:
                         i1, i2 = connection
                         k1, k2 = kpts[i1], kpts[i2]
@@ -497,14 +498,37 @@ class PoseProcessor:
                                      (int(round(k1[0])), int(round(k1[1]))),
                                      (int(round(k2[0])), int(round(k2[1]))),
                                      color, 3)
+                    # Draw keypoint circles
                     for kpt in kpts:
                         if kpt[2] > 0.5:
                             pt = (int(round(kpt[0])), int(round(kpt[1])))
                             cv2.circle(frame, pt, 5, color, -1)
                             cv2.circle(frame, pt, 5, BORDER_COLOR, 2)
+                    
+                    # Draw label above head (nose keypoint)
+                    nose = kpts[0]  # Nose is keypoint 0 in COCO format
+                    if nose[2] > 0.5:
+                        label_x = int(round(nose[0]))
+                        label_y = int(round(nose[1])) - 30
+                        
+                        # Background for text
+                        font = cv2.FONT_HERSHEY_SIMPLEX
+                        font_scale = 0.7
+                        thickness = 2
+                        (text_w, text_h), _ = cv2.getTextSize(label, font, font_scale, thickness)
+                        
+                        # Draw background rectangle
+                        cv2.rectangle(frame, 
+                                    (label_x - 5, label_y - text_h - 5),
+                                    (label_x + text_w + 5, label_y + 5),
+                                    color, -1)
+                        
+                        # Draw text
+                        cv2.putText(frame, label, (label_x, label_y), 
+                                  font, font_scale, (255, 255, 255), thickness)
 
-                _draw_skeleton(last_player_kpts, PLAYER_COLOR)
-                _draw_skeleton(last_opponent_kpts, OPPONENT_COLOR)
+                _draw_skeleton(last_player_kpts, PLAYER_COLOR, "Player")
+                _draw_skeleton(last_opponent_kpts, OPPONENT_COLOR, "Opponent")
 
                 out.write(frame)
                 frame_idx += 1
