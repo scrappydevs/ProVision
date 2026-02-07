@@ -85,14 +85,23 @@ async def create_recording(
 
     # Upload video if provided
     if video:
-        import os
-        ext = os.path.splitext(video.filename or "video.mp4")[1]
-        storage_path = f"{user_id}/recordings/{recording_id}{ext}"
-        video_content = await video.read()
         try:
-            supabase.storage.from_("provision-videos").upload(storage_path, video_content)
-            video_path = supabase.storage.from_("provision-videos").get_public_url(storage_path)
+            import os
+            from ..utils.video_utils import upload_to_storage_with_retry
+            
+            print(f"[Recording] Uploading video: filename={video.filename}, content_type={video.content_type}")
+            ext = os.path.splitext(video.filename or "video.mp4")[1]
+            storage_path = f"{user_id}/recordings/{recording_id}{ext}"
+            video_content = await video.read()
+            print(f"[Recording] Video read: {len(video_content)} bytes ({len(video_content) / 1024 / 1024:.1f} MB)")
+            
+            # Upload with automatic retry for SSL/network errors
+            video_path = upload_to_storage_with_retry(storage_path, video_content)
+                        
         except Exception as e:
+            import traceback
+            error_details = f"Failed to upload video: {str(e)}\n{traceback.format_exc()}"
+            print(f"[Recording] Upload error: {error_details}")
             raise HTTPException(status_code=500, detail=f"Failed to upload video: {str(e)}")
 
     import json
@@ -100,7 +109,9 @@ async def create_recording(
     if metadata:
         try:
             parsed_metadata = json.loads(metadata)
-        except json.JSONDecodeError:
+            print(f"[Recording] Metadata parsed: {parsed_metadata}")
+        except json.JSONDecodeError as e:
+            print(f"[Recording] Metadata parse failed: {e}")
             parsed_metadata = {}
 
     recording_data = {
@@ -119,6 +130,7 @@ async def create_recording(
         "created_at": datetime.utcnow().isoformat(),
         "updated_at": datetime.utcnow().isoformat(),
     }
+    print(f"[Recording] Inserting recording data: id={recording_id}, has_video_path={video_path is not None}")
 
     try:
         result = supabase.table("recordings").insert(recording_data).execute()

@@ -109,7 +109,7 @@ function Table({ onClick }: { onClick?: (point: THREE.Vector3) => void }) {
         position={[0, TABLE_H, 0]}
         castShadow
         receiveShadow
-        onClick={(e) => {
+        onClick={(e: ThreeEvent<MouseEvent>) => {
           if (onClick) {
             e.stopPropagation();
             onClick(e.point);

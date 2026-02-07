@@ -970,22 +970,27 @@ async def tracknet_track(request: SAM2TrackRequest):
     cap.release()
     
     n = len(frames)
-    logger.info(f"TrackNet bidirectional: {n} frames, {orig_w}x{orig_h} @ {fps:.1f}fps")
+    pipeline_start = time.time()
+    logger.info(f"[TrackNet] Starting: {n} frames, {orig_w}x{orig_h} @ {fps:.1f}fps")
     
     sys.path.insert(0, config.tracknet_dir)
     from utils import postprocess, remove_outliers, split_track, interpolation, bridge_segments
     
     # === Pass 1: Forward ===
+    fwd_start = time.time()
     fwd_track, fwd_conf, fwd_dists = _run_tracknet_pass(frames, tracknet_model, device, postprocess)
+    fwd_time = time.time() - fwd_start
     fwd_det = sum(1 for b in fwd_track if b[0] is not None)
-    logger.info(f"TrackNet forward: {fwd_det}/{n} detections")
+    logger.info(f"[TrackNet] Forward pass: {fwd_det}/{n} detections in {fwd_time:.2f}s ({fwd_time/n*1000:.1f}ms/frame)")
     
     # === Pass 2: Backward (reverse frames, then reverse results) ===
+    bwd_start = time.time()
     bwd_track, bwd_conf, bwd_dists = _run_tracknet_pass(frames[::-1], tracknet_model, device, postprocess)
+    bwd_time = time.time() - bwd_start
     bwd_track.reverse()
     bwd_conf.reverse()
     bwd_det = sum(1 for b in bwd_track if b[0] is not None)
-    logger.info(f"TrackNet backward: {bwd_det}/{n} detections")
+    logger.info(f"[TrackNet] Backward pass: {bwd_det}/{n} detections in {bwd_time:.2f}s ({bwd_time/n*1000:.1f}ms/frame)")
     
     from scipy.spatial import distance
 
@@ -1118,10 +1123,12 @@ async def tracknet_track(request: SAM2TrackRequest):
             ball_track[i] = bwd_pt
             conf_track[i] = bc
     
+    merge_time = time.time() - bwd_start - bwd_time
     merged_det = sum(1 for b in ball_track if b[0] is not None)
-    logger.info(f"TrackNet merged: {merged_det}/{n} detections (fwd={fwd_det}, bwd={bwd_det})")
+    logger.info(f"[TrackNet] Merge + validation: {merged_det}/{n} detections in {merge_time:.2f}s")
     
     # === Post-processing ===
+    postprocess_start = time.time()
     dists = [-1] * n
     for i in range(1, n):
         if ball_track[i][0] is not None and ball_track[i-1][0] is not None:
@@ -1239,10 +1246,12 @@ async def tracknet_track(request: SAM2TrackRequest):
                     break
             except Exception:
                 pass
+    yolo_time = time.time() - postprocess_start
     if yolo_recovered:
-        logger.info(f"YOLO recovered {yolo_recovered} gap frames")
-
+        logger.info(f"[TrackNet] YOLO gap recovery: {yolo_recovered} frames in {yolo_time:.2f}s")
+    
     # === One Euro Filter Smoothing (adaptive + responsive) ===
+    smooth_start = time.time()
     # Replaces EMA with One Euro Filter for better jitter reduction while preserving fast motion
     class LowPassFilter:
         def __init__(self, alpha: float):
@@ -1385,7 +1394,15 @@ async def tracknet_track(request: SAM2TrackRequest):
             })
     
     detected = len(trajectory)
-    logger.info(f"TrackNet complete: {detected}/{n} frames tracked (bidir+bridge+yolo)")
+    smooth_time = time.time() - smooth_start
+    total_time = time.time() - pipeline_start
+    postprocess_total = time.time() - postprocess_start
+    
+    logger.info(
+        f"[TrackNet] Pipeline complete: {detected}/{n} frames ({detected/n*100:.1f}%) | "
+        f"Total: {total_time:.2f}s (fwd: {fwd_time:.2f}s, bwd: {bwd_time:.2f}s, "
+        f"merge: {merge_time:.2f}s, postprocess: {postprocess_total:.2f}s [YOLO: {yolo_time:.2f}s, smooth: {smooth_time:.2f}s])"
+    )
     
     return {
         "status": "completed",

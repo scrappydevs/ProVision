@@ -87,3 +87,55 @@ def cleanup_temp_file(file_path: str):
             print(f"[VideoUtils] Cleaned up temp file: {file_path}")
     except Exception as e:
         print(f"[VideoUtils] Warning: Failed to cleanup file {file_path}: {e}")
+
+
+def upload_to_storage_with_retry(
+    storage_path: str,
+    content: bytes,
+    bucket: str = "provision-videos",
+    max_retries: int = 3,
+) -> str:
+    """
+    Upload file to Supabase storage with automatic retry for SSL/network errors.
+    
+    SSL/TLS errors (SSLV3_ALERT_BAD_RECORD_MAC) are common when uploading large files
+    due to connection drops or timeouts. This function retries with exponential backoff.
+    
+    Args:
+        storage_path: Path in storage bucket (e.g., "user_id/session_id/file.mp4")
+        content: File content as bytes
+        bucket: Storage bucket name (default: "provision-videos")
+        max_retries: Maximum retry attempts (default: 3)
+        
+    Returns:
+        Public URL of uploaded file
+        
+    Raises:
+        Exception if upload fails after all retries
+    """
+    import time
+    supabase = get_supabase()
+    
+    size_mb = len(content) / 1024 / 1024
+    print(f"[VideoUtils] Uploading to {storage_path} ({size_mb:.1f} MB)")
+    
+    for attempt in range(max_retries):
+        try:
+            supabase.storage.from_(bucket).upload(storage_path, content)
+            url = supabase.storage.from_(bucket).get_public_url(storage_path)
+            print(f"[VideoUtils] Upload succeeded (attempt {attempt + 1}/{max_retries}): {url}")
+            return url
+        except Exception as e:
+            err_str = str(e).lower()
+            is_retryable = any(x in err_str for x in [
+                "ssl", "timeout", "connection", "network", "read error", 
+                "bad record mac", "broken pipe", "reset by peer", "unbound"
+            ])
+            
+            if attempt < max_retries - 1 and is_retryable:
+                wait_time = (2 ** attempt) * 0.5  # 0.5s, 1s, 2s
+                print(f"[VideoUtils] Upload failed (attempt {attempt + 1}/{max_retries}), retrying in {wait_time}s: {e}")
+                time.sleep(wait_time)
+            else:
+                print(f"[VideoUtils] Upload failed permanently after {max_retries} attempts: {e}")
+                raise e

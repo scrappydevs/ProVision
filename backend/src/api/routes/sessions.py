@@ -1,4 +1,5 @@
 import os
+import asyncio
 import uuid
 from typing import List, Optional
 from fastapi import APIRouter, Depends, HTTPException, UploadFile, File, Form, BackgroundTasks
@@ -67,6 +68,68 @@ async def _run_dashboard_analysis_background(session_id: str, user_id: str, vide
         logger.error(f"[Dashboard] Analysis failed for {session_id}: {e}", exc_info=True)
 
 
+def _run_tracknet_background_sync(session_id: str, video_url: str) -> None:
+    asyncio.run(_run_tracknet_background(session_id, video_url))
+
+
+def _run_pose_background_sync(session_id: str, video_url: str) -> None:
+    asyncio.run(_run_pose_background(session_id, video_url))
+
+
+def _run_dashboard_analysis_background_sync(session_id: str, user_id: str, video_url: str) -> None:
+    asyncio.run(_run_dashboard_analysis_background(session_id, user_id, video_url))
+
+
+def _precache_video_on_gpu(session_id: str, video_url: str) -> None:
+    """Pre-download video to GPU so TrackNet doesn't wait for the download.
+    
+    This is a lightweight call that checks if the video is already cached and
+    downloads it if not. Runs before parallel jobs fan out so the video is
+    ready for both TrackNet and any other GPU-dependent tasks.
+    """
+    try:
+        from ..services.sam2_service import sam2_service
+        if sam2_service.is_available:
+            from time import perf_counter
+            start = perf_counter()
+            sam2_service._ensure_video_on_gpu(session_id, video_url)
+            logger.info(f"[SessionBackground] GPU video pre-cached for session={session_id} in {perf_counter() - start:.2f}s")
+    except Exception as e:
+        logger.warning(f"[SessionBackground] GPU pre-cache failed for session={session_id}: {e}")
+        # Non-fatal: TrackNet will retry the download itself
+
+
+async def _run_session_background_jobs_parallel(session_id: str, user_id: str, video_url: str) -> None:
+    """
+    Run post-upload background jobs concurrently.
+
+    Note: FastAPI/Starlette `BackgroundTasks` executes tasks in-order (sequentially),
+    so we fan out here to actually overlap TrackNet, pose extraction, and dashboard jobs.
+    
+    The GPU video is pre-cached first so TrackNet doesn't block on download.
+    """
+    logger.info(f"[SessionBackground] Starting parallel jobs for session={session_id}")
+
+    # Pre-cache video on GPU before fanning out (avoids each job downloading separately)
+    await asyncio.to_thread(_precache_video_on_gpu, session_id, video_url)
+
+    results = await asyncio.gather(
+        asyncio.to_thread(_run_tracknet_background_sync, session_id, video_url),
+        asyncio.to_thread(_run_pose_background_sync, session_id, video_url),
+        asyncio.to_thread(_run_dashboard_analysis_background_sync, session_id, user_id, video_url),
+        return_exceptions=True,
+    )
+
+    for job_name, result in zip(("tracknet", "pose", "dashboard"), results):
+        if isinstance(result, Exception):
+            logger.error(
+                f"[SessionBackground] {job_name} task raised for session={session_id}: {result}",
+                exc_info=True,
+            )
+
+    logger.info(f"[SessionBackground] Parallel jobs completed for session={session_id}")
+
+
 async def _run_pose_background(session_id: str, video_url: str):
     """Background task: run pose detection on sampled frames and store in pose_analysis table.
     
@@ -76,10 +139,12 @@ async def _run_pose_background(session_id: str, video_url: str):
         from ..services.sam2_service import sam2_service
         supabase = get_supabase()
 
-        # Get video info from the session's trajectory data (if available) or default
+        # Get video info from trajectory_data when available.
+        # In parallel mode, TrackNet may not have written this yet, so use a
+        # safe upper bound fallback rather than truncating to a short default.
         session_result = supabase.table("sessions").select("trajectory_data").eq("id", session_id).single().execute()
         video_info = session_result.data.get("trajectory_data", {}).get("video_info", {}) if session_result.data else {}
-        total_frames = video_info.get("total_frames", 300)
+        total_frames = video_info.get("total_frames", 900)
         fps_val = video_info.get("fps", 30)
 
         # Sample every 3rd frame for pose analysis
@@ -283,21 +348,16 @@ async def create_session(
         #     background_tasks.add_task(process_pose_analysis, session_id, video_storage_path, video_url)
         # except Exception as e:
         #     print(f"[WARNING] Failed to queue pose analysis: {str(e)}")
-        # Auto-trigger ball tracking + pose + dashboard analysis in background
+        # Auto-trigger ball tracking + pose + dashboard analysis in background.
+        # Keep this as one background task to guarantee parallel fan-out.
         try:
             background_tasks.add_task(
-                _run_tracknet_background,
-                session_id, video_url
+                _run_session_background_jobs_parallel,
+                session_id,
+                user_id,
+                video_url,
             )
-            background_tasks.add_task(
-                _run_pose_background,
-                session_id, video_url
-            )
-            background_tasks.add_task(
-                _run_dashboard_analysis_background,
-                session_id, user_id, video_url
-            )
-            print(f"[DEBUG] TrackNet + Pose + Dashboard queued for session {session_id}")
+            print(f"[DEBUG] Parallel TrackNet + Pose + Dashboard queued for session {session_id}")
         except Exception as e:
             print(f"[WARNING] Failed to queue background tasks: {str(e)}")
 

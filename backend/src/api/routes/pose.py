@@ -134,13 +134,9 @@ def process_pose_analysis(session_id: str, video_path: str, video_url: str, sele
         with open(pose_overlay_temp, 'rb') as f:
             video_content = f.read()
 
-        # Upload to storage
-        supabase.storage.from_("provision-videos").upload(pose_storage_path, video_content)
-
-        # Get public URL
-        pose_video_url = supabase.storage.from_("provision-videos").get_public_url(pose_storage_path)
-
-        print(f"[PoseAnalysis] Pose overlay video uploaded: {pose_video_url}")
+        # Upload to storage with automatic retry for SSL/network errors
+        from ..utils.video_utils import upload_to_storage_with_retry
+        pose_video_url = upload_to_storage_with_retry(pose_storage_path, video_content)
 
         # Clean up temporary pose video file
         pose_video_path = pose_overlay_temp

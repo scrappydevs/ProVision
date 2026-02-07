@@ -348,6 +348,7 @@ export default function GameViewerPage() {
     // Tips/insights should only follow confirmed player strokes.
     return strokeSummary.strokes.filter((stroke) => getStrokeOwner(stroke) === "player");
   }, [strokeSummary?.strokes]);
+  const hasPlayerStrokes = playerOwnedStrokes.length > 0;
 
   const opponentStrokeCount = useMemo(
     () => (strokeSummary?.strokes ?? []).filter((stroke) => getStrokeOwner(stroke) === "opponent").length,
@@ -422,25 +423,25 @@ export default function GameViewerPage() {
 
   // Find the active stroke at current video frame
   const activeStroke = useMemo((): Stroke | null => {
-    if (!strokeSummary?.strokes?.length) return null;
-    return strokeSummary.strokes.find(
+    if (!playerOwnedStrokes.length) return null;
+    return playerOwnedStrokes.find(
       (s) => currentFrame >= s.start_frame && currentFrame <= s.end_frame
     ) ?? null;
-  }, [strokeSummary?.strokes, currentFrame]);
+  }, [playerOwnedStrokes, currentFrame]);
 
   // Find the most recent stroke (for display when between strokes)
   const lastStroke = useMemo((): Stroke | null => {
-    if (!strokeSummary?.strokes?.length) return null;
-    const past = strokeSummary.strokes.filter((s) => s.peak_frame <= currentFrame);
+    if (!playerOwnedStrokes.length) return null;
+    const past = playerOwnedStrokes.filter((s) => s.peak_frame <= currentFrame);
     return past.length > 0 ? past[past.length - 1] : null;
-  }, [strokeSummary?.strokes, currentFrame]);
+  }, [playerOwnedStrokes, currentFrame]);
 
   // Highlight only around contact so the label flickers near the hit moment.
   const shotFlashStroke = useMemo((): Stroke | null => {
-    if (!strokeSummary?.strokes?.length) return null;
+    if (!playerOwnedStrokes.length) return null;
     let best: Stroke | null = null;
     let bestDist = Number.POSITIVE_INFINITY;
-    for (const stroke of strokeSummary.strokes) {
+    for (const stroke of playerOwnedStrokes) {
       if (stroke.stroke_type !== "forehand" && stroke.stroke_type !== "backhand") continue;
       const dist = Math.abs(currentFrame - stroke.peak_frame);
       if (dist <= SHOT_FLASH_WINDOW_FRAMES && dist < bestDist) {
@@ -449,14 +450,14 @@ export default function GameViewerPage() {
       }
     }
     return best;
-  }, [strokeSummary?.strokes, currentFrame]);
+  }, [playerOwnedStrokes, currentFrame]);
 
   const lastClassifiedStroke = useMemo((): Stroke | null => {
-    if (!strokeSummary?.strokes?.length) return null;
-    const past = strokeSummary.strokes
+    if (!playerOwnedStrokes.length) return null;
+    const past = playerOwnedStrokes
       .filter((s) => (s.stroke_type === "forehand" || s.stroke_type === "backhand") && s.peak_frame <= currentFrame);
     return past.length > 0 ? past[past.length - 1] : null;
-  }, [strokeSummary?.strokes, currentFrame]);
+  }, [playerOwnedStrokes, currentFrame]);
 
   // Re-show the ShotCard whenever a *new* stroke flashes (after user dismissed a previous one)
   const prevShotFlashId = useRef<string | null>(null);
@@ -522,14 +523,11 @@ export default function GameViewerPage() {
           duration: Number.isFinite(tip.duration) ? Number(tip.duration) : 2,
           title: String(tip.title || "Rally Snapshot"),
           message: String(tip.message || ""),
+          strokeId: String(tip.source_stroke_id || tip.id || ""),
           seekTime: Number.isFinite(tip.seek_time ?? undefined)
             ? Number(tip.seek_time)
             : (Number.isFinite(tip.timestamp) ? Number(tip.timestamp) : 0),
         }))
-        .filter((tip) => {
-          const stroke = strokeById.get(tip.id);
-          return !stroke || getStrokeOwner(stroke) === "player";
-        })
         .sort((a, b) => a.timestamp - b.timestamp);
 
       console.log("[VideoTips] Using server timeline tips", {
@@ -1704,7 +1702,7 @@ export default function GameViewerPage() {
                 />
 
                 {/* Floating shot label above player's head */}
-                {(hasStrokes || poseData?.frames?.length) && floatingShotBadge && (
+                {(hasPlayerStrokes || poseData?.frames?.length) && floatingShotBadge && (
                   <div
                     className="fixed pointer-events-none"
                     style={{
@@ -1735,9 +1733,9 @@ export default function GameViewerPage() {
                         />
                         <span className="text-[11px] font-medium text-[#E8E6E3] leading-tight capitalize whitespace-nowrap">
                           {shotFlashStroke
-                            ? `${getStrokeOwner(shotFlashStroke) === "opponent" ? "Opponent " : ""}${shotFlashStroke.stroke_type}`
+                            ? shotFlashStroke.stroke_type
                             : lastClassifiedStroke
-                              ? `Last ${getStrokeOwner(lastClassifiedStroke) === "opponent" ? "opponent " : ""}${lastClassifiedStroke.stroke_type}`
+                              ? `Last ${lastClassifiedStroke.stroke_type}`
                               : "Ready"}
                         </span>
                       </div>
@@ -1751,9 +1749,9 @@ export default function GameViewerPage() {
                     <ShotCard
                       stroke={shotFlashStroke}
                       index={
-                        (strokeSummary?.strokes?.findIndex((s) => s.id === shotFlashStroke.id) ?? -1) + 1
+                        (playerOwnedStrokes.findIndex((s) => s.id === shotFlashStroke.id) ?? -1) + 1
                       }
-                      totalStrokes={strokeSummary?.strokes?.length ?? 0}
+                      totalStrokes={playerOwnedStrokes.length}
                       sessionMaxVelocity={sessionMaxVelocity}
                       onDismiss={() => setShowShotCard(false)}
                     />
@@ -2082,12 +2080,11 @@ export default function GameViewerPage() {
                     )}
 
                     {/* ── Live Stroke Indicator (synced to video frame) ── */}
-                    {hasStrokes && (
+                    {hasPlayerStrokes && (
                       <div className={cn(
                         "p-2.5 rounded-lg transition-all duration-200",
                         activeStroke
-                          ? getStrokeOwner(activeStroke) === "opponent" ? "bg-[#C45C5C]/15 ring-1 ring-[#C45C5C]/40"
-                          : activeStroke.stroke_type === "forehand" ? "bg-[#9B7B5B]/15 ring-1 ring-[#9B7B5B]/40"
+                          ? activeStroke.stroke_type === "forehand" ? "bg-[#9B7B5B]/15 ring-1 ring-[#9B7B5B]/40"
                           : activeStroke.stroke_type === "backhand" ? "bg-[#5B9B7B]/15 ring-1 ring-[#5B9B7B]/40"
                           : "bg-[#1E1D1F]"
                           : "bg-[#1E1D1F]"
@@ -2096,19 +2093,17 @@ export default function GameViewerPage() {
                           <div className="flex items-center gap-2">
                             <div className={cn(
                               "w-2 h-2 rounded-full animate-pulse",
-                              getStrokeOwner(activeStroke) === "opponent" ? "bg-[#C45C5C]"
-                              : activeStroke.stroke_type === "forehand" ? "bg-[#9B7B5B]"
+                              activeStroke.stroke_type === "forehand" ? "bg-[#9B7B5B]"
                               : activeStroke.stroke_type === "backhand" ? "bg-[#5B9B7B]"
                               : "bg-[#8A8885]"
                             )} />
                             <span className={cn(
                               "text-xs font-medium capitalize",
-                              getStrokeOwner(activeStroke) === "opponent" ? "text-[#C45C5C]"
-                              : activeStroke.stroke_type === "forehand" ? "text-[#9B7B5B]"
+                              activeStroke.stroke_type === "forehand" ? "text-[#9B7B5B]"
                               : activeStroke.stroke_type === "backhand" ? "text-[#5B9B7B]"
                               : "text-[#8A8885]"
                             )}>
-                              {getStrokeOwner(activeStroke) === "opponent" ? `Opponent ${activeStroke.stroke_type}` : activeStroke.stroke_type}
+                              {activeStroke.stroke_type}
                             </span>
                             <span className="text-[10px] text-[#6A6865] ml-auto">
                               Form {activeStroke.form_score.toFixed(0)}
@@ -2120,11 +2115,10 @@ export default function GameViewerPage() {
                             <span className="text-xs text-[#6A6865]">
                               Last: <span className={cn(
                                 "capitalize",
-                                getStrokeOwner(lastStroke) === "opponent" ? "text-[#C45C5C]"
-                                : lastStroke.stroke_type === "forehand" ? "text-[#9B7B5B]"
+                                lastStroke.stroke_type === "forehand" ? "text-[#9B7B5B]"
                                 : lastStroke.stroke_type === "backhand" ? "text-[#5B9B7B]"
                                 : "text-[#8A8885]"
-                              )}>{getStrokeOwner(lastStroke) === "opponent" ? `opponent ${lastStroke.stroke_type}` : lastStroke.stroke_type}</span>
+                              )}>{lastStroke.stroke_type}</span>
                             </span>
                             <span className="text-[10px] text-[#6A6865] ml-auto">
                               Form {lastStroke.form_score.toFixed(0)}
@@ -2242,7 +2236,7 @@ export default function GameViewerPage() {
                               </div>
                             )}
 
-                            {/* Live Insights — the same tips shown on the video overlay */}
+                            {/* Live Insights — synced to actual stroke timestamps */}
                             {videoTips.length > 0 && (
                               <div className="shrink-0">
                                 <p className="text-[11px] text-[#6A6865] uppercase tracking-wider mb-1.5">
@@ -2252,6 +2246,11 @@ export default function GameViewerPage() {
                                   {videoTips.map((tip) => {
                                     const isActive = activeTip?.id === tip.id;
                                     const tipTime = tip.timestamp;
+                                    // Determine stroke type from title for color coding
+                                    const titleLower = tip.title.toLowerCase();
+                                    const isForehand = titleLower.includes("forehand");
+                                    const isBackhand = titleLower.includes("backhand");
+                                    const tipColor = isForehand ? "#9B7B5B" : isBackhand ? "#5B9B7B" : "#8A8885";
                                     return (
                                       <button
                                         key={tip.id}
@@ -2266,7 +2265,9 @@ export default function GameViewerPage() {
                                         className={cn(
                                           "w-full text-left px-2.5 py-2 rounded-lg transition-all",
                                           isActive
-                                            ? "bg-[#9B7B5B]/15 ring-1 ring-[#9B7B5B]/40"
+                                            ? isForehand ? "bg-[#9B7B5B]/15 ring-1 ring-[#9B7B5B]/40"
+                                            : isBackhand ? "bg-[#5B9B7B]/15 ring-1 ring-[#5B9B7B]/40"
+                                            : "bg-[#9B7B5B]/15 ring-1 ring-[#9B7B5B]/40"
                                             : "bg-[#2D2C2E]/30 hover:bg-[#2D2C2E]"
                                         )}
                                       >
@@ -2275,8 +2276,14 @@ export default function GameViewerPage() {
                                             {fmtTime(tipTime)}
                                           </span>
                                           {isActive && (
-                                            <div className="w-1.5 h-1.5 rounded-full bg-[#9B7B5B] animate-pulse shrink-0" />
+                                            <div className="w-1.5 h-1.5 rounded-full animate-pulse shrink-0" style={{ backgroundColor: tipColor }} />
                                           )}
+                                          <span
+                                            className="text-[10px] font-medium px-1.5 py-0.5 rounded capitalize"
+                                            style={{ backgroundColor: `${tipColor}20`, color: tipColor }}
+                                          >
+                                            {isForehand ? "FH" : isBackhand ? "BH" : ""}
+                                          </span>
                                           <span className="text-[11px] font-medium text-[#E8E6E3] truncate">
                                             {tip.title}
                                           </span>

@@ -1,0 +1,939 @@
+{
+  "run_id": "96734647-9d0b-467c-8023-d55a16824795",
+  "session_id": "40002981-2e2f-4173-9c04-61e58983401c",
+  "started_at": "2026-02-07T16:44:55.041529+00:00",
+  "completed_at": "2026-02-07T16:45:23.524626+00:00",
+  "classifier_mode": "elbow_trend",
+  "settings": {
+    "handedness": "right",
+    "camera_facing": "auto",
+    "use_claude_classifier": false,
+    "velocity_threshold": 42.0,
+    "min_duration_frames": 4,
+    "max_duration_frames": 70,
+    "traj_min_confidence": 0.1,
+    "traj_min_delta_px": 3.0,
+    "traj_min_span_px": 12.0,
+    "traj_min_gap_frames": 5,
+    "hit_frame_offset": 0,
+    "traj_direction_window_frames": 30,
+    "elbow_lookback_frames": 10,
+    "elbow_lookahead_frames": 10,
+    "elbow_min_delta_deg": 5.0
+  },
+  "shot_count": 15,
+  "shots": [
+    {
+      "shot_index": 0,
+      "label": "forehand",
+      "start_frame": 25,
+      "peak_frame": 31,
+      "end_frame": 37,
+      "event_frame": 31,
+      "event_sources": [
+        "contact"
+      ],
+      "classifier_source": "pose_elbow_trend",
+      "classifier_confidence": 0.872,
+      "classifier_reason": "right_elbow_delta_deg=-8.05; threshold=5.00; lookback=10; lookahead=10; rule=increasing_backhand",
+      "classification_frame_numbers": [
+        21,
+        24,
+        27,
+        30,
+        33,
+        36,
+        39,
+        42
+      ],
+      "elbow_stats": {
+        "dominant_arm": "right",
+        "lookback_frames": 10,
+        "lookahead_frames": 10,
+        "min_delta_deg": 5.0,
+        "sampled_frames": [
+          21,
+          24,
+          27,
+          30,
+          33,
+          36,
+          39,
+          42
+        ],
+        "sampled_angles_deg": [
+          112.092,
+          107.458,
+          104.612,
+          99.797,
+          100.231,
+          95.267,
+          101.388,
+          102.054
+        ],
+        "smoothed_angles_deg": [
+          109.775,
+          108.054,
+          103.956,
+          101.547,
+          98.432,
+          98.962,
+          99.57,
+          101.721
+        ],
+        "delta_deg": -8.054,
+        "classification_rule": "increasing_backhand_decreasing_forehand"
+      }
+    },
+    {
+      "shot_index": 1,
+      "label": "backhand",
+      "start_frame": 70,
+      "peak_frame": 73,
+      "end_frame": 77,
+      "event_frame": 73,
+      "event_sources": [
+        "contact"
+      ],
+      "classifier_source": "pose_elbow_trend",
+      "classifier_confidence": 0.95,
+      "classifier_reason": "right_elbow_delta_deg=12.19; threshold=5.00; lookback=10; lookahead=10; rule=increasing_backhand",
+      "classification_frame_numbers": [
+        63,
+        66,
+        69,
+        72,
+        75,
+        78,
+        81,
+        84
+      ],
+      "elbow_stats": {
+        "dominant_arm": "right",
+        "lookback_frames": 10,
+        "lookahead_frames": 10,
+        "min_delta_deg": 5.0,
+        "sampled_frames": [
+          63,
+          66,
+          69,
+          72,
+          75,
+          78,
+          81,
+          84
+        ],
+        "sampled_angles_deg": [
+          101.691,
+          96.616,
+          97.599,
+          95.556,
+          100.627,
+          103.788,
+          107.493,
+          115.187
+        ],
+        "smoothed_angles_deg": [
+          99.154,
+          98.635,
+          96.59,
+          97.927,
+          99.99,
+          103.97,
+          108.823,
+          111.34
+        ],
+        "delta_deg": 12.186,
+        "classification_rule": "increasing_backhand_decreasing_forehand"
+      }
+    },
+    {
+      "shot_index": 2,
+      "label": "backhand",
+      "start_frame": 84,
+      "peak_frame": 90,
+      "end_frame": 96,
+      "event_frame": 90,
+      "event_sources": [
+        "pose"
+      ],
+      "classifier_source": "pose_elbow_trend",
+      "classifier_confidence": 0.95,
+      "classifier_reason": "right_elbow_delta_deg=11.39; threshold=5.00; lookback=10; lookahead=10; rule=increasing_backhand",
+      "classification_frame_numbers": [
+        81,
+        84,
+        87,
+        90,
+        93,
+        96,
+        99
+      ],
+      "elbow_stats": {
+        "dominant_arm": "right",
+        "lookback_frames": 10,
+        "lookahead_frames": 10,
+        "min_delta_deg": 5.0,
+        "sampled_frames": [
+          81,
+          84,
+          87,
+          90,
+          93,
+          96,
+          99
+        ],
+        "sampled_angles_deg": [
+          107.493,
+          115.187,
+          116.203,
+          117.991,
+          118.141,
+          116.719,
+          128.737
+        ],
+        "smoothed_angles_deg": [
+          111.34,
+          112.961,
+          116.46,
+          117.445,
+          117.617,
+          121.199,
+          122.728
+        ],
+        "delta_deg": 11.388,
+        "classification_rule": "increasing_backhand_decreasing_forehand"
+      }
+    },
+    {
+      "shot_index": 3,
+      "label": "backhand",
+      "start_frame": 108,
+      "peak_frame": 114,
+      "end_frame": 120,
+      "event_frame": 114,
+      "event_sources": [
+        "contact",
+        "trajectory"
+      ],
+      "classifier_source": "pose_elbow_trend",
+      "classifier_confidence": 0.95,
+      "classifier_reason": "right_elbow_delta_deg=36.42; threshold=5.00; lookback=10; lookahead=10; rule=increasing_backhand",
+      "classification_frame_numbers": [
+        105,
+        108,
+        111,
+        114,
+        117,
+        120,
+        123
+      ],
+      "elbow_stats": {
+        "dominant_arm": "right",
+        "lookback_frames": 10,
+        "lookahead_frames": 10,
+        "min_delta_deg": 5.0,
+        "sampled_frames": [
+          105,
+          108,
+          111,
+          114,
+          117,
+          120,
+          123
+        ],
+        "sampled_angles_deg": [
+          107.501,
+          102.85,
+          132.234,
+          156.858,
+          154.14,
+          149.043,
+          134.144
+        ],
+        "smoothed_angles_deg": [
+          105.176,
+          114.195,
+          130.647,
+          147.744,
+          153.347,
+          145.776,
+          141.593
+        ],
+        "delta_deg": 36.418,
+        "classification_rule": "increasing_backhand_decreasing_forehand"
+      }
+    },
+    {
+      "shot_index": 4,
+      "label": "forehand",
+      "start_frame": 150,
+      "peak_frame": 159,
+      "end_frame": 174,
+      "event_frame": 146,
+      "event_sources": [
+        "contact",
+        "pose",
+        "trajectory"
+      ],
+      "classifier_source": "pose_elbow_trend",
+      "classifier_confidence": 0.95,
+      "classifier_reason": "right_elbow_delta_deg=-32.68; threshold=5.00; lookback=10; lookahead=10; rule=increasing_backhand",
+      "classification_frame_numbers": [
+        135,
+        138,
+        141,
+        144,
+        147,
+        150,
+        153,
+        156
+      ],
+      "elbow_stats": {
+        "dominant_arm": "right",
+        "lookback_frames": 10,
+        "lookahead_frames": 10,
+        "min_delta_deg": 5.0,
+        "sampled_frames": [
+          135,
+          138,
+          141,
+          144,
+          147,
+          150,
+          153,
+          156
+        ],
+        "sampled_angles_deg": [
+          121.886,
+          107.893,
+          104.009,
+          105.202,
+          92.666,
+          80.246,
+          90.197,
+          74.213
+        ],
+        "smoothed_angles_deg": [
+          114.89,
+          111.263,
+          105.702,
+          100.626,
+          92.705,
+          87.703,
+          81.552,
+          82.205
+        ],
+        "delta_deg": -32.684,
+        "classification_rule": "increasing_backhand_decreasing_forehand"
+      }
+    },
+    {
+      "shot_index": 5,
+      "label": "forehand",
+      "start_frame": 150,
+      "peak_frame": 159,
+      "end_frame": 174,
+      "event_frame": 173,
+      "event_sources": [
+        "contact",
+        "trajectory"
+      ],
+      "classifier_source": "pose_elbow_trend",
+      "classifier_confidence": 0.95,
+      "classifier_reason": "right_elbow_delta_deg=-34.40; threshold=5.00; lookback=10; lookahead=10; rule=increasing_backhand",
+      "classification_frame_numbers": [
+        162,
+        165,
+        168,
+        171,
+        174,
+        177,
+        180,
+        183
+      ],
+      "elbow_stats": {
+        "dominant_arm": "right",
+        "lookback_frames": 10,
+        "lookahead_frames": 10,
+        "min_delta_deg": 5.0,
+        "sampled_frames": [
+          162,
+          165,
+          168,
+          171,
+          174,
+          177,
+          180,
+          183
+        ],
+        "sampled_angles_deg": [
+          122.681,
+          157.738,
+          164.591,
+          177.581,
+          166.655,
+          89.282,
+          85.021,
+          126.597
+        ],
+        "smoothed_angles_deg": [
+          140.209,
+          148.336,
+          166.636,
+          169.609,
+          144.506,
+          113.653,
+          100.3,
+          105.809
+        ],
+        "delta_deg": -34.4,
+        "classification_rule": "increasing_backhand_decreasing_forehand"
+      }
+    },
+    {
+      "shot_index": 6,
+      "label": "forehand",
+      "start_frame": 192,
+      "peak_frame": 201,
+      "end_frame": 258,
+      "event_frame": 199,
+      "event_sources": [
+        "contact",
+        "pose",
+        "trajectory"
+      ],
+      "classifier_source": "pose_elbow_trend",
+      "classifier_confidence": 0.95,
+      "classifier_reason": "right_elbow_delta_deg=-39.39; threshold=5.00; lookback=10; lookahead=10; rule=increasing_backhand",
+      "classification_frame_numbers": [
+        189,
+        192,
+        195,
+        198,
+        201,
+        204,
+        207,
+        210
+      ],
+      "elbow_stats": {
+        "dominant_arm": "right",
+        "lookback_frames": 10,
+        "lookahead_frames": 10,
+        "min_delta_deg": 5.0,
+        "sampled_frames": [
+          189,
+          192,
+          195,
+          198,
+          201,
+          204,
+          207,
+          210
+        ],
+        "sampled_angles_deg": [
+          115.806,
+          113.377,
+          109.091,
+          117.78,
+          106.264,
+          82.42,
+          61.827,
+          88.574
+        ],
+        "smoothed_angles_deg": [
+          114.591,
+          112.758,
+          113.416,
+          111.045,
+          102.155,
+          83.504,
+          77.607,
+          75.2
+        ],
+        "delta_deg": -39.391,
+        "classification_rule": "increasing_backhand_decreasing_forehand"
+      }
+    },
+    {
+      "shot_index": 7,
+      "label": "forehand",
+      "start_frame": 222,
+      "peak_frame": 228,
+      "end_frame": 234,
+      "event_frame": 228,
+      "event_sources": [
+        "contact",
+        "pose",
+        "trajectory"
+      ],
+      "classifier_source": "pose_elbow_trend",
+      "classifier_confidence": 0.95,
+      "classifier_reason": "right_elbow_delta_deg=-92.64; threshold=5.00; lookback=10; lookahead=10; rule=increasing_backhand",
+      "classification_frame_numbers": [
+        219,
+        222,
+        225,
+        228,
+        231,
+        234,
+        237
+      ],
+      "elbow_stats": {
+        "dominant_arm": "right",
+        "lookback_frames": 10,
+        "lookahead_frames": 10,
+        "min_delta_deg": 5.0,
+        "sampled_frames": [
+          219,
+          222,
+          225,
+          228,
+          231,
+          234,
+          237
+        ],
+        "sampled_angles_deg": [
+          171.873,
+          94.052,
+          63.28,
+          60.52,
+          59.377,
+          43.303,
+          37.348
+        ],
+        "smoothed_angles_deg": [
+          132.962,
+          109.735,
+          72.617,
+          61.059,
+          54.4,
+          46.676,
+          40.325
+        ],
+        "delta_deg": -92.637,
+        "classification_rule": "increasing_backhand_decreasing_forehand"
+      }
+    },
+    {
+      "shot_index": 8,
+      "label": "backhand",
+      "start_frame": 264,
+      "peak_frame": 279,
+      "end_frame": 288,
+      "event_frame": 279,
+      "event_sources": [
+        "pose"
+      ],
+      "classifier_source": "pose_elbow_trend",
+      "classifier_confidence": 0.95,
+      "classifier_reason": "right_elbow_delta_deg=60.28; threshold=5.00; lookback=10; lookahead=10; rule=increasing_backhand",
+      "classification_frame_numbers": [
+        270,
+        273,
+        276,
+        279,
+        282,
+        285,
+        288
+      ],
+      "elbow_stats": {
+        "dominant_arm": "right",
+        "lookback_frames": 10,
+        "lookahead_frames": 10,
+        "min_delta_deg": 5.0,
+        "sampled_frames": [
+          270,
+          273,
+          276,
+          279,
+          282,
+          285,
+          288
+        ],
+        "sampled_angles_deg": [
+          69.613,
+          49.818,
+          125.052,
+          138.99,
+          148.682,
+          128.884,
+          111.108
+        ],
+        "smoothed_angles_deg": [
+          59.715,
+          81.494,
+          104.62,
+          137.575,
+          138.852,
+          129.558,
+          119.996
+        ],
+        "delta_deg": 60.281,
+        "classification_rule": "increasing_backhand_decreasing_forehand"
+      }
+    },
+    {
+      "shot_index": 9,
+      "label": "forehand",
+      "start_frame": 264,
+      "peak_frame": 279,
+      "end_frame": 288,
+      "event_frame": 290,
+      "event_sources": [
+        "trajectory"
+      ],
+      "classifier_source": "pose_elbow_trend",
+      "classifier_confidence": 0.95,
+      "classifier_reason": "right_elbow_delta_deg=-79.14; threshold=5.00; lookback=10; lookahead=10; rule=increasing_backhand",
+      "classification_frame_numbers": [
+        279,
+        282,
+        285,
+        288,
+        291,
+        294,
+        297,
+        300
+      ],
+      "elbow_stats": {
+        "dominant_arm": "right",
+        "lookback_frames": 10,
+        "lookahead_frames": 10,
+        "min_delta_deg": 5.0,
+        "sampled_frames": [
+          279,
+          282,
+          285,
+          288,
+          291,
+          294,
+          297,
+          300
+        ],
+        "sampled_angles_deg": [
+          138.99,
+          148.682,
+          128.884,
+          111.108,
+          88.26,
+          95.434,
+          68.11,
+          61.291
+        ],
+        "smoothed_angles_deg": [
+          143.836,
+          138.852,
+          129.558,
+          109.418,
+          98.268,
+          83.935,
+          74.945,
+          64.7
+        ],
+        "delta_deg": -79.136,
+        "classification_rule": "increasing_backhand_decreasing_forehand"
+      }
+    },
+    {
+      "shot_index": 10,
+      "label": "forehand",
+      "start_frame": 294,
+      "peak_frame": 300,
+      "end_frame": 306,
+      "event_frame": 300,
+      "event_sources": [
+        "contact",
+        "trajectory"
+      ],
+      "classifier_source": "pose_elbow_trend",
+      "classifier_confidence": 0.95,
+      "classifier_reason": "right_elbow_delta_deg=-21.50; threshold=5.00; lookback=10; lookahead=10; rule=increasing_backhand",
+      "classification_frame_numbers": [
+        291,
+        294,
+        297,
+        300,
+        303,
+        306,
+        309
+      ],
+      "elbow_stats": {
+        "dominant_arm": "right",
+        "lookback_frames": 10,
+        "lookahead_frames": 10,
+        "min_delta_deg": 5.0,
+        "sampled_frames": [
+          291,
+          294,
+          297,
+          300,
+          303,
+          306,
+          309
+        ],
+        "sampled_angles_deg": [
+          88.26,
+          95.434,
+          68.11,
+          61.291,
+          66.973,
+          69.413,
+          71.282
+        ],
+        "smoothed_angles_deg": [
+          91.847,
+          83.935,
+          74.945,
+          65.458,
+          65.892,
+          69.223,
+          70.347
+        ],
+        "delta_deg": -21.5,
+        "classification_rule": "increasing_backhand_decreasing_forehand"
+      }
+    },
+    {
+      "shot_index": 11,
+      "label": "forehand",
+      "start_frame": 331,
+      "peak_frame": 337,
+      "end_frame": 343,
+      "event_frame": 337,
+      "event_sources": [
+        "contact"
+      ],
+      "classifier_source": "pose_elbow_trend",
+      "classifier_confidence": 0.95,
+      "classifier_reason": "right_elbow_delta_deg=-31.48; threshold=5.00; lookback=10; lookahead=10; rule=increasing_backhand",
+      "classification_frame_numbers": [
+        327,
+        330,
+        333,
+        336,
+        339,
+        342,
+        345,
+        348
+      ],
+      "elbow_stats": {
+        "dominant_arm": "right",
+        "lookback_frames": 10,
+        "lookahead_frames": 10,
+        "min_delta_deg": 5.0,
+        "sampled_frames": [
+          327,
+          330,
+          333,
+          336,
+          339,
+          342,
+          345,
+          348
+        ],
+        "sampled_angles_deg": [
+          92.966,
+          135.451,
+          109.904,
+          99.381,
+          88.035,
+          92.322,
+          88.036,
+          77.425
+        ],
+        "smoothed_angles_deg": [
+          114.209,
+          112.774,
+          114.912,
+          99.107,
+          93.246,
+          89.464,
+          85.928,
+          82.731
+        ],
+        "delta_deg": -31.478,
+        "classification_rule": "increasing_backhand_decreasing_forehand"
+      }
+    },
+    {
+      "shot_index": 12,
+      "label": "forehand",
+      "start_frame": 349,
+      "peak_frame": 352,
+      "end_frame": 356,
+      "event_frame": 352,
+      "event_sources": [
+        "trajectory"
+      ],
+      "classifier_source": "pose_elbow_trend",
+      "classifier_confidence": 0.765,
+      "classifier_reason": "right_elbow_delta_deg=-5.36; threshold=5.00; lookback=10; lookahead=10; rule=increasing_backhand",
+      "classification_frame_numbers": [
+        342,
+        345,
+        348,
+        351,
+        354,
+        357,
+        360,
+        363
+      ],
+      "elbow_stats": {
+        "dominant_arm": "right",
+        "lookback_frames": 10,
+        "lookahead_frames": 10,
+        "min_delta_deg": 5.0,
+        "sampled_frames": [
+          342,
+          345,
+          348,
+          351,
+          354,
+          357,
+          360,
+          363
+        ],
+        "sampled_angles_deg": [
+          92.322,
+          88.036,
+          77.425,
+          87.587,
+          80.103,
+          76.935,
+          74.919,
+          94.711
+        ],
+        "smoothed_angles_deg": [
+          90.179,
+          85.928,
+          84.349,
+          81.705,
+          81.542,
+          77.319,
+          82.188,
+          84.815
+        ],
+        "delta_deg": -5.364,
+        "classification_rule": "increasing_backhand_decreasing_forehand"
+      }
+    },
+    {
+      "shot_index": 13,
+      "label": "backhand",
+      "start_frame": 384,
+      "peak_frame": 387,
+      "end_frame": 399,
+      "event_frame": 384,
+      "event_sources": [
+        "pose",
+        "trajectory"
+      ],
+      "classifier_source": "pose_elbow_trend",
+      "classifier_confidence": 0.95,
+      "classifier_reason": "right_elbow_delta_deg=27.51; threshold=5.00; lookback=10; lookahead=10; rule=increasing_backhand",
+      "classification_frame_numbers": [
+        375,
+        378,
+        381,
+        384,
+        387,
+        390,
+        393
+      ],
+      "elbow_stats": {
+        "dominant_arm": "right",
+        "lookback_frames": 10,
+        "lookahead_frames": 10,
+        "min_delta_deg": 5.0,
+        "sampled_frames": [
+          375,
+          378,
+          381,
+          384,
+          387,
+          390,
+          393
+        ],
+        "sampled_angles_deg": [
+          96.182,
+          84.229,
+          86.332,
+          121.599,
+          98.763,
+          119.772,
+          115.649
+        ],
+        "smoothed_angles_deg": [
+          90.206,
+          88.915,
+          97.387,
+          102.231,
+          113.378,
+          111.395,
+          117.711
+        ],
+        "delta_deg": 27.505,
+        "classification_rule": "increasing_backhand_decreasing_forehand"
+      }
+    },
+    {
+      "shot_index": 14,
+      "label": "backhand",
+      "start_frame": 408,
+      "peak_frame": 411,
+      "end_frame": 415,
+      "event_frame": 411,
+      "event_sources": [
+        "contact"
+      ],
+      "classifier_source": "pose_elbow_trend",
+      "classifier_confidence": 0.95,
+      "classifier_reason": "right_elbow_delta_deg=28.55; threshold=5.00; lookback=10; lookahead=10; rule=increasing_backhand",
+      "classification_frame_numbers": [
+        402,
+        405,
+        408,
+        411,
+        414,
+        417,
+        420
+      ],
+      "elbow_stats": {
+        "dominant_arm": "right",
+        "lookback_frames": 10,
+        "lookahead_frames": 10,
+        "min_delta_deg": 5.0,
+        "sampled_frames": [
+          402,
+          405,
+          408,
+          411,
+          414,
+          417,
+          420
+        ],
+        "sampled_angles_deg": [
+          124.271,
+          121.37,
+          123.939,
+          132.665,
+          151.498,
+          151.46,
+          151.281
+        ],
+        "smoothed_angles_deg": [
+          122.82,
+          123.193,
+          125.991,
+          136.034,
+          145.207,
+          151.413,
+          151.371
+        ],
+        "delta_deg": 28.55,
+        "classification_rule": "increasing_backhand_decreasing_forehand"
+      }
+    }
+  ]
+}

@@ -299,7 +299,15 @@ export function AnalyticsDashboard({ sessionId, onSeekToTime, playerName }: Anal
     timeline: [],
     distribution: { slow: 0, medium: 0, fast: 0 }
   };
-  const trajectory = analytics?.ball_analytics?.trajectory || { spin: "Unknown", height_variation: 0, lateral_movement: 0 };
+  const rawTrajectory = analytics?.ball_analytics?.trajectory;
+  const trajectory = {
+    total_distance: Number(rawTrajectory?.total_distance ?? 0),
+    bounce_count: Number(rawTrajectory?.bounce_count ?? 0),
+    bounces: Array.isArray(rawTrajectory?.bounces) ? rawTrajectory.bounces : [],
+    rallies: Array.isArray(rawTrajectory?.rallies) ? rawTrajectory.rallies : [],
+    direction_changes: Number(rawTrajectory?.direction_changes ?? 0),
+    arc_heights: Array.isArray(rawTrajectory?.arc_heights) ? rawTrajectory.arc_heights : [],
+  };
   const movement = analytics?.pose_analytics?.movement || { 
     footwork_score: 0, 
     balance_score: 0, 

@@ -127,13 +127,6 @@ def _is_reliable_opponent_stroke(stroke_row: Dict[str, Any]) -> bool:
     return confidence >= 0.75
 
 
-def _has_explicit_hitter_signal(stroke_row: Dict[str, Any]) -> bool:
-    metrics = _stroke_metrics(stroke_row)
-    ai_data = _stroke_ai_insight_data(stroke_row)
-    raw_owner = str(ai_data.get("shot_owner") or metrics.get("event_hitter") or "").strip().lower()
-    return raw_owner in {"player", "opponent", "unknown"}
-
-
 def _is_player_stroke_for_insights(stroke_row: Dict[str, Any]) -> bool:
     hitter, confidence, _, _ = _stroke_owner_fields(stroke_row)
     if hitter == "player":
@@ -141,8 +134,10 @@ def _is_player_stroke_for_insights(stroke_row: Dict[str, Any]) -> bool:
         return confidence >= 0.55
     if hitter == "opponent":
         return False
-    # Legacy rows may not include hitter metadata at all; keep them eligible.
-    return not _has_explicit_hitter_signal(stroke_row)
+    # Unknown ownership is common when ball/pose attribution is noisy.
+    # Keep unknown events eligible so timeline tips do not collapse to
+    # generic Rally Snapshot fillers when opponent evidence is inconclusive.
+    return True
 
 
 def _is_player_stroke(stroke_row: Dict[str, Any]) -> bool:
@@ -157,146 +152,97 @@ def _generate_timeline_tips_from_insights(
     trajectory_data: Optional[Dict[str, Any]],
 ) -> List[Dict[str, Any]]:
     """
-    Build one timeline tip per fixed-duration video bucket by sampling
-    from generated per-stroke AI insights.
-    Enhanced to avoid repetitive messages and add stroke-specific context.
+    Build one timeline tip per actual stroke, anchored to the stroke's real
+    timestamp in the video. Each tip shows the AI insight for that specific
+    stroke, synced to when it happens on screen.
+    
+    This replaces the old bucket-based approach that randomly sampled from a
+    pool and caused repetitive, out-of-sync tips.
     """
-    bucket_sec = max(0.5, min(5.0, _read_env_float("STROKE_TIMELINE_TIP_INTERVAL_SEC", 1.5)))
     duration_sec = _estimate_session_duration_seconds(trajectory_data, strokes)
-    bucket_count = max(1, int(math.ceil(duration_sec / bucket_sec)))
+    
+    # Derive FPS from trajectory data for frame-to-time conversion
+    fps = 30.0
+    if isinstance(trajectory_data, dict):
+        video_info = trajectory_data.get("video_info", {})
+        if isinstance(video_info, dict):
+            try:
+                fps = max(1.0, float(video_info.get("fps", 30.0) or 30.0))
+            except (TypeError, ValueError):
+                fps = 30.0
 
     def _normalize_tip_message(raw: str) -> str:
-        """Extract first 2-3 sentences for variety, not just one."""
+        """Extract first 2-3 sentences for variety."""
         cleaned = " ".join(str(raw or "").split())
         if not cleaned:
             return "Recover to neutral quickly and prepare your next contact point."
-        # Take up to 3 sentences instead of just 1
         parts = re.split(r"(?<=[.!?])\s+", cleaned, maxsplit=3)
         if len(parts) >= 2:
-            message = " ".join(parts[:2]).strip()  # 2 sentences
+            message = " ".join(parts[:2]).strip()
         else:
             message = parts[0].strip() if parts else cleaned
         return message[:220]
 
-    # Build unique candidates with deduplication by message content
-    candidates: List[Dict[str, Any]] = []
-    seen_messages: set[str] = set()
+    def _stroke_title(stroke_type: str, form_score: float) -> str:
+        if stroke_type == "forehand":
+            if form_score >= 85:
+                return "Strong Forehand"
+            elif form_score >= 70:
+                return "Forehand Form"
+            else:
+                return "Forehand Tip"
+        elif stroke_type == "backhand":
+            if form_score >= 85:
+                return "Strong Backhand"
+            elif form_score >= 70:
+                return "Backhand Form"
+            else:
+                return "Backhand Tip"
+        return "Form Tip"
+
+    out: List[Dict[str, Any]] = []
     
     for s in strokes:
         if not _is_player_stroke_for_insights(s):
             continue
+        
         ai_insight = str(s.get("ai_insight") or "").strip()
         if not ai_insight:
             continue
         
-        normalized_message = _normalize_tip_message(ai_insight)
-        # Skip if we've seen the exact same message (case-insensitive)
-        message_key = normalized_message.lower()[:100]  # First 100 chars as key
-        if message_key in seen_messages:
-            continue
-        seen_messages.add(message_key)
-        
         stroke_type = str(s.get("stroke_type") or "").strip().lower()
-        # Get stroke owner info for better titles
-        metrics = _stroke_metrics(s)
         form_score = s.get("form_score", 0)
+        peak_frame = int(s.get("peak_frame", 0) or 0)
+        start_frame = int(s.get("start_frame", 0) or 0)
         
-        # More specific titles with form score context
-        if stroke_type == "forehand":
-            if form_score >= 85:
-                title = "Strong Forehand"
-            elif form_score >= 70:
-                title = "Forehand Form"
-            else:
-                title = "Forehand Tip"
-        elif stroke_type == "backhand":
-            if form_score >= 85:
-                title = "Strong Backhand"
-            elif form_score >= 70:
-                title = "Backhand Form"
-            else:
-                title = "Backhand Tip"
-        else:
-            title = "Form Tip"
+        # Convert frame numbers to timestamps using actual FPS
+        peak_time = round(peak_frame / fps, 3)
+        start_time = round(start_frame / fps, 3)
         
-        candidates.append(
-            {
-                "id": s.get("id"),
-                "title": title,
-                "message": normalized_message,
-                "form_score": form_score,
-                "stroke_type": stroke_type,
-            }
-        )
-
-    # If we have very few unique insights, spread them out
-    if len(candidates) < bucket_count // 3:
-        # Clone the best insights to fill gaps
-        high_quality = [c for c in candidates if c.get("form_score", 0) >= 75]
-        if high_quality and len(candidates) < bucket_count:
-            # Add clones of high-quality insights with varied titles
-            for hq in high_quality[:min(5, bucket_count - len(candidates))]:
-                clone = dict(hq)
-                clone["id"] = f"{clone['id']}_repeat"
-                candidates.append(clone)
-
-    out: List[Dict[str, Any]] = []
-    prev_candidate_id: Optional[str] = None
-    prev_message: Optional[str] = None
-    used_messages: set[str] = set()
-    rng = random.Random()
-    rng.seed(f"{session_id}:{datetime.now(timezone.utc).isoformat()}")
-    
-    for bucket_index in range(bucket_count):
-        timestamp = round(bucket_index * bucket_sec, 3)
-        selected: Optional[Dict[str, Any]] = None
-
-        if candidates:
-            if len(candidates) == 1:
-                selected = candidates[0]
-            else:
-                # Try up to 10 times to find a non-repetitive candidate
-                for attempt in range(10):
-                    candidate = rng.choice(candidates)
-                    candidate_msg = str(candidate.get("message", ""))[:50]
-                    
-                    # Skip if same message as previous bucket or already used recently
-                    if candidate_msg == prev_message or candidate_msg in used_messages:
-                        continue
-                    
-                    # Skip if same stroke ID as previous (unless no other choice)
-                    if candidate.get("id") == prev_candidate_id and len(candidates) > 1:
-                        continue
-                    
-                    selected = candidate
-                    break
-                
-                # Fallback: just pick something different from last
-                if not selected:
-                    alternatives = [c for c in candidates if c.get("id") != prev_candidate_id]
-                    selected = rng.choice(alternatives) if alternatives else rng.choice(candidates)
-            
-            if selected:
-                prev_candidate_id = str(selected.get("id"))
-                prev_message = str(selected.get("message", ""))[:50]
-                used_messages.add(prev_message)
-                # Only keep last 5 messages in used set to allow eventual re-use
-                if len(used_messages) > 5:
-                    used_messages.pop()
-
+        # Tip duration: show for 3.5 seconds around the stroke
+        tip_duration = 3.5
+        
         out.append(
             {
-                "id": f"timeline-{bucket_index}",
-                "timestamp": timestamp,
-                "duration": bucket_sec,
-                "seek_time": timestamp,
-                "title": str((selected or {}).get("title") or "Rally Snapshot")[:64],
-                "message": str((selected or {}).get("message") or "Recover to neutral quickly and set up your next swing path early.")[:220],
-                "source_stroke_id": (selected or {}).get("id"),
+                "id": f"stroke-{s.get('id', peak_frame)}",
+                "timestamp": peak_time,
+                "duration": tip_duration,
+                "seek_time": start_time,
+                "title": _stroke_title(stroke_type, form_score)[:64],
+                "message": _normalize_tip_message(ai_insight),
+                "source_stroke_id": s.get("id"),
             }
         )
 
-    return out
+    # Sort by timestamp and enforce minimum 1.5s spacing
+    out.sort(key=lambda t: t["timestamp"])
+    spaced: List[Dict[str, Any]] = []
+    for tip in out:
+        prev = spaced[-1] if spaced else None
+        if not prev or tip["timestamp"] - prev["timestamp"] >= 1.5:
+            spaced.append(tip)
+    
+    return spaced
 
 
 def _extract_frames_for_insight(

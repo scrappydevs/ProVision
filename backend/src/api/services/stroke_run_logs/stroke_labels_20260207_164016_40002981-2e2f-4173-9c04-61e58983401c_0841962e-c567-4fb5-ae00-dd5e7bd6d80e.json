@@ -1,0 +1,73 @@
+{
+  "run_id": "0841962e-c567-4fb5-ae00-dd5e7bd6d80e",
+  "session_id": "40002981-2e2f-4173-9c04-61e58983401c",
+  "started_at": "2026-02-07T16:39:18.022106+00:00",
+  "completed_at": "2026-02-07T16:40:16.659280+00:00",
+  "classifier_mode": "claude",
+  "settings": {
+    "handedness": "right",
+    "camera_facing": "auto",
+    "use_claude_classifier": true,
+    "velocity_threshold": 42.0,
+    "min_duration_frames": 4,
+    "max_duration_frames": 70,
+    "traj_min_confidence": 0.1,
+    "traj_min_delta_px": 3.0,
+    "traj_min_span_px": 12.0,
+    "traj_min_gap_frames": 5,
+    "hit_frame_offset": 0,
+    "traj_direction_window_frames": 30,
+    "elbow_lookback_frames": 10,
+    "elbow_lookahead_frames": 10,
+    "elbow_min_delta_deg": 5.0
+  },
+  "shot_count": 2,
+  "shots": [
+    {
+      "shot_index": 0,
+      "label": "backhand",
+      "start_frame": 150,
+      "peak_frame": 159,
+      "end_frame": 174,
+      "event_frame": 159,
+      "event_sources": [
+        "pose"
+      ],
+      "classifier_source": "claude_vision",
+      "classifier_confidence": 0.9,
+      "classifier_reason": "no_reason_provided",
+      "classification_frame_numbers": [
+        149,
+        151,
+        153,
+        155,
+        157,
+        159
+      ],
+      "elbow_stats": null
+    },
+    {
+      "shot_index": 1,
+      "label": "backhand",
+      "start_frame": 264,
+      "peak_frame": 279,
+      "end_frame": 288,
+      "event_frame": 279,
+      "event_sources": [
+        "pose"
+      ],
+      "classifier_source": "claude_vision",
+      "classifier_confidence": 0.85,
+      "classifier_reason": "Right-handed player's racket crosses to left side of body with arm extended across torso, characteristic backhand form. Elbow trend analysis supports backhand classification with high confidence.",
+      "classification_frame_numbers": [
+        269,
+        271,
+        273,
+        275,
+        277,
+        279
+      ],
+      "elbow_stats": null
+    }
+  ]
+}

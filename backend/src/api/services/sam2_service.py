@@ -11,6 +11,8 @@ Tracking pipeline (automatic, no click needed):
 import os
 import math
 import logging
+import threading
+from time import perf_counter
 from typing import Optional, List, Dict, Any
 from pydantic import BaseModel
 
@@ -38,6 +40,8 @@ class BallTrackingService:
     
     def __init__(self):
         self._runner: Optional[RemoteEngineRunner] = None
+        self._video_locks: Dict[str, threading.Lock] = {}
+        self._video_locks_guard = threading.Lock()
     
     @property
     def runner(self) -> RemoteEngineRunner:
@@ -59,26 +63,92 @@ class BallTrackingService:
             return {"status": "error", "message": str(e)}
     
     def _ensure_video_on_gpu(self, session_id: str, video_url: str) -> str:
-        """Download video to GPU if not already present. Returns remote path."""
+        """Download video to GPU if not already present. Returns remote path.
+        
+        Optimised: uses a single SSH command to check cache AND download in one
+        round-trip, and prefers the public Supabase URL (fast CDN) over signed
+        URLs which are much slower (~0.6s vs ~68s for the same 34MB file).
+        """
         video_name = f"{session_id}.mp4"
         remote_video_dir = os.getenv("REMOTE_VIDEO_DIR", "/workspace/provision/data/videos")
         remote_video_path = f"{remote_video_dir}/{video_name}"
+
+        lock = self._get_video_lock(session_id)
+        with lock:
+            ensure_start = perf_counter()
+
+            # Resolve a fast public URL (CDN) instead of a slow signed URL.
+            # The bucket is already public so signed URLs are unnecessary.
+            download_url = self._resolve_public_url(video_url)
+
+            # Single SSH round-trip: check cache → download if missing
+            result = self._check_and_download(remote_video_path, download_url)
+            elapsed = perf_counter() - ensure_start
+
+            if result == "CACHED":
+                logger.info(
+                    f"[GPUVideoCache] Reusing cached video for session={session_id} "
+                    f"check_ms={elapsed * 1000:.1f}"
+                )
+            else:
+                logger.info(
+                    f"[GPUVideoCache] Downloaded session={session_id} via public URL in "
+                    f"{elapsed:.2f}s"
+                )
+
+            return remote_video_path
+
+    def _resolve_public_url(self, video_url: str) -> str:
+        """Convert any Supabase video URL to a fast public URL.
         
-        try:
+        Public URLs go through the CDN and are ~100x faster than signed URLs
+        for downloads from RunPod GPU servers.
+        """
+        # If it's already a public URL, strip trailing ? and return
+        if "/object/public/" in video_url:
+            return video_url.split("?")[0]
+
+        # Convert signed URL or storage path to public URL
+        if "/provision-videos/" in video_url:
+            storage_path = video_url.split("/provision-videos/")[-1].split("?")[0]
             from ..database.supabase import get_supabase
             supabase = get_supabase()
-            storage_path = video_url.split("/provision-videos/")[-1].rstrip("?") if "/provision-videos/" in video_url else None
-            if storage_path:
-                signed = supabase.storage.from_("provision-videos").create_signed_url(storage_path, 3600)
-                signed_url = signed.get("signedURL") or signed.get("signed_url") or signed.get("signedUrl")
-                if signed_url:
-                    self.runner.download_videos_from_supabase({video_name: signed_url}, remote_video_dir)
-                    return remote_video_path
-        except Exception as e:
-            logger.warning(f"Signed URL download failed, falling back to direct: {e}")
+            return supabase.storage.from_("provision-videos").get_public_url(storage_path)
+
+        # Fallback: use as-is
+        return video_url
+
+    def _check_and_download(self, remote_path: str, download_url: str) -> str:
+        """Single SSH round-trip: check if video is cached, download if not.
         
-        self._download_via_url(remote_video_path, video_url)
-        return remote_video_path
+        Returns 'CACHED' or 'DOWNLOADED'.
+        """
+        escaped_url = download_url.replace("'", "'\\''")
+        cmd = (
+            f"test -s '{remote_path}' && echo 'CACHED' || "
+            f"(mkdir -p \"$(dirname '{remote_path}')\" && "
+            f"wget -q -O '{remote_path}' '{escaped_url}' && echo 'DOWNLOADED')"
+        )
+        with self.runner.ssh_session() as ssh:
+            exit_code, stdout, stderr = ssh.execute_command(cmd, timeout=120)
+            result = stdout.strip().split("\n")[-1] if stdout else ""
+            if result not in ("CACHED", "DOWNLOADED"):
+                logger.warning(
+                    f"[GPUVideoCache] Unexpected result: exit={exit_code} "
+                    f"stdout={stdout!r} stderr={stderr!r}"
+                )
+                # If wget failed, raise so caller can handle
+                if exit_code != 0:
+                    raise RuntimeError(f"GPU video download failed: {stderr}")
+            return result
+
+    def _get_video_lock(self, session_id: str) -> threading.Lock:
+        with self._video_locks_guard:
+            lock = self._video_locks.get(session_id)
+            if lock is None:
+                lock = threading.Lock()
+                self._video_locks[session_id] = lock
+            return lock
 
     async def detect_poses(
         self,
@@ -169,32 +239,49 @@ class BallTrackingService:
         frame: int = 0,
     ):
         """Track ball through entire video automatically (no click needed)."""
+        pipeline_start = perf_counter()
+        
         if not self.is_available:
             raise Exception("GPU not configured")
         
+        # Step 1: Ensure video is on GPU (download if needed)
+        video_prep_start = perf_counter()
         remote_video_path = self._ensure_video_on_gpu(session_id, video_url)
+        video_prep_time = perf_counter() - video_prep_start
+        logger.info(f"[TrackNet] Video preparation: {video_prep_time:.2f}s")
         
-        # Try TrackNet (primary tracker)
+        # Step 2: Run TrackNet inference on GPU
         try:
+            inference_start = perf_counter()
             result = self.runner._call_model_server("/tracknet/track", {
                 "session_id": session_id,
                 "video_path": remote_video_path,
                 "init_point": {"x": 0, "y": 0},
                 "frame": frame,
             })
+            inference_time = perf_counter() - inference_start
             
+            # Step 3: Extract and process results
+            processing_start = perf_counter()
             trajectory = result.get("trajectory") or []
             video_info = result.get("video_info") or {}
+            processing_time = perf_counter() - processing_start
+            
+            total_time = perf_counter() - pipeline_start
             
             if not trajectory:
                 error_msg = result.get("error", "No trajectory returned")
                 logger.warning(f"TrackNet returned empty trajectory: {error_msg}")
             else:
-                logger.info(f"TrackNet tracking complete: {len(trajectory)} frames detected")
+                logger.info(
+                    f"[TrackNet] Complete: {len(trajectory)} frames | "
+                    f"Total: {total_time:.2f}s (prep: {video_prep_time:.2f}s, "
+                    f"inference: {inference_time:.2f}s, processing: {processing_time:.3f}s)"
+                )
             
             return self._convert_result(trajectory), video_info
         except Exception as e:
-            logger.error(f"TrackNet tracking failed: {e}")
+            logger.error(f"TrackNet tracking failed after {perf_counter() - pipeline_start:.2f}s: {e}")
             raise Exception(f"Ball tracking failed: {str(e)}")
     
     def _download_via_url(self, remote_path: str, url: str):

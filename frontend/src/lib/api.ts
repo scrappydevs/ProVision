@@ -347,6 +347,7 @@ export interface TimelineTip {
   title: string;
   message: string;
   seek_time?: number | null;
+  source_stroke_id?: string | null;
 }
 
 export interface StrokeSummary {
