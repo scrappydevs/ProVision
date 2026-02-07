@@ -1201,6 +1201,7 @@ export default function GameViewerPage() {
                   currentTime={currentTime}
                   tips={videoTips}
                   isPlaying={isPlaying}
+                  onTipChange={handleTipChange}
                 />
 
                 {/* Tracking in-progress overlay */}
