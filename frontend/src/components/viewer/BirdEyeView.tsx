@@ -103,26 +103,34 @@ function computePrediction(
   currentFrame: number,
   steps = 40
 ): [number, number, number][] {
-  const recent = points.filter((p) => p.frame <= currentFrame).slice(-12);
-  if (recent.length < 4) return [];
+  // Increased from 12 to 20 points for more stable predictions
+  const recent = points.filter((p) => p.frame <= currentFrame).slice(-20);
+  if (recent.length < 6) return []; // Require more points for better accuracy
 
   const last = recent[recent.length - 1];
 
   // Average velocity over multiple consecutive pairs for stability
-  let sumVx = 0, sumVz = 0, pairs = 0;
+  // Use weighted average - more recent frames have higher weight
+  let sumVx = 0, sumVz = 0, sumVy = 0, totalWeight = 0;
   for (let i = 1; i < recent.length; i++) {
     const frameDiff = recent[i].frame - recent[i - 1].frame;
     if (frameDiff > 0 && frameDiff < 10) {
-      sumVx += (recent[i].pos[0] - recent[i - 1].pos[0]) / frameDiff;
-      sumVz += (recent[i].pos[2] - recent[i - 1].pos[2]) / frameDiff;
-      pairs++;
+      // Weight decreases linearly with distance from current frame
+      const weight = i / recent.length;
+      const vx = (recent[i].pos[0] - recent[i - 1].pos[0]) / frameDiff;
+      const vz = (recent[i].pos[2] - recent[i - 1].pos[2]) / frameDiff;
+      const vy = (recent[i].pos[1] - recent[i - 1].pos[1]) / frameDiff;
+      sumVx += vx * weight;
+      sumVz += vz * weight;
+      sumVy += vy * weight;
+      totalWeight += weight;
     }
   }
-  if (pairs === 0) return [];
+  if (totalWeight === 0) return [];
 
-  const vx = sumVx / pairs;
-  const vz = sumVz / pairs;
-  const vy = 0.05; // small upward arc assumption
+  const vx = sumVx / totalWeight;
+  const vz = sumVz / totalWeight;
+  const vy = sumVy / totalWeight || 0.05; // Use calculated vertical velocity or small upward arc
   const dt = 0.033; // ~30fps time step
 
   const path: [number, number, number][] = [last.pos];
@@ -537,7 +545,7 @@ function Scene({
 }
 
 export function BirdEyeView({ trajectoryData, poseData, currentFrame, totalFrames, isPlaying }: BirdEyeViewProps) {
-  const [mode, setMode] = useState<PhysicsMode>("replay");
+  const [mode, setMode] = useState<PhysicsMode>("predict"); // Auto-enable prediction
   const [whatIfStart, setWhatIfStart] = useState<[number, number, number] | null>(null);
   const [whatIfSpeed, setWhatIfSpeed] = useState(3);
   const [whatIfAngle, setWhatIfAngle] = useState(15);

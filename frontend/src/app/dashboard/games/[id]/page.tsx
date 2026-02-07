@@ -101,7 +101,7 @@ export default function GameViewerPage() {
   const [playbackRate, setPlaybackRate] = useState(1);
   const [panelWidth, setPanelWidth] = useState(320);
   const [videoDisplayWidth, setVideoDisplayWidth] = useState<number | null>(null);
-  const [videoBounds, setVideoBounds] = useState<{ top: number; right: number; width: number; height: number } | null>(null);
+  const [videoBounds, setVideoBounds] = useState<{ top: number; left: number; right: number; width: number; height: number } | null>(null);
   const isResizing = useRef(false);
   const [activeTip, setActiveTip] = useState<VideoTip | null>(null);
 
@@ -213,26 +213,44 @@ export default function GameViewerPage() {
     return past.length > 0 ? past[past.length - 1] : null;
   }, [strokeSummary?.strokes, currentFrame]);
 
-  // Get player position for current frame (for positioning stroke indicator)
-  const playerPosition = useMemo(() => {
-    if (!poseData?.frames || !videoBounds) return null;
+  // Get player position from current frame pose data for stroke indicator
+  const playerLabelPosition = useMemo(() => {
+    if (!videoBounds) return null;
 
-    const frameData = poseData.frames.find(f => f.frame === currentFrame);
-    if (!frameData?.landmarks || frameData.landmarks.length === 0) return null;
+    // Try to get position from pose data first
+    if (poseData?.frames) {
+      const frameData = poseData.frames.find(f => f.frame === currentFrame);
+      if (frameData?.landmarks && frameData.landmarks.length > 0) {
+        // Calculate bbox from landmarks (landmarks are in normalized 0-1 coordinates)
+        const xs = frameData.landmarks.map(kp => kp.x);
+        const ys = frameData.landmarks.map(kp => kp.y);
+        const minX = Math.min(...xs);
+        const minY = Math.min(...ys);
 
-    // Get shoulder keypoint (index 5 or 6 for right/left shoulder in COCO format)
-    const shoulder = frameData.landmarks[5] || frameData.landmarks[6];
-    if (!shoulder) return null;
+        return {
+          x: minX * videoBounds.width,
+          y: minY * videoBounds.height - 7, // Same offset as "Player" label
+        };
+      }
+    }
 
-    // Convert normalized coordinates to video pixel coordinates
-    const videoWidth = videoBounds.width;
-    const videoHeight = videoBounds.height;
+    // Fallback to selected player bbox if no pose data for current frame
+    if (session?.selected_player) {
+      const bbox = session.selected_player.bbox;
+      const videoWidth = session.trajectory_data?.video_info?.width || 1920;
+      const videoHeight = session.trajectory_data?.video_info?.height || 1080;
 
-    return {
-      x: shoulder.x * videoWidth,
-      y: shoulder.y * videoHeight,
-    };
-  }, [poseData?.frames, currentFrame, videoBounds]);
+      const scaleX = videoBounds.width / videoWidth;
+      const scaleY = videoBounds.height / videoHeight;
+
+      return {
+        x: bbox.x * scaleX,
+        y: bbox.y * scaleY - 7,
+      };
+    }
+
+    return null;
+  }, [poseData?.frames, currentFrame, videoBounds, session?.selected_player, session?.trajectory_data?.video_info]);
 
 
   const computedTrajectoryFps = useMemo(() => {
@@ -476,9 +494,10 @@ export default function GameViewerPage() {
     const viewportRect = viewport.getBoundingClientRect();
     const videoLeft = viewportRect.left + (containerWidth - nextWidth) / 2;
     const videoTop = viewportRect.top + (containerHeight - nextHeight) / 2;
-    
+
     setVideoBounds({
       top: videoTop,
+      left: videoLeft,
       right: videoLeft + nextWidth,
       width: nextWidth,
       height: nextHeight,
@@ -1214,46 +1233,39 @@ export default function GameViewerPage() {
                   onTipChange={handleTipChange}
                 />
 
-                {/* Live Stroke Indicator - Next to player */}
-                {hasStrokes && (activeStroke || lastStroke) && playerPosition && videoBounds && (
+                {/* Live Stroke Indicator - Tracks player dynamically */}
+                {playerLabelPosition && videoBounds && (
                   <div
-                    className="fixed pointer-events-none z-20 transition-all duration-200"
+                    className="fixed pointer-events-none transition-all duration-150"
                     style={{
-                      left: `${videoBounds.left + playerPosition.x + 80}px`, // Offset to the right of player
-                      top: `${videoBounds.top + playerPosition.y - 40}px`, // Slightly above shoulder
+                      left: `${videoBounds.left + playerLabelPosition.x + 80}px`, // Next to "Player" label
+                      top: `${videoBounds.top + playerLabelPosition.y}px`, // Same height as label
+                      zIndex: 100,
                     }}
                   >
-                    <div className={cn(
-                      "glass-shot-card px-3 py-1.5 flex items-center gap-2 transition-all duration-300",
-                      activeStroke
-                        ? activeStroke.stroke_type === "forehand"
-                          ? "ring-1 ring-[#9B7B5B]/40"
-                          : "ring-1 ring-[#5B9B7B]/40"
-                        : "opacity-70"
-                    )}>
-                      <div className={cn(
-                        "w-1.5 h-1.5 rounded-full",
-                        activeStroke
-                          ? activeStroke.stroke_type === "forehand"
-                            ? "bg-[#9B7B5B] animate-pulse"
-                            : "bg-[#5B9B7B] animate-pulse"
-                          : "bg-[#363436]"
-                      )} />
-                      <span className={cn(
-                        "text-xs font-medium capitalize",
-                        activeStroke
-                          ? activeStroke.stroke_type === "forehand"
-                            ? "text-[#9B7B5B]"
-                            : "text-[#5B9B7B]"
-                          : "text-[#8A8885]"
-                      )}>
-                        {activeStroke
-                          ? activeStroke.stroke_type
-                          : lastStroke
-                            ? `Last ${lastStroke.stroke_type}`
-                            : null
-                        }
-                      </span>
+                    <div className="glass-shot-card px-3 py-1.5">
+                      <div className="flex items-center gap-2">
+                        <div className={cn(
+                          "w-1.5 h-1.5 rounded-full shrink-0",
+                          activeStroke
+                            ? activeStroke.stroke_type === "forehand"
+                              ? "bg-[#9B7B5B] animate-pulse"
+                              : "bg-[#5B9B7B] animate-pulse"
+                            : lastStroke
+                              ? lastStroke.stroke_type === "forehand"
+                                ? "bg-[#9B7B5B]"
+                                : "bg-[#5B9B7B]"
+                              : "bg-[#363436]"
+                        )} />
+                        <span className="text-xs font-medium text-[#E8E6E3] leading-tight capitalize whitespace-nowrap">
+                          {activeStroke
+                            ? activeStroke.stroke_type
+                            : lastStroke
+                              ? `Last ${lastStroke.stroke_type}`
+                              : "Ready"
+                          }
+                        </span>
+                      </div>
                     </div>
                   </div>
                 )}
