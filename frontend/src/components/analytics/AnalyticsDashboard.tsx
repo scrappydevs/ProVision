@@ -292,7 +292,13 @@ export function AnalyticsDashboard({ sessionId, onSeekToTime, playerName }: Anal
   }
 
   // Safely extract analytics with null checks and default values
-  const ballSpeed = analytics?.ball_analytics?.speed || { avg: 0, max: 0, min: 0, timeline: [] };
+  const ballSpeed = analytics?.ball_analytics?.speed || { 
+    avg: 0, 
+    max: 0, 
+    min: 0, 
+    timeline: [],
+    distribution: { slow: 0, medium: 0, fast: 0 }
+  };
   const trajectory = analytics?.ball_analytics?.trajectory || { spin: "Unknown", height_variation: 0, lateral_movement: 0 };
   const movement = analytics?.pose_analytics?.movement || { 
     footwork_score: 0, 

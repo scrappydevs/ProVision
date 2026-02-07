@@ -751,3 +751,85 @@ async def delete_player(
         raise HTTPException(status_code=404, detail="Player not found")
     supabase.table("players").delete().eq("id", player_id).execute()
     return {"status": "ok"}
+
+
+@router.get("/{player_id}/heatmap-data")
+async def get_player_heatmap_data(
+    player_id: str,
+    user_id: str = Depends(get_current_user_id),
+    limit: int = Query(default=10, ge=1, le=50, description="Number of recent games to include"),
+):
+    """
+    Fetch aggregated trajectory data from player's recent games for 3D heatmap visualization.
+    
+    Returns trajectory frames from the player's most recent games with ball tracking data,
+    allowing the frontend to generate an aggregated heatmap across multiple sessions.
+    """
+    supabase = get_supabase()
+    
+    # Verify player belongs to coach
+    player_result = supabase.table("players").select("id, name").eq("id", player_id).eq("coach_id", user_id).single().execute()
+    if not player_result.data:
+        raise HTTPException(status_code=404, detail="Player not found")
+    
+    # Get player's games with trajectory data, ordered by most recent
+    games_result = supabase.table("game_players")\
+        .select("game_id")\
+        .eq("player_id", player_id)\
+        .execute()
+    
+    if not games_result.data:
+        return {
+            "player_id": player_id,
+            "player_name": player_result.data["name"],
+            "games": [],
+            "games_count": 0,
+            "total_frames": 0,
+        }
+    
+    game_ids = [g["game_id"] for g in games_result.data]
+    
+    # Fetch sessions with trajectory data
+    sessions_result = supabase.table("sessions")\
+        .select("id, name, created_at, trajectory_data")\
+        .in_("id", game_ids)\
+        .not_.is_("trajectory_data", "null")\
+        .order("created_at", desc=True)\
+        .limit(limit)\
+        .execute()
+    
+    if not sessions_result.data:
+        return {
+            "player_id": player_id,
+            "player_name": player_result.data["name"],
+            "games": [],
+            "games_count": 0,
+            "total_frames": 0,
+        }
+    
+    # Build response with trajectory frames per game
+    games_data = []
+    total_frames = 0
+    
+    for session in sessions_result.data:
+        trajectory_data = session.get("trajectory_data") or {}
+        frames = trajectory_data.get("frames", [])
+        
+        if frames:
+            games_data.append({
+                "session_id": session["id"],
+                "session_name": session["name"],
+                "created_at": session["created_at"],
+                "trajectory_frames": frames,  # Array of {x, y, frame, confidence, bbox?}
+                "frame_count": len(frames),
+                "video_info": trajectory_data.get("video_info"),  # {width, height, fps}
+            })
+            total_frames += len(frames)
+    
+    return {
+        "player_id": player_id,
+        "player_name": player_result.data["name"],
+        "games": games_data,
+        "games_count": len(games_data),
+        "total_frames": total_frames,
+    }
