@@ -27,7 +27,7 @@ export function PlayerForm({
   const [notes, setNotes] = useState(initialData?.notes ?? "");
   const [description, setDescription] = useState(initialData?.description ?? "");
   const [avatarFile, setAvatarFile] = useState<File | null>(null);
-  const [avatarPreview, setAvatarPreview] = useState<string | null>(null);
+  const [avatarPreview, setAvatarPreview] = useState<string | null>("/player1.png");
 
   const handleAvatarChange = (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
