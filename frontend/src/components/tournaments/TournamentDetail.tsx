@@ -628,18 +628,62 @@ function ClipSelectorModal({
     if (!matchup.youtube_url || analyzing || !isValid) return;
     setAnalyzing(true);
     try {
-      const { sessionId } = await createAndAnalyzeVideo(matchup.youtube_url, {
-        matchupId: matchup.id,
-        tournamentId: matchup.tournament_id,
-        playerId: matchup.player_id || undefined,
-        startTime,
-        endTime,
+      // UPDATED FLOW: Save clip to youtube_clips table for reuse
+      const { createYouTubeClip, analyzeYouTubeClip } = await import("@/lib/api");
+      
+      console.log("[Tournament] Creating YouTube clip:", {
+        url: matchup.youtube_url,
+        start: startTime,
+        end: endTime,
       });
+      
+      // Create clip record (triggers background download)
+      const clipResponse = await createYouTubeClip({
+        youtube_url: matchup.youtube_url,
+        clip_start_time: startTime,
+        clip_end_time: endTime,
+        title: title,
+      });
+      
+      const clipId = clipResponse.data.id;
+      console.log("[Tournament] Clip created:", clipId, "waiting for processing...");
+      
+      // Poll for clip to be processed (should be ~5 seconds with optimization)
+      let attempts = 0;
+      let clipReady = false;
+      
+      while (attempts < 20 && !clipReady) {
+        await new Promise(resolve => setTimeout(resolve, 1000)); // Wait 1 second
+        
+        const { getYouTubeClip } = await import("@/lib/api");
+        const checkResponse = await getYouTubeClip(clipId);
+        const status = checkResponse.data.status;
+        
+        console.log(`[Tournament] Clip status (attempt ${attempts + 1}):`, status);
+        
+        if (status === "completed") {
+          clipReady = true;
+        } else if (status === "failed") {
+          throw new Error("Clip processing failed");
+        }
+        
+        attempts++;
+      }
+      
+      if (!clipReady) {
+        throw new Error("Clip processing timed out");
+      }
+      
+      // Analyze the completed clip
+      const analyzeResponse = await analyzeYouTubeClip(clipId);
+      const sessionId = analyzeResponse.data.session_id;
+      
       if (sessionId) {
         router.push(`/dashboard/games/${sessionId}`);
       }
-    } catch (err) {
+    } catch (err: any) {
       console.error("Clip analysis failed:", err);
+      alert(`Failed to create clip: ${err?.message || "Unknown error"}`);
     } finally {
       setAnalyzing(false);
     }
@@ -769,7 +813,7 @@ function ClipSelectorModal({
               ) : (
                 <Sparkles className="w-3.5 h-3.5" />
               )}
-              {analyzing ? "Analyzing..." : `Analyze Clip (${fmtTime(clipDuration)})`}
+              {analyzing ? "Processing clip..." : `Analyze Clip (${fmtTime(clipDuration)})`}
             </Button>
           </div>
         </div>

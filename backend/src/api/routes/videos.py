@@ -272,44 +272,32 @@ def _analyze_youtube_background(
             pass
         local_path = None  # Prevent double-cleanup in outer except
 
-        # ── Auto-trigger TrackNet ball tracking ──
-        try:
-            import asyncio
-            from .sessions import _run_tracknet_background
-            logger.info(f"[VideoAnalyze] Starting TrackNet for session {session_id}")
-            loop = asyncio.new_event_loop()
-            loop.run_until_complete(_run_tracknet_background(session_id, video_url))
-            loop.close()
-            logger.info(f"[VideoAnalyze] TrackNet completed for session {session_id}")
-        except Exception as e:
-            logger.warning(f"[VideoAnalyze] TrackNet auto-track failed (non-fatal): {e}")
+        # ── Auto-trigger TrackNet + Dashboard (NOT pose) ──
+        # Pose analysis is NOT auto-triggered here. The frontend will open the
+        # PlayerSelection modal so the user picks which person to track,
+        # then POST /api/pose/analyze/{session_id} runs pose with that selection.
+        import asyncio
+        from .sessions import _run_tracknet_background, _run_dashboard_analysis_background
 
-        # ── Auto-trigger pose analysis → overlay video → stroke detection ──
+        loop = asyncio.new_event_loop()
         try:
-            from .pose import process_pose_analysis
-            logger.info(f"[VideoAnalyze] Starting pose analysis for session {session_id}")
-            process_pose_analysis(session_id, storage_path, video_url)
-            logger.info(f"[VideoAnalyze] Pose analysis completed for session {session_id}")
-        except Exception as e:
-            logger.warning(f"[VideoAnalyze] Pose auto-analysis failed (non-fatal): {e}")
-            # If pose fails, mark session as ready (video + tracknet may have succeeded)
+            # TrackNet ball tracking
             try:
-                current = supabase.table("sessions").select("status").eq("id", session_id).single().execute()
-                if current.data and current.data.get("status") == "processing":
-                    supabase.table("sessions").update({"status": "ready"}).eq("id", session_id).execute()
-            except Exception:
-                pass
+                logger.info(f"[VideoAnalyze] Starting TrackNet for session {session_id}")
+                loop.run_until_complete(_run_tracknet_background(session_id, video_url))
+                logger.info(f"[VideoAnalyze] TrackNet completed for session {session_id}")
+            except Exception as e:
+                logger.warning(f"[VideoAnalyze] TrackNet failed (non-fatal): {e}")
 
-        # Trigger local pose analysis (runs YOLO locally, no GPU server needed)
-        try:
-            from ..routes.pose import process_pose_analysis
-            from ..utils.video_utils import extract_video_path_from_url
-            video_storage_path = extract_video_path_from_url(video_url)
-            logger.info(f"[VideoAnalyze] Starting local pose analysis for session {session_id}")
-            process_pose_analysis(session_id, video_storage_path, video_url)
-            logger.info(f"[VideoAnalyze] Pose analysis completed for session {session_id}")
-        except Exception as pose_err:
-            logger.warning(f"[VideoAnalyze] Local pose analysis failed for {session_id}: {pose_err}")
+            # Dashboard analysis
+            try:
+                logger.info(f"[VideoAnalyze] Starting dashboard analysis for session {session_id}")
+                loop.run_until_complete(_run_dashboard_analysis_background(session_id, user_id, video_url))
+                logger.info(f"[VideoAnalyze] Dashboard analysis completed for session {session_id}")
+            except Exception as e:
+                logger.warning(f"[VideoAnalyze] Dashboard analysis failed (non-fatal): {e}")
+        finally:
+            loop.close()
 
     except Exception as e:
         logger.error(f"[VideoAnalyze] Failed for video {video_id}: {e}")

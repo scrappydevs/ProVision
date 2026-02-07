@@ -228,20 +228,12 @@ async def analyze_youtube_clip(
         
         logger.info(f"Created session {session_id} for YouTube clip {clip_id}")
         
-        # Trigger analysis tasks
+        # Trigger background analysis tasks (TrackNet + Dashboard only).
+        # Pose analysis is NOT auto-triggered — the frontend will open the
+        # PlayerSelection modal so the user picks which person to track,
+        # then POST /api/pose/analyze/{session_id} runs pose with that selection.
         video_url = clip["video_public_url"]
-        video_storage_path = clip.get("video_storage_path")
 
-        # Queue local pose analysis (runs YOLO locally, reliable without GPU)
-        if video_storage_path:
-            from .pose import process_pose_analysis
-            background_tasks.add_task(
-                process_pose_analysis,
-                session_id, video_storage_path, video_url
-            )
-            logger.info(f"[YouTubeClip {clip_id}] Local pose analysis queued for session {session_id}")
-
-        # Also queue GPU-based tasks (TrackNet for ball tracking, dashboard)
         from .sessions import _run_tracknet_background, _run_dashboard_analysis_background
 
         try:
@@ -253,9 +245,9 @@ async def analyze_youtube_clip(
                 _run_dashboard_analysis_background,
                 session_id, user_id, video_url
             )
-            logger.info(f"[YouTubeClip {clip_id}] GPU analysis tasks queued for session {session_id}")
+            logger.info(f"[YouTubeClip {clip_id}] TrackNet + Dashboard queued for session {session_id}")
         except Exception as bg_error:
-            logger.warning(f"[YouTubeClip {clip_id}] Failed to queue GPU tasks: {bg_error}")
+            logger.warning(f"[YouTubeClip {clip_id}] Failed to queue background tasks: {bg_error}")
         
         return {"message": "Analysis started", "session_id": session_id}
     except Exception as e:
