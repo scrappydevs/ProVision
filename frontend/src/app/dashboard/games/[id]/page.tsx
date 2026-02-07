@@ -1751,20 +1751,12 @@ export default function GameViewerPage() {
                       </>
                     )}
 
-                    {/* ── Divider ── */}
-                    {hasPose && !isPoseProcessing && detectedPersons.length > 0 && (
-                      <div className="border-t border-[#363436]/30 pt-2 mt-1">
-                        <p className="text-[10px] text-[#6A6865] uppercase tracking-wider mb-1.5">Pose Estimation</p>
-                      </div>
-                    )}
-
                     {/* ── Processing / Error / Empty states ── */}
                     {isPoseProcessing ? (
                       <div className="text-center py-6">
                         <Loader2 className="w-6 h-6 text-[#9B7B5B] mx-auto mb-3 animate-spin" />
                         <p className="text-xs text-[#E8E6E3] mb-1">Pose estimation running...</p>
                         <p className="text-[10px] text-[#6A6865]">Analyzing player movements frame by frame.</p>
-                        <p className="text-[10px] text-[#6A6865] mt-1">This may take a minute for longer videos.</p>
                         {session?.selected_player && (
                           <p className="text-[10px] text-[#9B7B5B] mt-2">Tracking Player {session.selected_player.player_idx + 1}</p>
                         )}
@@ -1782,127 +1774,6 @@ export default function GameViewerPage() {
                         </button>
                       </div>
                     ) : null}
-
-                    {/* ── Per-person pose metrics ── */}
-                    {!isPoseProcessing && detectedPersons.map((person) => {
-                      const isSelected = selectedPersonIds.includes(person.id);
-                      const selectionIndex = selectedPersonIds.indexOf(person.id);
-                      const isPrimary = selectionIndex === 0;
-                      const isOpponent = selectionIndex === 1;
-                      const color = ["#9B7B5B", "#5B9B7B", "#7B5B9B", "#C8B464"][(person.id - 1) % 4];
-
-                      const handleToggleSelection = () => {
-                        if (isSelected) {
-                          // Deselect
-                          setSelectedPersonIds(prev => prev.filter(id => id !== person.id));
-                        } else {
-                          // Select (max 2)
-                          setSelectedPersonIds(prev => {
-                            if (prev.length >= 2) {
-                              // Replace the oldest selection
-                              return [...prev.slice(1), person.id];
-                            }
-                            return [...prev, person.id];
-                          });
-                        }
-                      };
-
-                      return (
-                        <button
-                          key={person.id}
-                          onClick={handleToggleSelection}
-                          className={`w-full p-2.5 rounded-lg text-left transition-colors ${
-                            isSelected ? "bg-[#363436]/60 ring-1" : "bg-[#1E1D1F] hover:bg-[#363436]/30"
-                          }`}
-                          style={isSelected ? { borderColor: color, borderWidth: 1 } : undefined}
-                        >
-                          <div className="flex items-center gap-2 mb-2">
-                            <div className="w-3 h-3 rounded-full" style={{ backgroundColor: color }} />
-                            <span className="text-xs font-medium text-[#E8E6E3]">
-                              Player {person.id}
-                              {isPrimary && <span className="text-[10px] text-[#8A8885] ml-1.5">(P)</span>}
-                              {isOpponent && <span className="text-[10px] text-[#8A8885] ml-1.5">(O)</span>}
-                            </span>
-                            <span className="text-[10px] text-[#6A6865] ml-auto">{(person.confidence * 100).toFixed(0)}%</span>
-                          </div>
-                          {isSelected && (
-                            <div className="space-y-3 mt-2">
-                              {/* Overall Detection Quality */}
-                              <div>
-                                <div className="flex items-center justify-between mb-1">
-                                  <p className="text-[10px] text-[#6A6865] uppercase tracking-wider">Detection Quality</p>
-                                  <span className="text-[10px] font-medium text-[#E8E6E3]">{(person.confidence * 100).toFixed(0)}%</span>
-                                </div>
-                                <div className="h-1.5 bg-[#363436] rounded-full overflow-hidden">
-                                  <div 
-                                    className="h-full rounded-full transition-all"
-                                    style={{ 
-                                      width: `${person.confidence * 100}%`,
-                                      backgroundColor: color,
-                                    }}
-                                  />
-                                </div>
-                              </div>
-
-                              {/* Keypoint Confidence Bars */}
-                              <div>
-                                <p className="text-[10px] text-[#6A6865] uppercase tracking-wider mb-1.5">Keypoint Confidence</p>
-                                <div className="space-y-1">
-                                  {person.keypoints
-                                    .filter((k) => k.conf > 0.3)
-                                    .sort((a, b) => b.conf - a.conf)
-                                    .slice(0, 8)
-                                    .map((kp) => {
-                                      const conf = kp.conf * 100;
-                                      const barColor = conf >= 90 ? '#5B9B7B' : conf >= 70 ? color : '#8A8885';
-                                      return (
-                                        <div key={kp.name}>
-                                          <div className="flex items-center justify-between mb-0.5">
-                                            <span className="text-[9px] text-[#8A8885] capitalize truncate">
-                                              {kp.name.replace(/_/g, " ")}
-                                            </span>
-                                            <span className="text-[9px] text-[#E8E6E3] font-mono ml-2">
-                                              {conf.toFixed(0)}%
-                                            </span>
-                                          </div>
-                                          <div className="h-1 bg-[#363436] rounded-full overflow-hidden">
-                                            <div 
-                                              className="h-full rounded-full transition-all"
-                                              style={{ 
-                                                width: `${conf}%`,
-                                                backgroundColor: barColor,
-                                              }}
-                                            />
-                                          </div>
-                                        </div>
-                                      );
-                                    })}
-                                </div>
-                              </div>
-
-                              {/* Body Dimensions */}
-                              <div className="pt-2 border-t border-[#363436]/30">
-                                <p className="text-[10px] text-[#6A6865] uppercase tracking-wider mb-1.5">Body Metrics</p>
-                                <div className="grid grid-cols-2 gap-2">
-                                  <div className="bg-[#1E1D1F] rounded-lg p-2">
-                                    <p className="text-[9px] text-[#6A6865] mb-0.5">Width</p>
-                                    <p className="text-xs font-medium text-[#E8E6E3]">
-                                      {(person.bbox[2] - person.bbox[0]).toFixed(0)}px
-                                    </p>
-                                  </div>
-                                  <div className="bg-[#1E1D1F] rounded-lg p-2">
-                                    <p className="text-[9px] text-[#6A6865] mb-0.5">Height</p>
-                                    <p className="text-xs font-medium text-[#E8E6E3]">
-                                      {(person.bbox[3] - person.bbox[1]).toFixed(0)}px
-                                    </p>
-                                  </div>
-                                </div>
-                              </div>
-                            </div>
-                          )}
-                        </button>
-                      );
-                    })}
                   </div>
                 </div>
               )}
