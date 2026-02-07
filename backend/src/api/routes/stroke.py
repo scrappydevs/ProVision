@@ -91,6 +91,18 @@ def process_stroke_detection(session_id: str):
         pose_frames = pose_result.data
         print(f"[StrokeDetection] Analyzing {len(pose_frames)} frames")
 
+        # Get trajectory data for ball contact validation
+        session_result = supabase.table("sessions")\
+            .select("trajectory_data")\
+            .eq("id", session_id)\
+            .single()\
+            .execute()
+        
+        trajectory_frames = []
+        if session_result.data and session_result.data.get("trajectory_data"):
+            traj = session_result.data["trajectory_data"]
+            trajectory_frames = traj.get("frames", []) if isinstance(traj, dict) else []
+
         # Initialize stroke detector with handedness and camera facing
         detector = StrokeDetector(
             velocity_threshold=50.0,
@@ -102,7 +114,31 @@ def process_stroke_detection(session_id: str):
 
         # Detect strokes
         strokes = detector.detect_strokes(pose_frames)
-        print(f"[StrokeDetection] Detected {len(strokes)} strokes")
+        print(f"[StrokeDetection] Detected {len(strokes)} raw strokes")
+        
+        # Filter strokes: only keep those where ball is near the player during the stroke
+        if trajectory_frames:
+            validated_strokes = []
+            for stroke in strokes:
+                # Check if ball is near player during the stroke window
+                ball_near_player = False
+                for tf in trajectory_frames:
+                    if stroke.start_frame <= tf.get("frame", 0) <= stroke.end_frame:
+                        # Ball detected during this stroke - it's likely a real hit
+                        ball_near_player = True
+                        break
+                
+                if ball_near_player:
+                    validated_strokes.append(stroke)
+                else:
+                    print(f"[StrokeDetection] Filtered out false stroke at frames {stroke.start_frame}-{stroke.end_frame} (no ball nearby)")
+            
+            print(f"[StrokeDetection] Validated {len(validated_strokes)}/{len(strokes)} strokes with ball tracking")
+            strokes = validated_strokes
+        else:
+            print(f"[StrokeDetection] No trajectory data - keeping all {len(strokes)} detected strokes")
+        
+        print(f"[StrokeDetection] Final: {len(strokes)} strokes")
 
         # Delete existing stroke analytics for this session
         supabase.table("stroke_analytics").delete().eq("session_id", session_id).execute()
