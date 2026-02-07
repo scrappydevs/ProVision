@@ -1263,8 +1263,8 @@ export default function GameViewerPage() {
                             if (videoRef.current) videoRef.current.currentTime = marker.time;
                           }}
                           className={cn(
-                            "absolute top-0 -translate-x-1/2 h-2 w-1 rounded-full pointer-events-auto transition-transform",
-                            isActive ? "scale-125" : "hover:scale-110"
+                            "absolute top-0 -translate-x-1/2 h-3 w-1.5 rounded-full pointer-events-auto transition-transform",
+                            isActive ? "scale-125" : "hover:scale-125"
                           )}
                           style={{ left: `${pct * 100}%`, backgroundColor: color }}
                           title={`${marker.type} — Frame ${marker.frame} — Form ${marker.formScore.toFixed(0)}`}
@@ -1282,7 +1282,7 @@ export default function GameViewerPage() {
                             if (videoRef.current) videoRef.current.currentTime = marker.time;
                           }}
                           className={cn(
-                            "absolute top-0 -translate-x-1/2 h-2.5 w-1 rounded-full pointer-events-auto transition-transform",
+                            "absolute top-0 -translate-x-1/2 h-3 w-1.5 rounded-full pointer-events-auto transition-transform",
                             isActive ? "scale-125" : "hover:scale-125"
                           )}
                           style={{ left: `${pct * 100}%`, backgroundColor: "#C45C5C" }}
