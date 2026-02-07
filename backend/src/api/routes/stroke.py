@@ -9,6 +9,7 @@ from time import perf_counter
 
 from ..database.supabase import get_supabase, get_current_user_id
 from ..services.stroke_event_service import detect_strokes_hybrid
+from ..services.stroke_debug_utils import debug_header, debug_info, debug_section_end
 
 router = APIRouter()
 STROKE_PROGRESS: Dict[str, Dict[str, Any]] = {}
@@ -186,13 +187,25 @@ def process_stroke_detection(
     session_owner_id: Optional[str] = owner_user_id
 
     try:
-        print(f"[StrokeDetection] Starting stroke detection for session: {session_id}")
+        print(f"\n{'*'*80}")
+        print(f"{'*'*80}")
+        print(f"[STROKE DETECTION] 🚀 BACKGROUND TASK STARTED")
+        print(f"[STROKE DETECTION]    Session ID: {session_id}")
+        print(f"[STROKE DETECTION]    Run ID: {run_id}")
+        print(f"[STROKE DETECTION]    Started at: {run_started_at}")
+        print(f"{'*'*80}")
+        print(f"{'*'*80}\n")
 
         # Determine player handedness and camera facing
+        debug_info("⚙️ LOADING PLAYER SETTINGS")
         player_settings = _get_player_settings_for_session(supabase, session_id)
         handedness = player_settings["handedness"]
         camera_facing = player_settings["camera_facing"]
-        print(f"[StrokeDetection] Player handedness: {handedness}, camera_facing: {camera_facing}")
+
+        debug_section_end("PLAYER SETTINGS LOADED",
+                         Handedness=handedness.upper(),
+                         Camera_Facing=camera_facing.upper(),
+                         Use_Claude=use_claude_classifier)
 
         classify_stage_id = "classify_events_claude" if use_claude_classifier else "classify_events_elbow"
         stage_order = [
@@ -654,7 +667,7 @@ def process_stroke_detection(
 
 
 class AnalyzeStrokesBody(BaseModel):
-    use_claude_classifier: Optional[bool] = True
+    use_claude_classifier: Optional[bool] = False
 
 
 @router.post("/analyze/{session_id}")
@@ -683,9 +696,11 @@ async def analyze_strokes(
         if not pose_count.data or pose_count.count == 0:
             raise HTTPException(status_code=400, detail="Pose analysis must be completed first. No pose video or pose data found.")
 
-    use_claude_classifier = body.use_claude_classifier if body is not None else True
-    if use_claude_classifier is None:
-        use_claude_classifier = True
+    requested_use_claude = bool(body.use_claude_classifier) if body is not None else False
+    # Force non-Claude path for forehand/backhand classification.
+    use_claude_classifier = False
+    if requested_use_claude:
+        print("[StrokeDetection] Claude classifier request ignored; using elbow-trend classifier.")
 
     # Mark session as processing strokes
     supabase.table("sessions").update({

@@ -1,7 +1,6 @@
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { analyzeStrokes, getStrokeDebugRuns, getStrokeProgress, getStrokeSummary } from "@/lib/api";
 import { sessionKeys } from "@/hooks/useSessions";
-import { readStrokeClaudeClassifierEnabledSetting } from "@/lib/appSettings";
 
 // Query key factory for stroke data
 export const strokeKeys = {
@@ -36,8 +35,7 @@ export function useAnalyzeStrokes(sessionId: string) {
 
   return useMutation({
     mutationFn: async () => {
-      const useClaude = readStrokeClaudeClassifierEnabledSetting();
-      const response = await analyzeStrokes(sessionId, { use_claude_classifier: useClaude });
+      const response = await analyzeStrokes(sessionId, { use_claude_classifier: false });
       return response.data;
     },
     onSuccess: () => {

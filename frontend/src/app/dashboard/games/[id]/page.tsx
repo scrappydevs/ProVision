@@ -474,6 +474,19 @@ export default function GameViewerPage() {
   const autoSeekTime = startTimeParam ?? tipSeekTime;
   const shouldAutoPlay = startTimeParam !== null && startTimeParam !== undefined;
 
+  const playVideoSafely = useCallback(async () => {
+    const video = videoRef.current;
+    if (!video) return;
+    try {
+      await video.play();
+    } catch (error) {
+      if (error instanceof DOMException && error.name === "AbortError") {
+        return;
+      }
+      console.error("Video play failed:", error);
+    }
+  }, []);
+
   useEffect(() => {
     hasAutoSeeked.current = false;
   }, [videoUrl, autoSeekTime]);
@@ -490,8 +503,7 @@ export default function GameViewerPage() {
       video.currentTime = safeTime;
       hasAutoSeeked.current = true;
       if (shouldAutoPlay) {
-        video.play().catch(() => undefined);
-        setIsPlaying(true);
+        void playVideoSafely();
       } else {
         video.pause();
         setIsPlaying(false);
@@ -505,7 +517,7 @@ export default function GameViewerPage() {
 
     video.addEventListener("loadedmetadata", seekAndPlay, { once: true });
     return () => video.removeEventListener("loadedmetadata", seekAndPlay);
-  }, [autoSeekTime, videoUrl, shouldAutoPlay]);
+  }, [autoSeekTime, videoUrl, shouldAutoPlay, playVideoSafely]);
 
   // Handle tip state changes - pause video when tip appears, user resumes manually
   const handleTipChange = useCallback((tip: VideoTip | null) => {
@@ -726,6 +738,7 @@ export default function GameViewerPage() {
     };
 
     const onPlay = () => {
+      setIsPlaying(true);
       if ("requestVideoFrameCallback" in video) {
         vfcId = (video as HTMLVideoElement & { requestVideoFrameCallback: (cb: any) => number })
           .requestVideoFrameCallback(frameLoop);
@@ -734,6 +747,7 @@ export default function GameViewerPage() {
       }
     };
     const onPause = () => {
+      setIsPlaying(false);
       cancelAnimationFrame(rafId);
       if (vfcId !== null && "cancelVideoFrameCallback" in video) {
         (video as HTMLVideoElement & { cancelVideoFrameCallback: (id: number) => void }).cancelVideoFrameCallback(vfcId);
@@ -1208,7 +1222,15 @@ export default function GameViewerPage() {
     });
   }, [detectionResult, currentFrame, trackMutation, queryClient, gameId]);
 
-  const togglePlay = useCallback(() => { if (isPlaying) videoRef.current?.pause(); else videoRef.current?.play(); setIsPlaying((p) => !p); }, [isPlaying]);
+  const togglePlay = useCallback(() => {
+    const video = videoRef.current;
+    if (!video) return;
+    if (video.paused) {
+      void playVideoSafely();
+    } else {
+      video.pause();
+    }
+  }, [playVideoSafely]);
   const skipFrames = useCallback((n: number) => { const t = Math.max(0, Math.min(duration, currentTime + n / fps)); if (videoRef.current) videoRef.current.currentTime = t; }, [duration, currentTime, fps]);
   const fmtTime = (t: number) => `${Math.floor(t / 60)}:${Math.floor(t % 60).toString().padStart(2, "0")}`;
   const handleAnalyticsSeek = useCallback((targetTime: number) => {

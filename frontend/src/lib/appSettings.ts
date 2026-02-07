@@ -27,12 +27,12 @@ export function writeStrokeDebugModeSetting(enabled: boolean): void {
 }
 
 export function readStrokeClaudeClassifierEnabledSetting(): boolean {
-  if (!hasWindow()) return true;
+  if (!hasWindow()) return false;
   try {
     const v = window.localStorage.getItem(STROKE_CLAUDE_CLASSIFIER_KEY);
-    return v === null || v === "true";
+    return v === "true";
   } catch {
-    return true;
+    return false;
   }
 }
 

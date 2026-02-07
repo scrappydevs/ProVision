@@ -35,6 +35,10 @@ DEBUG_STROKE_LOGGING_DIR = os.getenv("DEBUG_STROKE_LOGGING_DIR", "/tmp/stroke_de
 
 from .stroke_detector import Stroke, StrokeDetector
 from ..utils.video_utils import cleanup_temp_file, download_video_from_storage, extract_video_path_from_url
+from .stroke_debug_utils import (
+    debug_header, debug_info, debug_section_start, debug_section_end,
+    debug_timer, debug_pipeline_start, debug_pipeline_end
+)
 
 
 @dataclass
@@ -905,9 +909,12 @@ def _classify_single_event_with_claude(
     max_frame: int,
     handedness: str,
     camera_facing: str,
-    trajectory_by_frame: Optional[Dict[int, Dict[str, Any]]] = None,
+    trajectory_by_frame: Optional[Dict[str, Any]] = None,
     session_id: str = "",
 ) -> Dict[str, Any]:
+    debug_info(f"🎬 EXTRACTING FRAMES FOR EVENT at frame {event.frame}")
+    frame_extract_start = perf_counter()
+
     frame_numbers = _sample_event_frames(event, max_frame=max_frame)
     image_blocks: List[Dict[str, Any]] = []
     sent_frames: List[int] = []
@@ -947,7 +954,11 @@ def _classify_single_event_with_claude(
             }
         )
 
+    frame_extract_elapsed = (perf_counter() - frame_extract_start) * 1000
+    debug_section_end(f"EXTRACTED {len(sent_frames)} FRAMES", elapsed_ms=frame_extract_elapsed)
+
     if not image_blocks:
+        print(f"[STROKE DEBUG] ⚠️ NO FRAMES AVAILABLE FOR EVENT at frame {event.frame}")
         return {
             "label": "uncertain",
             "confidence": 0.0,
@@ -990,6 +1001,12 @@ def _classify_single_event_with_claude(
     user_content: List[Dict[str, Any]] = [{"type": "text", "text": prompt}]
     user_content.extend(image_blocks)
 
+    debug_info(f"🤖 CALLING CLAUDE VISION API",
+               Model=model,
+               Event_Frame=event.frame,
+               Frames_Sent=str(sent_frames))
+
+    claude_api_start = perf_counter()
     try:
         response = client.messages.create(
             model=model,
@@ -997,6 +1014,7 @@ def _classify_single_event_with_claude(
             temperature=0,
             messages=[{"role": "user", "content": user_content}],
         )
+        claude_api_elapsed = (perf_counter() - claude_api_start) * 1000
         raw_text = _extract_text_from_anthropic_response(response)
         parsed = _extract_first_json_object(raw_text) or {}
         # If JSON parse missed fields (or JSON was truncated), recover from raw text.
@@ -1005,7 +1023,13 @@ def _classify_single_event_with_claude(
             merged = dict(fallback_fields)
             merged.update(parsed)
             parsed = merged
+
+        debug_section_end(f"CLAUDE API RESPONSE",
+                         elapsed_ms=claude_api_elapsed,
+                         Label=parsed.get('label', 'N/A'))
+
     except Exception as exc:
+        debug_header(f"❌ CLAUDE API ERROR: {exc}")
         return {
             "label": "uncertain",
             "confidence": 0.0,
@@ -1021,6 +1045,12 @@ def _classify_single_event_with_claude(
     contact_frame_raw = parsed.get("contact_frame")
     contact_frame = contact_frame_raw if isinstance(contact_frame_raw, int) else None
     reason = str(parsed.get("reason") or "").strip()[:220]
+
+    debug_info(f"🏓 CLASSIFICATION RESULT",
+               Frame=event.frame,
+               Label=label.upper(),
+               Confidence=f"{confidence:.2%}",
+               Reason=reason[:60])
 
     # Save debug artifacts (images + result) for analysis
     debug_path = _save_debug_artifacts(
@@ -1122,7 +1152,10 @@ def _classify_events_with_elbow_trend(
     video_height: int,
     handedness: str,
 ) -> Tuple[List[Dict[str, Any]], Dict[str, Any]]:
+    debug_header(f"💪 STARTING ELBOW TREND CLASSIFICATION - {len(events)} events")
+
     if not events:
+        print(f"[STROKE DEBUG] ⚠️ NO EVENTS TO CLASSIFY")
         return [], {"enabled": False, "reason": "no_events", "source": "pose_elbow_trend"}
 
     player_pose_by_frame: Dict[int, Dict[str, Any]] = {}
@@ -1154,6 +1187,7 @@ def _classify_events_with_elbow_trend(
             "source": "pose_elbow_trend",
         }
 
+    elbow_start = perf_counter()
     results = [
         _classify_single_event_with_elbow_trend(
             event=event,
@@ -1165,6 +1199,11 @@ def _classify_events_with_elbow_trend(
         )
         for event in events
     ]
+    elbow_elapsed = (perf_counter() - elbow_start) * 1000
+
+    debug_section_end(f"ELBOW TREND CLASSIFICATION COMPLETE",
+                     elapsed_ms=elbow_elapsed,
+                     Avg_Per_Event_ms=f"{elbow_elapsed/len(events):.1f}")
 
     return results, {
         "enabled": True,
@@ -1184,7 +1223,10 @@ def _classify_events_with_claude(
     trajectory_points: Optional[List[Dict[str, Any]]] = None,
     session_id: str = "",
 ) -> Tuple[List[Dict[str, Any]], Dict[str, Any]]:
+    debug_header(f"🎯 STARTING CLAUDE CLASSIFICATION - {len(events)} events")
+
     if not events:
+        print(f"[STROKE DEBUG] ⚠️ NO EVENTS TO CLASSIFY")
         return [], {"enabled": False, "reason": "no_events", "source": "claude_vision"}
 
     anthropic_key = os.getenv("ANTHROPIC_API_KEY", "").strip()
@@ -1239,7 +1281,10 @@ def _classify_events_with_claude(
             raise RuntimeError("failed_to_open_local_video")
 
         results: List[Dict[str, Any]] = []
-        for event in events:
+        total_claude_start = perf_counter()
+
+        for idx, event in enumerate(events, 1):
+            debug_info(f"📊 PROCESSING EVENT {idx}/{len(events)} at frame {event.frame}")
             results.append(
                 _classify_single_event_with_claude(
                     client=client,
@@ -1253,6 +1298,13 @@ def _classify_events_with_claude(
                     session_id=session_id,
                 )
             )
+
+        total_claude_elapsed = (perf_counter() - total_claude_start) * 1000
+        debug_section_end(f"ALL CLAUDE CLASSIFICATIONS COMPLETE",
+                         elapsed_ms=total_claude_elapsed,
+                         Total_Time_s=f"{total_claude_elapsed/1000:.1f}",
+                         Avg_Per_Event_ms=f"{total_claude_elapsed/len(events):.1f}")
+
         return results, {"enabled": True, "reason": "ok", "model": model, "source": "claude_vision"}
     except Exception as exc:
         fallback = [
@@ -1446,6 +1498,14 @@ def detect_strokes_hybrid(
     Returns:
         (final_strokes, debug_stats, detector_for_summary, debug_payload)
     """
+    debug_pipeline_start(
+        session_id,
+        Handedness=handedness,
+        Camera_Facing=camera_facing,
+        Use_Claude=use_claude_classifier,
+        Pose_Frames_Player=len(pose_frames)
+    )
+
     trajectory_data = trajectory_data if isinstance(trajectory_data, dict) else {}
     all_pose_frames = all_pose_frames if isinstance(all_pose_frames, list) and all_pose_frames else pose_frames
     trajectory_points = _sanitize_trajectory_points(trajectory_data.get("frames", []))
@@ -1507,6 +1567,7 @@ def detect_strokes_hybrid(
         return result
 
     raw_pose_strokes = _run_stage("detect_pose_strokes", lambda: detector.detect_strokes(pose_frames))
+    debug_info(f"🎯 POSE STROKE PROPOSALS: {len(raw_pose_strokes)} strokes detected")
 
     speed_by_frame = _build_speed_by_frame(trajectory_points)
     trajectory_events = _run_stage(
@@ -1523,11 +1584,13 @@ def detect_strokes_hybrid(
             direction_window_frames=_safe_int(os.getenv("STROKE_TRAJ_DIRECTION_WINDOW_FRAMES", 30), 30),
         ),
     )
+    debug_info(f"🔄 TRAJECTORY DIRECTION CHANGES: {len(trajectory_events)} events")
 
     contact_frames = _run_stage(
         "detect_contacts",
         lambda: _detect_contact_frames(trajectory_points, all_pose_frames, video_info),
     )
+    debug_info(f"🤝 WRIST-BALL CONTACTS: {len(contact_frames)} contacts")
 
     events = _run_stage(
         "merge_detection_events",
@@ -1540,6 +1603,9 @@ def detect_strokes_hybrid(
             fps=fps,
         ),
     )
+    debug_info(f"🔗 MERGED DETECTION EVENTS: {len(events)} candidate events")
+    for idx, event in enumerate(events, 1):
+        print(f"[STROKE DEBUG]    Event {idx}: frame {event.frame}, sources={event.sources}, speed={event.local_ball_speed:.1f}")
 
     classify_stage_id = "classify_events_claude" if use_claude_classifier else "classify_events_elbow"
     if use_claude_classifier:
@@ -1595,6 +1661,11 @@ def detect_strokes_hybrid(
         ]
 
     hitter_by_event = _run_stage("infer_hitter", _infer_hitter_stage)
+    player_hits = sum(1 for h in hitter_by_event if h.get("hitter") == "player")
+    opponent_hits = sum(1 for h in hitter_by_event if h.get("hitter") == "opponent")
+    debug_info(f"👤 HITTER INFERENCE COMPLETE",
+               Player_Hits=player_hits,
+               Opponent_Hits=opponent_hits)
 
     final_strokes = _run_stage(
         "build_final_strokes",
@@ -1632,6 +1703,18 @@ def detect_strokes_hybrid(
                 )
             )
         final_strokes = fallback_strokes
+
+    total_pipeline_elapsed = (perf_counter() - pipeline_started) * 1000.0
+    forehand_count = sum(1 for s in final_strokes if s.stroke_type == "forehand")
+    backhand_count = sum(1 for s in final_strokes if s.stroke_type == "backhand")
+    unknown_count = sum(1 for s in final_strokes if s.stroke_type == "unknown")
+    debug_pipeline_end(
+        len(final_strokes),
+        total_pipeline_elapsed,
+        Forehand=forehand_count,
+        Backhand=backhand_count,
+        Unknown=unknown_count
+    )
 
     debug_stats = {
         "session_id": session_id,
