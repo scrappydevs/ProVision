@@ -20,6 +20,11 @@ def extract_youtube_id(url: str) -> Optional[str]:
 
 
 def get_youtube_metadata(url: str) -> Optional[dict]:
+    video_id = extract_youtube_id(url)
+    if not video_id:
+        return None
+
+    # Try yt-dlp first (full metadata)
     try:
         import yt_dlp
 
@@ -31,32 +36,65 @@ def get_youtube_metadata(url: str) -> Optional[dict]:
 
         with yt_dlp.YoutubeDL(ydl_opts) as ydl:
             info = ydl.extract_info(url, download=False)
-            if not info:
-                return None
+            if info:
+                duration_secs = info.get("duration", 0)
+                hours = duration_secs // 3600
+                minutes = (duration_secs % 3600) // 60
+                seconds = duration_secs % 60
+                if hours > 0:
+                    duration_str = f"{hours}:{minutes:02d}:{seconds:02d}"
+                else:
+                    duration_str = f"{minutes}:{seconds:02d}"
 
-            duration_secs = info.get("duration", 0)
-            hours = duration_secs // 3600
-            minutes = (duration_secs % 3600) // 60
-            seconds = duration_secs % 60
-            if hours > 0:
-                duration_str = f"{hours}:{minutes:02d}:{seconds:02d}"
-            else:
-                duration_str = f"{minutes}:{seconds:02d}"
-
-            return {
-                "title": info.get("title"),
-                "thumbnail_url": info.get("thumbnail"),
-                "duration": duration_str,
-                "duration_seconds": duration_secs,
-                "channel": info.get("uploader") or info.get("channel"),
-                "view_count": info.get("view_count"),
-                "upload_date": info.get("upload_date"),
-                "description": (info.get("description") or "")[:500],
-                "youtube_video_id": info.get("id"),
-            }
+                return {
+                    "title": info.get("title"),
+                    "thumbnail_url": info.get("thumbnail"),
+                    "duration": duration_str,
+                    "duration_seconds": duration_secs,
+                    "channel": info.get("uploader") or info.get("channel"),
+                    "view_count": info.get("view_count"),
+                    "upload_date": info.get("upload_date"),
+                    "description": (info.get("description") or "")[:500],
+                    "youtube_video_id": info.get("id"),
+                }
     except Exception as e:
-        logger.error(f"Failed to get YouTube metadata for {url}: {e}")
-        return None
+        logger.warning(f"yt-dlp metadata extraction failed for {url}: {e}")
+
+    # Fallback: use YouTube oEmbed API (not blocked by bot detection)
+    logger.info(f"Falling back to oEmbed for metadata: {video_id}")
+    try:
+        import requests
+        oembed_url = f"https://www.youtube.com/oembed?url=https://www.youtube.com/watch?v={video_id}&format=json"
+        resp = requests.get(oembed_url, timeout=10)
+        if resp.status_code == 200:
+            data = resp.json()
+            return {
+                "title": data.get("title", f"YouTube Video {video_id}"),
+                "thumbnail_url": f"https://img.youtube.com/vi/{video_id}/maxresdefault.jpg",
+                "duration": "0:00",
+                "duration_seconds": 0,
+                "channel": data.get("author_name", "Unknown"),
+                "view_count": 0,
+                "upload_date": "",
+                "description": "",
+                "youtube_video_id": video_id,
+            }
+    except Exception as oembed_err:
+        logger.warning(f"oEmbed fallback also failed: {oembed_err}")
+
+    # Last resort: return minimal metadata from URL
+    logger.info(f"Using minimal metadata for video {video_id}")
+    return {
+        "title": f"YouTube Video {video_id}",
+        "thumbnail_url": f"https://img.youtube.com/vi/{video_id}/maxresdefault.jpg",
+        "duration": "0:00",
+        "duration_seconds": 0,
+        "channel": "Unknown",
+        "view_count": 0,
+        "upload_date": "",
+        "description": "",
+        "youtube_video_id": video_id,
+    }
 
 
 def get_youtube_streaming_url(url: str) -> Optional[dict]:

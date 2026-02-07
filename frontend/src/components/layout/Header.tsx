@@ -12,13 +12,20 @@ export function Header() {
 
   return (
     <header className="h-16 border-b border-border bg-background fixed top-0 left-0 right-0 z-40">
-      <div className="h-full px-6 flex items-center justify-between">
-        <div className="flex items-center gap-3">
-          <img src="/logo.png" alt="PROVISION" className="w-6 h-6 dark:invert" />
-          <span className="text-md font-semibold tracking-wider text-foreground">PROVISION</span>
+      <div className="h-full flex items-center">
+        {/* Left: Logo centered within sidebar-width column (w-14 = 56px) + title */}
+        <div className="flex items-center shrink-0">
+          <div className="w-14 flex justify-center shrink-0">
+            <img src="/logo.png" alt="ProVision" className="w-10 h-10 dark:invert" />
+          </div>
+          <span className="text-lg font-bold tracking-wide text-foreground">ProVision</span>
         </div>
 
-        <div className="flex items-center gap-4">
+        {/* Spacer */}
+        <div className="flex-1 min-w-0" />
+
+        {/* Right: User controls — fixed layout to prevent shifting */}
+        <div className="flex items-center gap-4 pr-6 shrink-0">
           {user && (
             <div className="flex items-center gap-3">
               {/* AI Chat toggle */}
