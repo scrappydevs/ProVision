@@ -3,11 +3,11 @@
 import { useState, useCallback } from "react";
 import { useParams, useRouter } from "next/navigation";
 import { Button } from "@/components/ui/button";
-import { Card, CardBody, CardHeader, CardFooter, ScrollShadow, Chip } from "@heroui/react";
+import { Card, CardBody, CardHeader, CardFooter, ScrollShadow } from "@heroui/react";
 import {
   ArrowLeft, Edit2, Loader2, Search, Upload, Plus, Play,
   Clock, CheckCircle, XCircle, Gamepad2, Calendar, ChevronRight,
-  RefreshCw, Globe, Trophy, Scissors, Film,
+  RefreshCw, Trophy, Scissors, Film,
   Video, Clapperboard, Trash2,
 } from "lucide-react";
 import { motion, AnimatePresence } from "framer-motion";
@@ -25,6 +25,26 @@ import ClipSelector from "@/components/players/ClipSelector";
 
 type Tab = "recordings" | "games";
 type RecordingFilter = "all" | RecordingType;
+type InsightKind = "strength" | "weakness";
+
+type InsightClip = {
+  id: string;
+  label: string;
+  sessionId?: string;
+  videoUrl?: string;
+  timestamp?: string;
+  startSeconds?: number;
+};
+
+type Insight = {
+  id: string;
+  kind: InsightKind;
+  title: string;
+  summary: string;
+  metric?: string;
+  tipMatch?: string;
+  clips: InsightClip[];
+};
 
 const RECORDING_TYPES: { value: RecordingType; label: string; icon: React.ReactNode }[] = [
   { value: "match", label: "Match", icon: <Trophy className="w-3.5 h-3.5" /> },
@@ -59,6 +79,7 @@ export default function PlayerProfilePage() {
   const [recordingType, setRecordingType] = useState<RecordingType>("match");
   const [recordingDescription, setRecordingDescription] = useState("");
   const [analyzingRecordingId, setAnalyzingRecordingId] = useState<string | null>(null);
+  const [activeInsightId, setActiveInsightId] = useState<string | null>(null);
 
   const { data: player, isLoading: playerLoading } = usePlayer(playerId);
   const { data: games, isLoading: gamesLoading } = usePlayerGames(playerId, {
@@ -220,28 +241,118 @@ export default function PlayerProfilePage() {
 
   const ittfData = player.ittf_data;
 
+  const formatTime = (seconds?: number) => {
+    if (seconds === undefined || Number.isNaN(seconds)) return null;
+    const minutes = Math.floor(seconds / 60);
+    const remainder = Math.floor(seconds % 60);
+    return `${minutes}:${remainder.toString().padStart(2, "0")}`;
+  };
+
+  const clipCandidates = (recordings ?? []).filter(
+    (rec) => !!rec.session_id || !!rec.video_path
+  );
+
+  const clipRefs: InsightClip[] = clipCandidates.slice(0, 3).map((rec) => {
+    const start = formatTime(rec.clip_start_time);
+    const end = formatTime(rec.clip_end_time);
+    const timestamp = start && end ? `${start} - ${end}` : start ?? undefined;
+    const safeStart = Math.max(0, (rec.clip_start_time ?? 0) - 0.1);
+
+    return {
+      id: rec.id,
+      label: rec.title,
+      sessionId: rec.session_id,
+      videoUrl: rec.video_path,
+      timestamp,
+      startSeconds: safeStart,
+    };
+  });
+
+  const insights: Insight[] = [
+    {
+      id: "strength-forehand",
+      kind: "strength",
+      title: "Forehand acceleration",
+      summary: "Explosive hip rotation and clean wrist snap on fast rallies.",
+      metric: "Peak velocity in top quartile",
+      tipMatch: "forehand",
+      clips: clipRefs,
+    },
+    {
+      id: "strength-footwork",
+      kind: "strength",
+      title: "Recovery footwork",
+      summary: "Quick reset to neutral stance after wide forehand exchanges.",
+      metric: "Shortest recovery window in recent games",
+      clips: clipRefs,
+    },
+    {
+      id: "weakness-backhand",
+      kind: "weakness",
+      title: "Backhand depth",
+      summary: "Contact point drifts high under pressure, leaving returns short.",
+      metric: "Lower contact height consistency",
+      tipMatch: "backhand",
+      clips: clipRefs,
+    },
+    {
+      id: "weakness-serve",
+      kind: "weakness",
+      title: "Serve variation",
+      summary: "Limited spin variation on second serve during long points.",
+      metric: "Low spin distribution diversity",
+      clips: clipRefs,
+    },
+  ];
+
+  const handleClipOpen = (clip: InsightClip, tipMatch?: string) => {
+    if (clip.sessionId) {
+      const query = tipMatch
+        ? `?tip=${encodeURIComponent(tipMatch)}`
+        : clip.startSeconds
+          ? `?t=${clip.startSeconds.toFixed(2)}`
+          : "";
+      router.push(`/dashboard/games/${clip.sessionId}${query}`);
+      return;
+    }
+    if (clip.videoUrl) {
+      const anchor = clip.startSeconds ? `#t=${clip.startSeconds.toFixed(2)}` : "";
+      window.open(`${clip.videoUrl}${anchor}`, "_blank", "noopener,noreferrer");
+    }
+  };
+
   return (
-    <div className="-m-4 md:-m-5 h-[calc(100vh-4rem)] relative overflow-hidden player-profile">
-      {/* Full-bleed avatar background */}
+    <div className="-m-6 h-[calc(100vh-4rem)] relative overflow-hidden player-profile">
+      {/* Hero background with smaller profile picture */}
       <div className="absolute inset-0">
-        {player.avatar_url ? (
-          <>
-            <img src={player.avatar_url} alt="" className="w-full h-full object-cover" />
-            <div className="absolute inset-0 bg-black/30 dark:bg-black/40 player-hero-dim" />
-          </>
-        ) : (
-          <div className="w-full h-full bg-[radial-gradient(ellipse_at_30%_30%,rgba(155,123,91,0.15),transparent_60%),radial-gradient(ellipse_at_70%_70%,rgba(91,123,155,0.08),transparent_50%)]" />
+        {/* Cool animated gradient background - adapts to light/dark mode */}
+        <div className="absolute inset-0 bg-gradient-to-br from-background via-muted to-background" />
+        <div className="absolute inset-0 bg-[radial-gradient(ellipse_at_20%_30%,rgba(155,123,91,0.12),transparent_50%),radial-gradient(ellipse_at_80%_70%,rgba(91,123,155,0.08),transparent_50%),radial-gradient(circle_at_50%_50%,rgba(155,91,123,0.06),transparent_60%)]" />
+        
+        {/* Profile picture - smaller, positioned on right side */}
+        {player.avatar_url && (
+          <div className="absolute right-0 top-0 bottom-0 w-[95%] overflow-hidden">
+            <img 
+              src={player.avatar_url} 
+              alt="" 
+              className="w-full h-full object-cover object-center opacity-60 dark:opacity-95"
+            />
+            {/* Gradient overlay for smooth blend */}
+            <div className="absolute inset-0 bg-gradient-to-l from-transparent via-background/10 to-background/60" />
+            <div className="absolute inset-0 bg-gradient-to-b from-transparent via-transparent to-background/40" />
+          </div>
         )}
-        <div className="absolute inset-0 bg-gradient-to-t from-background via-background/20 to-transparent player-hero-gradient-top" />
-        <div className="absolute inset-0 bg-gradient-to-r from-transparent via-transparent to-background/40 player-hero-gradient-side" />
+        
+        <div className="absolute inset-0 bg-gradient-to-t from-background via-background/30 to-background/10 player-hero-gradient-top" />
+        <div className="absolute inset-0 bg-gradient-to-r from-background via-background/15 to-transparent player-hero-gradient-side" />
       </div>
 
       {/* Content overlay */}
       <div className="relative h-full flex flex-col">
         {/* Top nav bar */}
-        <div className="flex items-center justify-between px-6 md:px-8 pt-4">
+        <div className="flex items-center justify-between px-10 pt-7">
           <button
-            className="flex items-center gap-1.5 text-sm text-foreground/80 dark:text-foreground/60 hover:text-foreground transition-colors"
+            className="flex items-center gap-1.5 text-[11px] uppercase tracking-[0.25em] text-foreground/60 hover:text-foreground transition-colors"
             onClick={() => router.push("/dashboard")}
           >
             <ArrowLeft className="w-4 h-4" />
@@ -251,22 +362,22 @@ export default function PlayerProfilePage() {
         </div>
 
         {/* Center: large name overlay */}
-        <div className="flex-1 flex items-center px-6 md:px-8">
+        <div className="flex-1 flex items-center px-10">
           <div>
-            <p className="text-sm text-foreground/70 dark:text-foreground/50 mb-1">{player.position || "Player"}</p>
-            <h1 className="text-5xl md:text-7xl font-light text-foreground tracking-tight leading-[1.05]">
+            <p className="text-xs uppercase tracking-[0.3em] text-foreground/50 mb-3">{player.position || "Player"}</p>
+            <h1 className="text-5xl md:text-6xl font-light text-foreground tracking-tight leading-[1.1]">
               {player.name.split(" ").map((word, i) => (
                 <span key={i}>{word}{i < player.name.split(" ").length - 1 ? <br /> : ""}</span>
               ))}
             </h1>
-            <div className="flex items-center gap-3 mt-3">
+            <div className="flex items-center gap-3 mt-4">
               {player.team && (
-                <span className="text-sm text-foreground/80 dark:text-foreground/60">{player.team}</span>
+                <span className="text-sm text-foreground/70">{player.team}</span>
               )}
               {player.team && <span className="w-1 h-1 rounded-full bg-content3" />}
               <span
-                className={`inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] ${
-                  player.is_active ? "bg-[#6B8E6B]/20 text-[#6B8E6B]" : "bg-muted-foreground/20 text-foreground/60"
+                className={`inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] uppercase tracking-wide ${
+                  player.is_active ? "bg-[#6B8E6B]/15 text-[#6B8E6B]" : "bg-muted-foreground/15 text-foreground/60"
                 }`}
               >
                 <span className={`w-1.5 h-1.5 rounded-full ${player.is_active ? "bg-[#6B8E6B]" : "bg-muted-foreground"}`} />
@@ -278,7 +389,7 @@ export default function PlayerProfilePage() {
                   const next = player.handedness === "right" ? "left" : "right";
                   updatePlayerMutation.mutate({ id: playerId, data: { handedness: next } });
                 }}
-                className="flex items-center gap-1.5 text-xs text-foreground/70 dark:text-foreground/40 hover:text-foreground transition-colors"
+                className="flex items-center gap-1.5 text-xs text-foreground/60 hover:text-foreground transition-colors"
               >
                 <span className={player.handedness === "left" ? "text-primary font-semibold" : ""}>Left</span>
                 <span className="mx-1 text-foreground/60 dark:text-foreground/30">/</span>
@@ -288,116 +399,167 @@ export default function PlayerProfilePage() {
           </div>
         </div>
 
-        {/* Bottom-left: floating glass stats card */}
-        <Card isBlurred className="player-stats-card absolute bottom-6 left-6 md:bottom-8 md:left-8 bg-content1/40 backdrop-blur-2xl min-w-[300px] md:min-w-[340px]">
-          <div className="flex items-center gap-4">
-            <div className="text-center">
-              <span className="text-2xl font-light text-foreground">{gameCount}</span>
-              <p className="text-[10px] text-foreground/60 dark:text-foreground/40 mt-0.5">Games</p>
+        {/* Bottom-left: key stats */}
+        <div className="player-stats-card absolute bottom-8 left-10">
+          <div className="grid grid-cols-3 gap-10">
+            <div>
+              <p className="text-3xl font-light text-foreground">{gameCount}</p>
+              <p className="text-xs uppercase tracking-[0.25em] text-foreground/50 mt-2">Games</p>
             </div>
-            <div className="w-px h-8 bg-content3/50" />
-            <div className="text-center">
-              <span className="text-2xl font-light text-foreground">{recordings?.length ?? 0}</span>
-              <p className="text-[10px] text-foreground/60 dark:text-foreground/40 mt-0.5">Recordings</p>
+            <div>
+              <p className="text-3xl font-light text-foreground">{recordings?.length ?? 0}</p>
+              <p className="text-xs uppercase tracking-[0.25em] text-foreground/50 mt-2">Recordings</p>
             </div>
-            <div className="w-px h-8 bg-content3/50" />
-            <div className="text-center">
-              <span className="text-sm text-foreground/80 dark:text-foreground/60">
+            <div>
+              <p className="text-3xl font-light text-foreground">
                 {lastGame
                   ? new Date(lastGame.created_at).toLocaleDateString("en-US", { month: "short", day: "numeric" })
                   : "—"}
-              </span>
-              <p className="text-[10px] text-foreground/60 dark:text-foreground/40 mt-0.5">Last Active</p>
+              </p>
+              <p className="text-xs uppercase tracking-[0.25em] text-foreground/50 mt-2">Last Active</p>
             </div>
           </div>
-          {/* Mini activity indicator */}
-          <div className="flex items-center gap-1 mt-3">
-            {Array.from({ length: 7 }).map((_, i) => {
-              const hasActivity = i < Math.min(gameCount, 7);
-              return (
-                <div
-                  key={i}
-                  className={`flex-1 h-1.5 rounded-full ${hasActivity ? "bg-[#9B7B5B]" : "bg-content3/50"}`}
-                  style={{ opacity: hasActivity ? 0.4 + (i / 7) * 0.6 : 1 }}
-                />
-              );
-            })}
-          </div>
+        </div>
+
+        {/* Left: tips summary */}
+        <Card
+          isBlurred
+          className="absolute left-10 bottom-44 w-[420px] bg-content1/30 backdrop-blur-2xl border border-foreground/15 rounded-3xl"
+        >
+          <CardHeader className="flex items-center justify-between pb-2">
+            <div className="flex items-center gap-2">
+              <Film className="w-4 h-4 text-primary" />
+              <span className="text-xs uppercase tracking-[0.2em] text-foreground/70">Tips</span>
+            </div>
+            <span className="text-[10px] uppercase tracking-[0.2em] text-foreground/45">
+              {recordings?.length ? "Based on recent clips" : "Add clips to refine"}
+            </span>
+          </CardHeader>
+          <CardBody className="pt-0">
+            {recordingsLoading ? (
+              <div className="flex items-center justify-center h-28">
+                <Loader2 className="w-4 h-4 text-primary animate-spin" />
+              </div>
+            ) : (
+              <ScrollShadow className="max-h-[280px] pr-2">
+                <div className="space-y-3">
+                  {insights.map((insight) => {
+                    const isActive = activeInsightId === insight.id;
+                    const accentBorder =
+                      insight.kind === "strength"
+                        ? "border-[#6B8E6B]/60"
+                        : "border-[#C45C5C]/60";
+                    const accentDot =
+                      insight.kind === "strength"
+                        ? "bg-[#6B8E6B]"
+                        : "bg-[#C45C5C]";
+
+                    return (
+                      <div
+                        key={insight.id}
+                        className={`rounded-xl border border-foreground/10 border-l-2 ${accentBorder} bg-content1/20 hover:border-foreground/20 hover:bg-content1/30 transition-colors`}
+                      >
+                        <button
+                          onClick={() => setActiveInsightId(isActive ? null : insight.id)}
+                          className="w-full text-left px-3 py-3"
+                        >
+                          <div className="flex items-start justify-between gap-3">
+                            <div className="space-y-1">
+                              <div className="flex items-center gap-2">
+                                <span
+                                  className={`w-1.5 h-1.5 rounded-full ${accentDot}`}
+                                  aria-hidden="true"
+                                />
+                                <span className="text-xs font-medium text-foreground/85">{insight.title}</span>
+                              </div>
+                              <p className="text-[11px] text-foreground/55">{insight.summary}</p>
+                              {insight.metric && (
+                                <p className="text-[10px] text-foreground/35">{insight.metric}</p>
+                              )}
+                            </div>
+                            <ChevronRight
+                              className={`w-4 h-4 text-foreground/30 transition-transform ${
+                                isActive ? "rotate-90" : ""
+                              }`}
+                            />
+                          </div>
+                        </button>
+                        {isActive && (
+                          <div className="px-3 pb-3">
+                            <div className="border-t border-foreground/10 pt-2 space-y-2">
+                              {insight.clips.length ? (
+                                insight.clips.map((clip) => (
+                                  <button
+                                    key={clip.id}
+                                    onClick={() => handleClipOpen(clip, insight.tipMatch)}
+                                    className="w-full flex items-center justify-between gap-2 rounded-lg border border-foreground/10 bg-content1/20 px-3 py-2 text-left hover:bg-content1/30 transition-colors"
+                                  >
+                                    <div className="flex items-center gap-2">
+                                      <Scissors className="w-3.5 h-3.5 text-primary/80" />
+                                      <div className="space-y-0.5">
+                                        <p className="text-[11px] text-foreground/85">{clip.label}</p>
+                                        {clip.timestamp && (
+                                          <p className="text-[10px] text-foreground/40">{clip.timestamp}</p>
+                                        )}
+                                      </div>
+                                    </div>
+                                    <Play className="w-3.5 h-3.5 text-foreground/40" />
+                                  </button>
+                                ))
+                              ) : (
+                                <p className="text-[10px] text-foreground/40">
+                                  No clips yet. Upload a recording to attach references.
+                                </p>
+                              )}
+                            </div>
+                          </div>
+                        )}
+                      </div>
+                    );
+                  })}
+                </div>
+              </ScrollShadow>
+            )}
+          </CardBody>
         </Card>
 
-        {/* ITTF Recent Matches - below stats card */}
-        {ittfData?.recent_matches && ittfData.recent_matches.length > 0 && (
-          <div className="absolute bottom-24 left-6 md:bottom-28 md:left-8 z-20 min-w-[280px] md:min-w-[340px] max-w-[420px]">
-            <div className="bg-white/[0.07] dark:bg-white/[0.05] backdrop-blur-md rounded-2xl p-4 shadow-[0_2px_12px_rgba(0,0,0,0.08)]">
-              <div className="flex items-center gap-2 mb-3">
-                <Globe className="w-3.5 h-3.5 text-primary/70" />
-                <span className="text-xs font-medium text-foreground/70">ITTF Recent Matches</span>
-                {player.ittf_data?.ranking && (
-                  <span className="ml-auto text-[10px] text-primary/60">World #{player.ittf_data.ranking}</span>
-                )}
-              </div>
-              <div className="space-y-1.5">
-                {ittfData.recent_matches.slice(0, 5).map((match, i) => (
-                  <div
-                    key={i}
-                    className="flex items-center gap-3 py-1.5 px-2 rounded-lg hover:bg-white/[0.05] transition-colors"
-                  >
-                    <span
-                      className={`text-[10px] font-semibold px-1.5 py-0.5 rounded ${
-                        match.result === "WON"
-                          ? "bg-[#6B8E6B]/20 text-[#6B8E6B]"
-                          : "bg-[#C45C5C]/20 text-[#C45C5C]"
-                      }`}
-                    >
-                      {match.result === "WON" ? "W" : "L"}
-                    </span>
-                    <div className="flex-1 min-w-0">
-                      <p className="text-xs text-foreground/80 truncate">
-                        vs {match.opponent || "Unknown"}
-                      </p>
-                      {match.tournament && (
-                        <p className="text-[10px] text-foreground/30 truncate">{match.tournament}</p>
-                      )}
-                    </div>
-                    {match.score && (
-                      <span className="text-[10px] text-foreground/40 shrink-0">{match.score}</span>
-                    )}
-                  </div>
-                ))}
-              </div>
-            </div>
-          </div>
-        )}
-
-        {/* Right: recordings — inline, no container panel, individual glass cards */}
-        <div className="absolute right-6 md:right-8 top-1/3 bottom-6 md:bottom-8 w-72 md:w-80 flex flex-col z-20">
-          {/* Header — inline, no background */}
-          <div className="flex items-center justify-between mb-3">
-            <div className="flex items-center gap-2">
-              <span className="text-sm font-medium text-foreground/80">Recordings</span>
+        {/* Right: recordings — larger and more prominent */}
+        <div className="absolute right-6 top-[15%] bottom-6 w-[420px] flex flex-col z-20">
+          {/* Header with enhanced styling */}
+          <div className="flex items-center justify-between mb-5 px-4 py-3 bg-content1/30 backdrop-blur-xl rounded-3xl border border-foreground/15">
+            <div className="flex items-center gap-3">
+              <span className="text-xs uppercase tracking-[0.25em] text-foreground/70">Recordings</span>
               {recordings && recordings.length > 0 && (
-                <span className="text-[10px] text-foreground/40">{recordings.length}</span>
+                <span className="px-2 py-0.5 rounded-full bg-primary/15 text-primary text-[10px] font-medium">{recordings.length}</span>
               )}
             </div>
-            <div className="flex items-center gap-1">
+            <div className="flex items-center gap-2">
               {(["all", "match", "informal", "clip"] as const).map((f) => (
                 <button
                   key={f}
                   onClick={() => setRecordingFilter(f)}
-                  className={`text-[9px] px-2 py-1 rounded-full transition-colors ${
+                  className={`text-[10px] px-2.5 py-1.5 rounded-full transition-all font-medium uppercase tracking-[0.2em] ${
                     recordingFilter === f
-                      ? "bg-foreground/10 text-foreground/80 backdrop-blur-sm"
-                      : "text-foreground/30 hover:text-foreground/50"
+                      ? "bg-primary/15 text-primary backdrop-blur-sm"
+                      : "text-foreground/40 hover:text-foreground/70 hover:bg-foreground/5"
                   }`}
                 >
                   {f === "all" ? "All" : f.charAt(0).toUpperCase() + f.slice(1)}
                 </button>
               ))}
+              <div className="w-px h-4 bg-foreground/10 mx-0.5" />
+              <button
+                onClick={() => setUploadOpen(true)}
+                className="flex items-center gap-1.5 text-[10px] px-2.5 py-1.5 rounded-full transition-all font-medium uppercase tracking-[0.2em] text-foreground/60 hover:text-primary hover:bg-primary/10"
+              >
+                <Plus className="w-3.5 h-3.5" />
+                Add
+              </button>
             </div>
           </div>
 
-          {/* Recording cards — each one is a floating glass card */}
-          <div className="flex-1 overflow-y-auto space-y-2 pr-1 scrollbar-thin">
+          {/* Recording cards — larger with more details */}
+          <div className="flex-1 overflow-y-auto space-y-4 pr-2 scrollbar-thin">
             {recordingsLoading ? (
               <div className="flex items-center justify-center h-20">
                 <Loader2 className="w-4 h-4 text-primary animate-spin" />
@@ -427,31 +589,37 @@ export default function PlayerProfilePage() {
                       );
                     }
                   }}
-                  className="group cursor-pointer flex gap-4 items-center p-3 rounded-2xl hover:scale-[1.01] transition-all duration-200 bg-white/[0.07] dark:bg-white/[0.05] backdrop-blur-md shadow-[0_2px_12px_rgba(0,0,0,0.08)]"
+                  className="group cursor-pointer flex gap-5 items-start p-4 rounded-2xl transition-colors bg-content1/30 backdrop-blur-xl border border-foreground/10 hover:border-foreground/20 hover:bg-content1/40"
                 >
                   {rec.video_path && (
-                    <div className="w-28 h-20 rounded-xl overflow-hidden shrink-0">
+                    <div className="relative w-36 h-24 rounded-xl overflow-hidden shrink-0 ring-1 ring-white/10">
                       <video src={rec.video_path} className="w-full h-full object-cover" />
                     </div>
                   )}
-                  <div className="flex-1 min-w-0">
-                    <p className="text-sm font-medium text-foreground/90 truncate">{rec.title}</p>
-                    <div className="flex items-center gap-2 mt-1">
-                      <span className="text-[10px] uppercase tracking-wider text-primary/70 font-medium">{rec.type}</span>
-                      <span className="w-1 h-1 rounded-full bg-foreground/15" />
-                      <span className="text-[10px] text-foreground/30">
+                  <div className="flex-1 min-w-0 pt-1">
+                    <p className="text-base font-semibold text-foreground/95 truncate mb-1.5">{rec.title}</p>
+                    <div className="flex items-center gap-2.5 mb-2">
+                      <span className="text-[10px] uppercase tracking-[0.2em] text-primary font-semibold px-2 py-0.5 rounded-md bg-primary/15">{rec.type}</span>
+                      <span className="w-1 h-1 rounded-full bg-foreground/20" />
+                      <span className="text-xs text-foreground/40">
                         {new Date(rec.created_at).toLocaleDateString("en-US", { month: "short", day: "numeric" })}
                       </span>
                     </div>
                     {rec.session_id ? (
-                      <span className="text-[9px] text-success/70 mt-1.5 block">Ready to view</span>
+                      <div className="flex items-center gap-1.5">
+                        <CheckCircle className="w-3.5 h-3.5 text-success/80" />
+                        <span className="text-xs text-success/80 font-medium">Ready to view</span>
+                      </div>
                     ) : analyzingRecordingId === rec.id ? (
-                      <span className="text-[9px] text-primary/70 mt-1.5 flex items-center gap-1"><Loader2 className="w-2.5 h-2.5 animate-spin" />Analyzing...</span>
+                      <div className="flex items-center gap-1.5">
+                        <Loader2 className="w-3.5 h-3.5 text-primary animate-spin" />
+                        <span className="text-xs text-primary/80 font-medium">Analyzing...</span>
+                      </div>
                     ) : (
-                      <span className="text-[9px] text-foreground/25 group-hover:text-primary/60 mt-1.5 block transition-colors">Click to analyze</span>
+                      <span className="text-xs text-foreground/30 group-hover:text-primary/70 font-medium transition-colors">Click to analyze</span>
                     )}
                   </div>
-                  <ChevronRight className="w-4 h-4 text-foreground/15 group-hover:text-foreground/40 shrink-0 transition-colors" />
+                  <ChevronRight className="w-5 h-5 text-foreground/20 group-hover:text-primary/60 shrink-0 transition-all group-hover:translate-x-1" />
                 </div>
               ))
             ) : (
@@ -460,15 +628,6 @@ export default function PlayerProfilePage() {
               </div>
             )}
           </div>
-
-          {/* Add button — glass style, pinned at bottom */}
-          <button
-            onClick={() => setUploadOpen(true)}
-            className="mt-4 flex items-center gap-2 text-xs text-foreground/30 hover:text-primary transition-colors"
-          >
-            <Plus className="w-3.5 h-3.5" />
-            Add Recording
-          </button>
         </div>
       </div>
 
@@ -489,18 +648,18 @@ export default function PlayerProfilePage() {
               className="bg-content1 rounded-2xl w-full max-w-md p-6"
               onClick={(e) => e.stopPropagation()}
             >
-              <h2 className="text-lg font-light text-foreground mb-1">Add Recording</h2>
-              <p className="text-xs text-foreground/40 mb-5">Upload footage for {player.name}</p>
+              <h2 className="text-base font-medium text-foreground mb-1">New recording</h2>
+              <p className="text-[11px] text-foreground/45 mb-4">Upload footage for {player.name}</p>
 
               <div className="space-y-4">
                 <div>
-                  <label className="block text-xs font-medium text-foreground/60 mb-2">Type</label>
+                  <label className="block text-[10px] uppercase tracking-[0.2em] text-foreground/50 mb-2">Type</label>
                   <div className="grid grid-cols-4 gap-2">
                     {RECORDING_TYPES.map((rt) => (
                       <button
                         key={rt.value}
                         onClick={() => setRecordingType(rt.value)}
-                        className={`flex flex-col items-center gap-1.5 px-2 py-2.5 rounded-lg border transition-all text-xs ${
+                        className={`flex flex-col items-center gap-1.5 px-2 py-2.5 rounded-lg border transition-all text-[11px] ${
                           recordingType === rt.value
                             ? "border-[#9B7B5B] bg-[#9B7B5B]/10 text-primary"
                             : "border-content3 text-foreground/40 hover:border-[#9B7B5B]/50 hover:text-foreground/60"
@@ -514,29 +673,29 @@ export default function PlayerProfilePage() {
                 </div>
 
                 <div>
-                  <label className="block text-xs font-medium text-foreground/60 mb-1.5">Title</label>
+                  <label className="block text-[10px] uppercase tracking-[0.2em] text-foreground/50 mb-1.5">Title</label>
                   <input
                     type="text"
                     value={gameName}
                     onChange={(e) => setGameName(e.target.value)}
-                    placeholder={recordingType === "match" ? "e.g., vs Wang Chuqin - Finals" : "e.g., Practice Session"}
+                    placeholder={recordingType === "match" ? "Opponent, round" : "Practice session"}
                     className="w-full px-3 py-2 bg-background rounded-lg text-foreground placeholder-muted-foreground text-sm focus:outline-none focus:ring-1 focus:ring-primary/50"
                   />
                 </div>
 
                 <div>
-                  <label className="block text-xs font-medium text-foreground/60 mb-1.5">Description (optional)</label>
+                  <label className="block text-[10px] uppercase tracking-[0.2em] text-foreground/50 mb-1.5">Notes</label>
                   <textarea
                     value={recordingDescription}
                     onChange={(e) => setRecordingDescription(e.target.value)}
-                    placeholder={recordingType === "match" ? "Tournament, opponent, key moments..." : "Notes about this recording..."}
+                    placeholder="Key moments, context..."
                     rows={2}
                     className="w-full px-3 py-2 bg-background rounded-lg text-foreground placeholder-muted-foreground text-sm focus:outline-none focus:ring-1 focus:ring-primary/50 resize-none"
                   />
                 </div>
 
                 <div>
-                  <label className="block text-xs font-medium text-foreground/60 mb-1.5">Video File</label>
+                  <label className="block text-[10px] uppercase tracking-[0.2em] text-foreground/50 mb-1.5">Video</label>
                   <div
                     className={`border-2 border-dashed rounded-xl p-8 text-center transition-colors ${
                       dragActive ? "border-[#9B7B5B] bg-[#9B7B5B]/10" : "border-content3 hover:border-[#9B7B5B]/50"

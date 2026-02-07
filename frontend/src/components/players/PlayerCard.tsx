@@ -28,7 +28,7 @@ export function PlayerCard({ player, onClick }: PlayerCardProps) {
       onPress={onClick}
     >
       {/* Full-bleed avatar / initials background */}
-      <div className="relative w-full aspect-[3/4] overflow-hidden">
+      <div className="relative w-full aspect-[4/5] overflow-hidden">
         {player.avatar_url ? (
           <>
             <img
@@ -43,7 +43,7 @@ export function PlayerCard({ player, onClick }: PlayerCardProps) {
             <div className="absolute inset-0 bg-gradient-to-b from-content2 to-content1" />
             <div className="absolute inset-0 bg-[radial-gradient(circle_at_50%_35%,rgba(155,123,91,0.1),transparent_60%)]" />
             <div className="absolute inset-0 flex items-center justify-center">
-              <span className="text-5xl font-light text-primary/30 select-none">
+              <span className="text-3xl font-light text-primary/30 select-none">
                 {initials}
               </span>
             </div>
@@ -74,18 +74,18 @@ export function PlayerCard({ player, onClick }: PlayerCardProps) {
 
       {/* Info overlaid at bottom */}
       <CardBody className="px-3 pb-3 pt-0 -mt-6 relative z-10">
-        <h3 className="text-sm font-medium text-foreground truncate">
+        <h3 className="text-xs font-medium text-foreground truncate">
           {player.name}
         </h3>
-        <div className="flex items-center justify-between mt-1">
+        <div className="flex items-center justify-between mt-0.5">
           {player.team ? (
-            <p className="text-[11px] text-foreground/40 truncate">{player.team}</p>
+            <p className="text-[10px] text-foreground/40 truncate">{player.team}</p>
           ) : (
             <span />
           )}
-          <div className="flex items-center gap-1 shrink-0">
-            <Gamepad2 className="w-3 h-3 text-foreground/40" />
-            <span className="text-xs text-foreground/60">{gameCount}</span>
+          <div className="flex items-center gap-0.5 shrink-0">
+            <Gamepad2 className="w-2.5 h-2.5 text-foreground/40" />
+            <span className="text-[10px] text-foreground/60">{gameCount}</span>
           </div>
         </div>
       </CardBody>

@@ -63,17 +63,17 @@ export function PlayerForm({
         initial={{ scale: 0.95, opacity: 0 }}
         animate={{ scale: 1, opacity: 1 }}
         exit={{ scale: 0.95, opacity: 0 }}
-        className="bg-card rounded-xl border border-border w-full max-w-md p-5"
+        className="bg-card rounded-xl border border-border w-full max-w-md p-6"
         onClick={(e) => e.stopPropagation()}
       >
-        <div className="flex items-center justify-between mb-3">
+        <div className="flex items-center justify-between mb-4">
           <h2 className="text-xl font-light text-foreground">{title}</h2>
           <Button variant="ghost" size="icon" onClick={onClose}>
             <X className="w-4 h-4" />
           </Button>
         </div>
 
-        <div className="space-y-3">
+        <div className="space-y-4">
           {/* Avatar upload */}
           <div className="flex items-center gap-4">
             <label className="cursor-pointer">

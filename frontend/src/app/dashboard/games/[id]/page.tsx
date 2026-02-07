@@ -1,25 +1,35 @@
 "use client";
 
 import { useState, useCallback, useRef, useEffect, useMemo } from "react";
-import { useParams, useRouter } from "next/navigation";
-import { useSession, useTrackObject } from "@/hooks/useSessions";
+import { useParams, useRouter, useSearchParams } from "next/navigation";
+import { useSession, useTrackObject, useUpdateSession } from "@/hooks/useSessions";
 import { usePoseAnalysis } from "@/hooks/usePoseData";
 import { useStrokeSummary, useAnalyzeStrokes } from "@/hooks/useStrokeData";
 import { useQueryClient } from "@tanstack/react-query";
 import { sessionKeys } from "@/hooks/useSessions";
 import { Button } from "@/components/ui/button";
-import { Card, CardBody, CardHeader, CardFooter, ScrollShadow, Chip, Spinner } from "@heroui/react";
 import {
   ArrowLeft, Crosshair, Loader2, ChevronRight, Play, Pause,
   SkipBack, SkipForward, Volume2, VolumeX, Activity, Sparkles, LayoutGrid,
-  X, Send, Users,
+  X, Send, Users, BarChart3, Bug, Copy, Check, RefreshCw,
 } from "lucide-react";
 import Link from "next/link";
 import dynamic from "next/dynamic";
 import { cn } from "@/lib/utils";
-import { TrajectoryPoint, Stroke, aiChat, detectBalls, BallDetection, trackWithTrackNet, detectPoses, PersonPose } from "@/lib/api";
-import { AnimatePresence } from "framer-motion";
-// PlayerSelection removed - pose estimation is auto-triggered on upload
+import {
+  TrajectoryPoint,
+  aiChat,
+  detectBalls,
+  BallDetection,
+  trackWithTrackNet,
+  detectPoses,
+  PersonPose,
+  Stroke,
+  getDebugFrame,
+} from "@/lib/api";
+import { generateTipsFromStrokes } from "@/lib/tipGenerator";
+import { PlayerSelection } from "@/components/viewer/PlayerSelection";
+import { VideoTips, type VideoTip } from "@/components/viewer/VideoTips";
 
 const BirdEyeView = dynamic(
   () => import("@/components/viewer/BirdEyeView").then((m) => m.BirdEyeView),
@@ -31,13 +41,18 @@ const ShotCard = dynamic(
   { ssr: false }
 );
 
-type TabId = "pose" | "track" | "players" | "court" | "ai";
+const AnalyticsDashboard = dynamic(
+  () => import("@/components/analytics/AnalyticsDashboard").then((m) => m.AnalyticsDashboard),
+  { ssr: false }
+);
+
+type TabId = "pose" | "track" | "court" | "ai" | "analytics";
 
 const tabs: { id: TabId; label: string; icon: React.ComponentType<{ className?: string }> }[] = [
   { id: "pose", label: "Pose", icon: Activity },
   { id: "track", label: "Track", icon: Crosshair },
-  { id: "players", label: "Players", icon: Users },
   { id: "court", label: "Court", icon: LayoutGrid },
+  { id: "analytics", label: "Analytics", icon: BarChart3 },
   { id: "ai", label: "AI", icon: Sparkles },
 ];
 
@@ -51,6 +66,7 @@ interface ChatMessage { role: "user" | "assistant" | "tool"; content: string; to
 export default function GameViewerPage() {
   const params = useParams();
   const router = useRouter();
+  const searchParams = useSearchParams();
   const queryClient = useQueryClient();
   const gameId = params.id as string;
 
@@ -67,7 +83,6 @@ export default function GameViewerPage() {
   const [showPlayerOverlay, setShowPlayerOverlay] = useState(false);
   const [playerSelectMode, setPlayerSelectMode] = useState(false);
   const [segmentedPlayers, setSegmentedPlayers] = useState<Array<{ id: number; name: string; color: string; rgb: string; visible: boolean; maskArea: number; clickX: number; clickY: number }>>([]);
-  const [selectedStroke, setSelectedStroke] = useState<Stroke | null>(null);
 
   // AI Chat state
   const [aiOpen, setAiOpen] = useState(false);
@@ -79,6 +94,7 @@ export default function GameViewerPage() {
   const chatEndRef = useRef<HTMLDivElement>(null);
 
   const videoRef = useRef<HTMLVideoElement>(null);
+  const videoViewportRef = useRef<HTMLDivElement>(null);
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const playerCanvasRef = useRef<HTMLCanvasElement>(null);
 
@@ -90,16 +106,28 @@ export default function GameViewerPage() {
   const [videoFps, setVideoFps] = useState(30);
   const [playbackRate, setPlaybackRate] = useState(1);
   const [panelWidth, setPanelWidth] = useState(320);
+  const [videoDisplayWidth, setVideoDisplayWidth] = useState<number | null>(null);
   const isResizing = useRef(false);
+  const [activeTip, setActiveTip] = useState<VideoTip | null>(null);
+  const [tipPausedVideo, setTipPausedVideo] = useState(false);
 
-  // Player selection removed - pose auto-runs on upload
-  // Player selection auto-open removed
+  const [showPlayerSelection, setShowPlayerSelection] = useState(false);
+  const playerSelectionAutoOpened = useRef(false);
+  const hasAutoSeeked = useRef(false);
+
+  // Debug mode state
+  const [debugMode, setDebugMode] = useState(false);
+  const [debugLog, setDebugLog] = useState<Array<{ label: string; [key: string]: unknown }>>([]);
+  const [debugLoading, setDebugLoading] = useState(false);
+  const [debugFlash, setDebugFlash] = useState<string | null>(null);
+  const [debugCopied, setDebugCopied] = useState(false);
 
   const { data: session, isLoading } = useSession(gameId);
   const { data: poseData } = usePoseAnalysis(gameId);
   const { data: strokeSummary } = useStrokeSummary(gameId);
   const trackMutation = useTrackObject(gameId);
   const strokeMutation = useAnalyzeStrokes(gameId);
+  const updateSessionMutation = useUpdateSession(gameId);
 
   const hasPose = !!session?.pose_video_path;
   const hasStrokes = !!strokeSummary?.total_strokes;
@@ -111,19 +139,20 @@ export default function GameViewerPage() {
   // Need pose: has video, no pose video yet, and not currently processing pose
   const needsPose = !!session?.video_path && !hasPose && !isPoseProcessing;
 
-  const strokes = strokeSummary?.strokes ?? [];
-  const sessionMaxVelocity = useMemo(
-    () => (strokes.length > 0 ? Math.max(...strokes.map((s) => s.max_velocity)) : 1),
-    [strokes]
-  );
-  const selectedStrokeIndex = useMemo(
-    () => (selectedStroke ? strokes.findIndex((s) => s.id === selectedStroke.id) + 1 : 0),
-    [selectedStroke, strokes]
-  );
+  // Auto-open player selection when session has video but no pose video yet
+  useEffect(() => {
+    if (session && !playerSelectionAutoOpened.current && needsPose) {
+      playerSelectionAutoOpened.current = true;
+      setShowPlayerSelection(true);
+    }
+  }, [session, needsPose]);
 
-  // Auto-open removed - pose auto-runs on upload now
-
-  // Player selection modal removed - pose auto-runs on upload
+  // Auto-close player selection modal when pose_video_path appears (e.g. from poll or stale cache refresh)
+  useEffect(() => {
+    if (hasPose && showPlayerSelection) {
+      setShowPlayerSelection(false);
+    }
+  }, [hasPose, showPlayerSelection]);
 
   // Auto-poll while session is still processing or waiting for pose video
   useEffect(() => {
@@ -139,6 +168,20 @@ export default function GameViewerPage() {
     return session?.video_path;
   }, [showPoseOverlay, session?.pose_video_path, session?.video_path]);
 
+  const startTimeParam = useMemo(() => {
+    const raw = searchParams.get("t");
+    if (!raw) return null;
+    const parsed = Number.parseFloat(raw);
+    if (Number.isNaN(parsed) || parsed < 0) return null;
+    return parsed;
+  }, [searchParams]);
+
+  const tipParam = useMemo(() => {
+    const raw = searchParams.get("tip");
+    if (!raw) return null;
+    return raw.toLowerCase();
+  }, [searchParams]);
+
   const trajectoryFrameMap = useMemo(() => {
     if (!session?.trajectory_data?.frames) return new Map<number, TrajectoryPoint>();
     return new Map(session.trajectory_data.frames.map((f: TrajectoryPoint) => [f.frame, f]));
@@ -149,39 +192,275 @@ export default function GameViewerPage() {
     return session.trajectory_data.frames.filter((f: TrajectoryPoint) => f.frame <= currentFrame);
   }, [session?.trajectory_data, currentFrame]);
 
-  // Use FPS from trajectory video_info if available
+  // Find the active stroke at current video frame
+  const activeStroke = useMemo((): Stroke | null => {
+    if (!strokeSummary?.strokes?.length) return null;
+    return strokeSummary.strokes.find(
+      (s) => currentFrame >= s.start_frame && currentFrame <= s.end_frame
+    ) ?? null;
+  }, [strokeSummary?.strokes, currentFrame]);
+
+  // Find the most recent stroke (for display when between strokes)
+  const lastStroke = useMemo((): Stroke | null => {
+    if (!strokeSummary?.strokes?.length) return null;
+    const past = strokeSummary.strokes.filter((s) => s.peak_frame <= currentFrame);
+    return past.length > 0 ? past[past.length - 1] : null;
+  }, [strokeSummary?.strokes, currentFrame]);
+
+  const computedTrajectoryFps = useMemo(() => {
+    const frames = session?.trajectory_data?.frames?.length ?? 0;
+    if (!frames || !duration) return null;
+    const derived = frames / duration;
+    if (!Number.isFinite(derived) || derived <= 0) return null;
+    return derived;
+  }, [session?.trajectory_data?.frames?.length, duration]);
+
+  // Use FPS from trajectory video_info if available, otherwise derive from data/duration
   const fps = useMemo(() => {
     try {
       const td = session?.trajectory_data as unknown as { video_info?: { fps?: number } } | undefined;
-      return td?.video_info?.fps || videoFps;
+      const metaFps = td?.video_info?.fps;
+      if (metaFps && Number.isFinite(metaFps) && metaFps > 0) return metaFps;
+      if (computedTrajectoryFps) return computedTrajectoryFps;
+      return videoFps;
     } catch { return videoFps; }
-  }, [session?.trajectory_data, videoFps]);
+  }, [session?.trajectory_data, videoFps, computedTrajectoryFps]);
 
-  // Video events — use RAF loop for smooth frame-accurate updates (like modelhealthdemo)
+  const frameFromTime = useCallback(
+    (time: number) => Math.max(0, Math.round(time * fps)),
+    [fps]
+  );
+
+  // Generate video tips from stroke data
+  // Generate video tips from stroke data (or test tips if no strokes)
+  const videoTips = useMemo(() => {
+    const tips = generateTipsFromStrokes(strokeSummary?.strokes || [], fps);
+    console.log('[VideoTips] Generated tips:', {
+      strokeCount: strokeSummary?.strokes?.length || 0,
+      tipCount: tips.length,
+      tips: tips.map(t => ({ id: t.id, timestamp: t.timestamp, title: t.title }))
+    });
+    return tips;
+  }, [strokeSummary?.strokes, fps]);
+
+  const tipSeekTime = useMemo(() => {
+    if (!tipParam || videoTips.length === 0) return null;
+    const match = videoTips.find((tip) =>
+      tip.title.toLowerCase().includes(tipParam)
+    );
+    return match?.timestamp ?? null;
+  }, [tipParam, videoTips]);
+
+  const autoSeekTime = startTimeParam ?? tipSeekTime;
+
+  useEffect(() => {
+    hasAutoSeeked.current = false;
+  }, [videoUrl, autoSeekTime]);
+
+  useEffect(() => {
+    if (autoSeekTime === null || autoSeekTime === undefined || !videoRef.current) return;
+    if (hasAutoSeeked.current) return;
+
+    const video = videoRef.current;
+    const seekAndPlay = () => {
+      if (hasAutoSeeked.current) return;
+      const durationSafe = Number.isFinite(video.duration) ? Math.max(0, video.duration - 0.05) : autoSeekTime;
+      const safeTime = Math.min(Math.max(0, autoSeekTime), durationSafe);
+      video.currentTime = safeTime;
+      hasAutoSeeked.current = true;
+      video.play().catch(() => undefined);
+      setIsPlaying(true);
+    };
+
+    if (video.readyState >= 1) {
+      seekAndPlay();
+      return;
+    }
+
+    video.addEventListener("loadedmetadata", seekAndPlay, { once: true });
+    return () => video.removeEventListener("loadedmetadata", seekAndPlay);
+  }, [autoSeekTime, videoUrl]);
+
+  // Handle tip state changes - freeze video when tip appears
+  const handleTipChange = useCallback((tip: VideoTip | null) => {
+    setActiveTip(tip);
+
+    if (!videoRef.current) return;
+
+    if (tip && !videoRef.current.paused) {
+      // Tip appeared - pause video
+      videoRef.current.pause();
+      setIsPlaying(false);
+      setTipPausedVideo(true);
+    } else if (!tip && tipPausedVideo) {
+      // Tip disappeared and we paused it - resume
+      videoRef.current.play();
+      setIsPlaying(true);
+      setTipPausedVideo(false);
+    }
+  }, [tipPausedVideo]);
+
+  const showTrack = activeTab === "track";
+  const showCourt = activeTab === "court";
+  const showAnalytics = activeTab === "analytics";
+  const showSidePanel =
+    showTrack || showCourt || activeTab === "pose" || showAnalytics || aiOpen;
+
+  const updateVideoDisplayWidth = useCallback(() => {
+    const viewport = videoViewportRef.current;
+    const video = videoRef.current;
+    if (!viewport) return;
+
+    const containerWidth = viewport.clientWidth;
+    const containerHeight = viewport.clientHeight;
+    let nextWidth = containerWidth;
+
+    if (video?.videoWidth && video?.videoHeight && containerHeight > 0) {
+      const videoAspect = video.videoWidth / video.videoHeight;
+      const containerAspect = containerWidth / containerHeight;
+      nextWidth = containerAspect > videoAspect ? containerHeight * videoAspect : containerWidth;
+    }
+
+    const rounded = Math.max(0, Math.round(nextWidth));
+    setVideoDisplayWidth((prev) => (prev === rounded ? prev : rounded));
+  }, []);
+
+  useEffect(() => {
+    updateVideoDisplayWidth();
+
+    const video = videoRef.current;
+    const viewport = videoViewportRef.current;
+    const handleResize = () => updateVideoDisplayWidth();
+
+    video?.addEventListener("loadedmetadata", handleResize);
+    window.addEventListener("resize", handleResize);
+
+    let observer: ResizeObserver | null = null;
+    if (viewport && typeof ResizeObserver !== "undefined") {
+      observer = new ResizeObserver(handleResize);
+      observer.observe(viewport);
+    }
+
+    return () => {
+      video?.removeEventListener("loadedmetadata", handleResize);
+      window.removeEventListener("resize", handleResize);
+      observer?.disconnect();
+    };
+  }, [updateVideoDisplayWidth, videoUrl, showSidePanel, panelWidth]);
+
+  // Get current stroke data for visual overlay
+  const currentStroke = useMemo(() => {
+    if (!activeTip || !strokeSummary?.strokes) return null;
+
+    // Extract stroke ID from tip ID (format: "stroke-{id}-contact" or "stroke-{id}-follow")
+    const match = activeTip.id.match(/stroke-([^-]+)-/);
+    if (!match) return null;
+
+    const strokeId = match[1];
+    return strokeSummary.strokes.find(s => s.id === strokeId) || null;
+  }, [activeTip, strokeSummary?.strokes]);
+  // Debug mode: annotate current frame
+  const debugAnnotate = useCallback(async (label: "forehand" | "backhand" | "false_positive" | "missed") => {
+    if (!gameId || debugLoading) return;
+    // Pause video
+    if (videoRef.current && !videoRef.current.paused) {
+      videoRef.current.pause();
+      setIsPlaying(false);
+    }
+    setDebugLoading(true);
+    setDebugFlash(label);
+    try {
+      const res = await getDebugFrame(gameId, currentFrame);
+      const entry = { label, ...res.data };
+      setDebugLog(prev => [...prev, entry]);
+    } catch (err) {
+      console.error("Debug frame fetch failed:", err);
+      setDebugLog(prev => [...prev, { label, frame: currentFrame, error: "fetch_failed" }]);
+    }
+    setDebugLoading(false);
+    setTimeout(() => setDebugFlash(null), 800);
+  }, [gameId, currentFrame, debugLoading]);
+
+  const copyDebugLog = useCallback(() => {
+    navigator.clipboard.writeText(JSON.stringify(debugLog, null, 2));
+    setDebugCopied(true);
+    setTimeout(() => setDebugCopied(false), 2000);
+  }, [debugLog]);
+
+  // Keyboard shortcuts for debug mode
+  useEffect(() => {
+    const handler = (e: KeyboardEvent) => {
+      // Ignore if typing in an input/textarea
+      if (e.target instanceof HTMLInputElement || e.target instanceof HTMLTextAreaElement) return;
+
+      if (e.key === "d" || e.key === "D") {
+        e.preventDefault();
+        setDebugMode(prev => !prev);
+        return;
+      }
+
+      if (!debugMode) return;
+
+      if (e.key === "h" || e.key === "H") {
+        e.preventDefault();
+        debugAnnotate("forehand");
+      } else if (e.key === "b" || e.key === "B") {
+        e.preventDefault();
+        debugAnnotate("backhand");
+      } else if (e.key === "f" || e.key === "F") {
+        e.preventDefault();
+        debugAnnotate("false_positive");
+      } else if (e.key === "m" || e.key === "M") {
+        e.preventDefault();
+        debugAnnotate("missed");
+      }
+    };
+
+    window.addEventListener("keydown", handler);
+    return () => window.removeEventListener("keydown", handler);
+  }, [debugMode, debugAnnotate]);
+
+  // Video events — use requestVideoFrameCallback when available for tighter sync
   useEffect(() => {
     const video = videoRef.current;
     if (!video) return;
     let rafId: number;
+    let vfcId: number | null = null;
 
-    // RAF loop runs at ~60fps during playback for smooth overlay sync
-    const rafLoop = () => {
-      if (video && !video.paused) {
-        setCurrentTime(video.currentTime);
-        setCurrentFrame(Math.floor(video.currentTime * fps));
-        rafId = requestAnimationFrame(rafLoop);
+    const frameLoop = (_now?: number, metadata?: VideoFrameCallbackMetadata) => {
+      if (!video || video.paused) return;
+      const mediaTime = metadata?.mediaTime ?? video.currentTime;
+      setCurrentTime(mediaTime);
+      setCurrentFrame(frameFromTime(mediaTime));
+      if ("requestVideoFrameCallback" in video) {
+        vfcId = (video as HTMLVideoElement & { requestVideoFrameCallback: (cb: any) => number })
+          .requestVideoFrameCallback(frameLoop);
+      } else {
+        rafId = requestAnimationFrame(() => frameLoop());
       }
     };
 
-    const onPlay = () => { rafId = requestAnimationFrame(rafLoop); };
+    const onPlay = () => {
+      if ("requestVideoFrameCallback" in video) {
+        vfcId = (video as HTMLVideoElement & { requestVideoFrameCallback: (cb: any) => number })
+          .requestVideoFrameCallback(frameLoop);
+      } else {
+        rafId = requestAnimationFrame(() => frameLoop());
+      }
+    };
     const onPause = () => {
       cancelAnimationFrame(rafId);
+      if (vfcId !== null && "cancelVideoFrameCallback" in video) {
+        (video as HTMLVideoElement & { cancelVideoFrameCallback: (id: number) => void }).cancelVideoFrameCallback(vfcId);
+        vfcId = null;
+      }
       // Update one final time on pause for accurate stopped position
       setCurrentTime(video.currentTime);
-      setCurrentFrame(Math.floor(video.currentTime * fps));
+      setCurrentFrame(frameFromTime(video.currentTime));
     };
     const onSeeked = () => {
       setCurrentTime(video.currentTime);
-      setCurrentFrame(Math.floor(video.currentTime * fps));
+      setCurrentFrame(frameFromTime(video.currentTime));
     };
     const onMeta = () => { setDuration(video.duration); };
 
@@ -193,15 +472,18 @@ export default function GameViewerPage() {
     video.addEventListener("timeupdate", onSeeked);
     return () => {
       cancelAnimationFrame(rafId);
+      if (vfcId !== null && "cancelVideoFrameCallback" in video) {
+        (video as HTMLVideoElement & { cancelVideoFrameCallback: (id: number) => void }).cancelVideoFrameCallback(vfcId);
+      }
       video.removeEventListener("play", onPlay);
       video.removeEventListener("pause", onPause);
       video.removeEventListener("seeked", onSeeked);
       video.removeEventListener("loadedmetadata", onMeta);
       video.removeEventListener("timeupdate", onSeeked);
     };
-  }, [videoUrl, fps]);
+  }, [videoUrl, frameFromTime]);
 
-  // Draw ball tracking overlay (green mask/bbox like SAM2 official + modelhealthdemo)
+  // Draw ball tracking overlay (mask/bbox)
   useEffect(() => {
     const canvas = canvasRef.current;
     if (!canvas) return;
@@ -228,7 +510,7 @@ export default function GameViewerPage() {
     }
 
     // Lookup current frame's trajectory point — find closest match if no exact hit
-    // (modelhealthdemo pattern: exact match first, then closest within window)
+    // Exact match first, then closest within window
     let cp = trajectoryFrameMap.get(currentFrame);
     if (!cp && trajectoryFrameMap.size > 0) {
       let minDiff = Infinity;
@@ -248,7 +530,7 @@ export default function GameViewerPage() {
         const bw = x2 - x1;
         const bh = y2 - y1;
 
-        // Green semi-transparent fill over segmented area (SAM2 style)
+        // Green semi-transparent fill over segmented area
         ctx.fillStyle = "rgba(34, 197, 94, 0.35)";
         ctx.fillRect(x1, y1, bw, bh);
 
@@ -364,7 +646,7 @@ export default function GameViewerPage() {
     }
   }, [trackingMode, playerSelectMode, trackMutation, currentFrame, queryClient, gameId, segmentedPlayers.length]);
 
-  // Primary: Track with TrackNet (full video, no click needed)
+  // Primary: full-video tracking (no click needed)
   // Video dimensions for denormalizing stored pose keypoints
   const videoW = session?.trajectory_data?.video_info?.width ?? 1280;
   const videoH = session?.trajectory_data?.video_info?.height ?? 828;
@@ -581,7 +863,6 @@ export default function GameViewerPage() {
   const handleTabClick = useCallback((tabId: TabId) => {
     setActiveTab(tabId);
     setPlayerSelectMode(false);
-    setSelectedStroke(null);
     if (tabId === "ai") { setAiOpen((o) => !o); return; }
     setAiOpen(false);
     if (tabId === "pose") {
@@ -589,11 +870,7 @@ export default function GameViewerPage() {
       if (!showPoseOverlay) handleDetectPose(); // detect on first enable
     }
     if (tabId === "track" && !hasTrajectory) handleTrackNetTrack();
-    if (tabId === "players") {
-      setShowPlayerOverlay(true);
-      if (segmentedPlayers.length === 0) setPlayerSelectMode(true);
-    }
-  }, [segmentedPlayers.length]);
+  }, []);
 
   const handleChatSend = useCallback(async () => {
     if (!chatInput.trim() || isAiThinking) return;
@@ -618,13 +895,12 @@ export default function GameViewerPage() {
     setIsAiThinking(false);
   }, [chatInput, isAiThinking, chatMessages, gameId]);
 
-  const showSidePanel = activeTab === "track" || activeTab === "players" || activeTab === "court" || activeTab === "pose" || aiOpen;
-  const showCourt = activeTab === "court";
-
-  // Auto-widen panel for court view
+  // Auto-widen panel for court view and analytics
   useEffect(() => {
-    setPanelWidth(showCourt ? 480 : 320);
-  }, [showCourt]);
+    if (showCourt) setPanelWidth(480);
+    else if (showAnalytics) setPanelWidth(800); // Wide panel for analytics
+    else setPanelWidth(320);
+  }, [showCourt, showAnalytics]);
 
   const handleResizeStart = useCallback((e: React.MouseEvent) => {
     e.preventDefault();
@@ -642,28 +918,29 @@ export default function GameViewerPage() {
   }, [panelWidth]);
 
   // Early returns AFTER all hooks
-  if (isLoading) return <div className="flex items-center justify-center h-[60vh]"><Loader2 className="w-8 h-8 text-primary animate-spin" /></div>;
-  if (!session) return <div className="text-center py-16"><p className="text-muted-foreground">Game not found</p><Button variant="outline" onClick={() => router.push("/dashboard")} className="mt-4">Back</Button></div>;
+  if (isLoading) return <div className="flex items-center justify-center h-[60vh]"><Loader2 className="w-8 h-8 text-[#9B7B5B] animate-spin" /></div>;
+  if (!session) return <div className="text-center py-16"><p className="text-[#8A8885]">Game not found</p><Button variant="outline" onClick={() => router.push("/dashboard")} className="mt-4">Back</Button></div>;
 
   const firstPlayer = session.players?.[0];
+  const detection = detectionResult;
 
   return (
     <>
       <div className="h-[calc(100vh-7rem)] flex flex-col overflow-hidden">
         {/* Breadcrumbs */}
-        <nav className="flex items-center gap-1.5 text-xs text-muted-foreground mb-2 shrink-0">
-          <Link href="/dashboard" className="hover:text-foreground transition-colors">Players</Link>
+        <nav className="flex items-center gap-1.5 text-xs text-[#6A6865] mb-2 shrink-0">
+          <Link href="/dashboard" className="hover:text-[#E8E6E3] transition-colors">Players</Link>
           <ChevronRight className="w-3 h-3" />
-          {firstPlayer && (<><Link href={`/dashboard/players/${firstPlayer.id}`} className="hover:text-foreground transition-colors">{firstPlayer.name}</Link><ChevronRight className="w-3 h-3" /></>)}
-          <span className="text-foreground">{session.name}</span>
+          {firstPlayer && (<><Link href={`/dashboard/players/${firstPlayer.id}`} className="hover:text-[#E8E6E3] transition-colors">{firstPlayer.name}</Link><ChevronRight className="w-3 h-3" /></>)}
+          <span className="text-[#E8E6E3]">{session.name}</span>
         </nav>
 
         {/* Header */}
         <div className="flex items-center gap-3 mb-3 shrink-0">
-          <button onClick={() => router.back()} className="text-muted-foreground hover:text-foreground transition-colors"><ArrowLeft className="w-5 h-5" /></button>
+          <button onClick={() => router.back()} className="text-[#6A6865] hover:text-[#E8E6E3] transition-colors"><ArrowLeft className="w-5 h-5" /></button>
           <div>
-            <h1 className="text-lg font-light text-foreground">{session.name}</h1>
-            <p className="text-xs text-muted-foreground">{new Date(session.created_at).toLocaleDateString()}</p>
+            <h1 className="text-lg font-light text-[#E8E6E3]">{session.name}</h1>
+            <p className="text-xs text-[#6A6865]">{new Date(session.created_at).toLocaleDateString()}</p>
           </div>
         </div>
 
@@ -672,35 +949,118 @@ export default function GameViewerPage() {
           {/* Left: Video or Court (full area) */}
           <div className={cn("flex flex-col min-h-0", showSidePanel ? "flex-1 min-w-0" : "w-full")}>
             {/* Video / Court swap */}
-            <div className="relative rounded-xl overflow-hidden bg-background flex-1 min-h-0">
+            <div className="relative rounded-xl overflow-hidden bg-[#1E1D1F] flex-1 min-h-0">
               {/* Video always visible */}
               {(trackingMode || playerSelectMode) && (
-                <div className="absolute top-3 left-3 right-3 z-30 flex items-center gap-2 px-3 py-2 rounded-lg bg-primary/20 backdrop-blur-sm">
-                  {trackingMode ? <Crosshair className="w-4 h-4 text-primary" /> : <Users className="w-4 h-4 text-primary" />}
-                  <span className="text-xs text-foreground">
+                <div className="absolute top-3 left-3 right-3 z-30 flex items-center gap-2 px-3 py-2 rounded-lg bg-[#9B7B5B]/20 backdrop-blur-sm">
+                  {trackingMode ? <Crosshair className="w-4 h-4 text-[#9B7B5B]" /> : <Users className="w-4 h-4 text-[#9B7B5B]" />}
+                  <span className="text-xs text-[#E8E6E3]">
                     {trackingMode ? "Click on the ball to track" : "Click on a player to detect"}
                   </span>
-                  <button onClick={() => { setTrackingMode(false); setPlayerSelectMode(false); }} className="ml-auto text-xs text-muted-foreground hover:text-foreground">Cancel</button>
+                  <button onClick={() => { setTrackingMode(false); setPlayerSelectMode(false); }} className="ml-auto text-xs text-[#8A8885] hover:text-[#E8E6E3]">Cancel</button>
                 </div>
               )}
-              <div className={cn("relative w-full h-full", (trackingMode || playerSelectMode) && "cursor-crosshair")} onClick={handleFrameClick}>
+              <div
+                ref={videoViewportRef}
+                className={cn("relative w-full h-full", (trackingMode || playerSelectMode) && "cursor-crosshair")}
+                onClick={handleFrameClick}
+              >
                 {videoUrl && <video ref={videoRef} src={videoUrl} className="w-full h-full object-contain" muted={isMuted} playsInline />}
-                <canvas ref={canvasRef} className="absolute inset-0 w-full h-full pointer-events-none" />
-                <canvas ref={playerCanvasRef} className="absolute inset-0 w-full h-full pointer-events-none" />
+                <canvas ref={canvasRef} className="absolute inset-0 w-full h-full pointer-events-none" style={{ zIndex: 10 }} />
+                <canvas ref={playerCanvasRef} className="absolute inset-0 w-full h-full pointer-events-none" style={{ zIndex: 20 }} />
+                
+                {/* Video Tips - PlayVision AI style overlays */}
+                <VideoTips
+                  currentTime={currentTime}
+                  tips={videoTips}
+                  isPlaying={isPlaying}
+                />
               </div>
-              {/* Shot analysis overlay — above canvas, below toolbar */}
-              <AnimatePresence>
-                {selectedStroke && (
-                  <ShotCard
-                    key={selectedStroke.id}
-                    stroke={selectedStroke}
-                    index={selectedStrokeIndex}
-                    totalStrokes={strokes.length}
-                    sessionMaxVelocity={sessionMaxVelocity}
-                    onDismiss={() => setSelectedStroke(null)}
-                  />
-                )}
-              </AnimatePresence>
+
+              {/* Debug mode toggle button — top-right of video */}
+              {hasPose && (
+                <button
+                  onClick={() => setDebugMode(prev => !prev)}
+                  className={cn(
+                    "absolute top-2 right-2 z-30 p-1.5 rounded-lg transition-all",
+                    debugMode
+                      ? "bg-[#C45C5C]/20 text-[#C45C5C] ring-1 ring-[#C45C5C]/40"
+                      : "bg-black/30 text-[#6A6865] hover:text-[#E8E6E3] hover:bg-black/50"
+                  )}
+                  title="Toggle stroke debug mode (D)"
+                >
+                  <Bug className="w-3.5 h-3.5" />
+                </button>
+              )}
+
+              {/* Debug floating bar */}
+              {debugMode && (
+                <div className="absolute bottom-14 left-1/2 -translate-x-1/2 z-30">
+                  <div className="flex items-center gap-1.5 px-3 py-2 rounded-xl bg-black/80 backdrop-blur-sm border border-[#C45C5C]/30">
+                    {debugFlash && (
+                      <span className={cn(
+                        "text-[10px] font-bold px-1.5 py-0.5 rounded animate-pulse",
+                        debugFlash === "forehand" ? "bg-[#9B7B5B]/30 text-[#9B7B5B]"
+                        : debugFlash === "backhand" ? "bg-[#5B9B7B]/30 text-[#5B9B7B]"
+                        : debugFlash === "false_positive" ? "bg-[#C45C5C]/30 text-[#C45C5C]"
+                        : "bg-[#8A8885]/30 text-[#8A8885]"
+                      )}>
+                        {debugFlash === "forehand" ? "FH" : debugFlash === "backhand" ? "BH" : debugFlash === "false_positive" ? "FALSE+" : "MISSED"} logged
+                      </span>
+                    )}
+                    <button
+                      onClick={() => debugAnnotate("forehand")}
+                      disabled={debugLoading}
+                      className="px-2.5 py-1 rounded-lg text-[10px] font-medium bg-[#9B7B5B]/20 text-[#9B7B5B] hover:bg-[#9B7B5B]/30 transition-colors disabled:opacity-50"
+                      title="Mark as forehand hit (H)"
+                    >
+                      {debugLoading ? <Loader2 className="w-3 h-3 animate-spin" /> : "FH (H)"}
+                    </button>
+                    <button
+                      onClick={() => debugAnnotate("backhand")}
+                      disabled={debugLoading}
+                      className="px-2.5 py-1 rounded-lg text-[10px] font-medium bg-[#5B9B7B]/20 text-[#5B9B7B] hover:bg-[#5B9B7B]/30 transition-colors disabled:opacity-50"
+                      title="Mark as backhand hit (B)"
+                    >
+                      BH (B)
+                    </button>
+                    <button
+                      onClick={() => debugAnnotate("false_positive")}
+                      disabled={debugLoading}
+                      className="px-2.5 py-1 rounded-lg text-[10px] font-medium bg-[#C45C5C]/20 text-[#C45C5C] hover:bg-[#C45C5C]/30 transition-colors disabled:opacity-50"
+                      title="Mark as false positive (F)"
+                    >
+                      False+ (F)
+                    </button>
+                    <button
+                      onClick={() => debugAnnotate("missed")}
+                      disabled={debugLoading}
+                      className="px-2.5 py-1 rounded-lg text-[10px] font-medium bg-[#8A8885]/20 text-[#8A8885] hover:bg-[#8A8885]/30 transition-colors disabled:opacity-50"
+                      title="Mark as missed hit (M)"
+                    >
+                      Missed (M)
+                    </button>
+                    <div className="w-px h-4 bg-[#363436] mx-1" />
+                    <span className="text-[10px] text-[#6A6865] tabular-nums">
+                      {debugLog.length} logged
+                    </span>
+                    {debugLog.length > 0 && (
+                      <button
+                        onClick={copyDebugLog}
+                        className="flex items-center gap-1 px-2 py-1 rounded-lg text-[10px] font-medium bg-[#363436] text-[#E8E6E3] hover:bg-[#4A4849] transition-colors"
+                        title="Copy debug log as JSON"
+                      >
+                        {debugCopied ? <Check className="w-3 h-3 text-[#6B8E6B]" /> : <Copy className="w-3 h-3" />}
+                        {debugCopied ? "Copied" : "Copy"}
+                      </button>
+                    )}
+                    <span className="text-[9px] text-[#6A6865] tabular-nums ml-1">
+                      F{currentFrame}
+                    </span>
+                  </div>
+                </div>
+              )}
+
               {/* Glass Toolbar — always on top */}
               <div className="absolute bottom-3 left-1/2 -translate-x-1/2 z-20">
                 <div className="glass-toolbar flex items-center gap-1 px-2 py-1.5">
@@ -708,7 +1068,7 @@ export default function GameViewerPage() {
                   {tabs.map((tab) => {
                     const Icon = tab.icon;
                     const isActive = activeTab === tab.id;
-                    const isOn = (tab.id === "pose" && showPoseOverlay) || (tab.id === "track" && trackingMode) || (tab.id === "players" && (showPlayerOverlay || playerSelectMode)) || (tab.id === "ai" && aiOpen);
+                    const isOn = (tab.id === "pose" && showPoseOverlay) || (tab.id === "track" && trackingMode) || (tab.id === "analytics" && activeTab === "analytics") || (tab.id === "ai" && aiOpen);
                     return (
                       <button key={tab.id} onClick={() => handleTabClick(tab.id)} className={cn("glass-tab", (isActive || isOn) && "glass-tab-active")}>
                         <Icon className="w-3.5 h-3.5" />
@@ -722,12 +1082,13 @@ export default function GameViewerPage() {
             </div>
 
             {/* Controls */}
-            <div className="rounded-xl bg-card p-2.5 mt-2 shrink-0">
+            <div className="mx-auto mt-2 shrink-0 w-full" style={videoDisplayWidth ? { width: `${videoDisplayWidth}px` } : undefined}>
+              <div className="rounded-xl bg-[#282729] p-2.5">
               <div className="flex items-center gap-3 mb-1.5">
-                <span className="text-[10px] text-muted-foreground w-10">{fmtTime(currentTime)}</span>
+                <span className="text-[10px] text-[#6A6865] w-10">{fmtTime(currentTime)}</span>
                 <input type="range" min={0} max={duration || 100} step={0.01} value={currentTime} onChange={handleSeek}
-                  className="flex-1 h-1 bg-border rounded-full appearance-none cursor-pointer [&::-webkit-slider-thumb]:appearance-none [&::-webkit-slider-thumb]:w-2.5 [&::-webkit-slider-thumb]:h-2.5 [&::-webkit-slider-thumb]:bg-primary [&::-webkit-slider-thumb]:rounded-full" />
-                <span className="text-[10px] text-muted-foreground w-10 text-right">{fmtTime(duration)}</span>
+                  className="flex-1 h-1 bg-[#363436] rounded-full appearance-none cursor-pointer [&::-webkit-slider-thumb]:appearance-none [&::-webkit-slider-thumb]:w-2.5 [&::-webkit-slider-thumb]:h-2.5 [&::-webkit-slider-thumb]:bg-[#9B7B5B] [&::-webkit-slider-thumb]:rounded-full" />
+                <span className="text-[10px] text-[#6A6865] w-10 text-right">{fmtTime(duration)}</span>
               </div>
               <div className="flex items-center justify-between">
                 <div className="flex items-center gap-1">
@@ -735,7 +1096,7 @@ export default function GameViewerPage() {
                   <Button variant="ghost" size="icon" className="h-7 w-7" onClick={togglePlay}>{isPlaying ? <Pause className="w-3.5 h-3.5" /> : <Play className="w-3.5 h-3.5" />}</Button>
                   <Button variant="ghost" size="icon" className="h-7 w-7" onClick={() => skipFrames(10)}><SkipForward className="w-3 h-3" /></Button>
                 </div>
-                <span className="text-[10px] text-muted-foreground">Frame {currentFrame}</span>
+                <span className="text-[10px] text-[#6A6865]">Frame {currentFrame}</span>
                 <button
                   onClick={() => {
                     const rates = [0.25, 0.5, 1, 1.5, 2];
@@ -743,12 +1104,13 @@ export default function GameViewerPage() {
                     setPlaybackRate(next);
                     if (videoRef.current) videoRef.current.playbackRate = next;
                   }}
-                  className="text-[10px] px-1.5 py-0.5 rounded text-primary hover:bg-muted transition-colors font-mono"
+                  className="text-[10px] px-1.5 py-0.5 rounded text-[#9B7B5B] hover:bg-[#2D2C2E] transition-colors font-mono"
                 >
                   {playbackRate}x
                 </button>
                 <Button variant="ghost" size="icon" className="h-7 w-7" onClick={() => setIsMuted((m) => !m)}>{isMuted ? <VolumeX className="w-3 h-3" /> : <Volume2 className="w-3 h-3" />}</Button>
               </div>
+            </div>
             </div>
           </div>
 
@@ -758,245 +1120,169 @@ export default function GameViewerPage() {
               {/* Resize handle */}
               <div
                 onMouseDown={handleResizeStart}
-                className="w-1.5 shrink-0 cursor-col-resize hover:bg-primary/30 active:bg-primary/50 transition-colors rounded-full self-stretch"
+                className="w-1.5 shrink-0 cursor-col-resize hover:bg-[#9B7B5B]/30 active:bg-[#9B7B5B]/50 transition-colors rounded-full self-stretch"
               />
-              <div className="flex-1 flex flex-col min-h-0 overflow-hidden">
-              {/* Track results */}
-              {activeTab === "track" && !trackingMode && !aiOpen && (
-                <Card isBlurred className="bg-background/60 dark:bg-content1/60">
-                  <CardBody>
+              <div className="flex-1 flex min-h-0 overflow-hidden">
+                <div className="w-full h-full max-w-[calc(100%-8px)] mx-auto flex flex-col min-h-0 overflow-hidden">
+                  {/* 3D Ball Trajectory Visualization */}
+                  {activeTab === "track" && !aiOpen && (
+                    <div className="flex-1 min-h-0 rounded-xl overflow-hidden flex flex-col">
                   {hasTrajectory ? (
                     <div className="space-y-3">
-                      <p className="text-[10px] text-muted-foreground uppercase tracking-wider">Tracking Results</p>
+                      <p className="text-[10px] text-[#6A6865] uppercase tracking-wider">Tracking Results</p>
                       <div className="space-y-2">
-                        <div className="flex justify-between text-xs"><span className="text-muted-foreground">Frames</span><span className="text-foreground">{session.trajectory_data?.frames?.length}</span></div>
-                        <div className="flex justify-between text-xs"><span className="text-muted-foreground">Avg Speed</span><span className="text-foreground">{session.trajectory_data?.velocity?.length ? (session.trajectory_data.velocity.reduce((a: number, b: number) => a + b, 0) / session.trajectory_data.velocity.length).toFixed(1) : "—"} px/f</span></div>
-                        <div className="flex justify-between text-xs"><span className="text-muted-foreground">Spin</span><span className="text-primary capitalize">{session.trajectory_data?.spin_estimate ?? "—"}</span></div>
+                        <div className="flex justify-between text-xs"><span className="text-[#8A8885]">Frames</span><span className="text-[#E8E6E3]">{session.trajectory_data?.frames?.length}</span></div>
+                        <div className="flex justify-between text-xs"><span className="text-[#8A8885]">Avg Speed</span><span className="text-[#E8E6E3]">{session.trajectory_data?.velocity?.length ? (session.trajectory_data.velocity.reduce((a: number, b: number) => a + b, 0) / session.trajectory_data.velocity.length).toFixed(1) : "—"} px/f</span></div>
+                        <div className="flex justify-between text-xs"><span className="text-[#8A8885]">Spin</span><span className="text-[#9B7B5B] capitalize">{session.trajectory_data?.spin_estimate ?? "—"}</span></div>
                       </div>
                     </div>
                   ) : (
                     <div className="text-center py-6">
                       {isProcessing ? (
                         <>
-                          <Loader2 className="w-5 h-5 text-primary mx-auto mb-2 animate-spin" />
-                          <p className="text-xs text-muted-foreground">Auto-tracking in progress...</p>
-                          <p className="text-[10px] text-muted-foreground/70 mt-1">Ball trajectory will appear when ready</p>
+                          <Loader2 className="w-5 h-5 text-[#9B7B5B] mx-auto mb-2 animate-spin" />
+                          <p className="text-xs text-[#8A8885]">Auto-tracking in progress...</p>
+                          <p className="text-[10px] text-[#6A6865] mt-1">Ball trajectory will appear when ready</p>
                         </>
                       ) : (
                         <>
-                          <Crosshair className="w-5 h-5 text-border mx-auto mb-2" />
-                          <p className="text-xs text-muted-foreground mb-3">Click Track to detect ball trajectory</p>
-                          <button onClick={handleAutoDetect} className="text-[10px] text-muted-foreground hover:text-primary transition-colors underline">
+                          <Crosshair className="w-5 h-5 text-[#363436] mx-auto mb-2" />
+                          <p className="text-xs text-[#6A6865] mb-3">Click Track to detect ball trajectory</p>
+                          <button onClick={handleAutoDetect} className="text-[10px] text-[#8A8885] hover:text-[#9B7B5B] transition-colors underline">
                             Manual detect (YOLO+SAM2)
                           </button>
                         </>
                       )}
                     </div>
                   )}
-                  </CardBody>
-                </Card>
-              )}
-
-              {/* Players panel */}
-              {activeTab === "players" && !aiOpen && (
-                <Card isBlurred className="bg-background/60 dark:bg-content1/60 flex flex-col h-full overflow-hidden">
-                  <CardHeader className="px-3 py-2.5 border-b border-content3/30 flex items-center justify-between">
-                    <span className="text-xs font-medium text-foreground">Players</span>
-                    <button
-                      onClick={() => { setPlayerSelectMode(true); setShowPlayerOverlay(true); }}
-                      className={cn(
-                        "text-[10px] px-2.5 py-1 rounded-lg transition-colors",
-                        playerSelectMode
-                          ? "bg-primary text-primary-foreground"
-                          : "text-primary hover:bg-primary/10"
-                      )}
-                    >
-                      {playerSelectMode ? "Selecting..." : "+ Add Player"}
-                    </button>
-                  </CardHeader>
-
-                  <CardBody className="flex-1 overflow-y-auto p-3 space-y-2">
-                    {segmentedPlayers.length === 0 ? (
-                      <div className="text-center py-8">
-                        <Users className="w-6 h-6 text-border mx-auto mb-3" />
-                        <p className="text-xs text-muted-foreground mb-1">No players detected</p>
-                        <p className="text-[10px] text-muted-foreground/70 mb-3">Click &quot;Add Player&quot; then click on a player in the video</p>
-                        <button
-                          onClick={() => { setPlayerSelectMode(true); setShowPlayerOverlay(true); }}
-                          className="text-[10px] text-primary hover:text-primary/80 transition-colors"
-                        >
-                          Detect a player
-                        </button>
-                      </div>
-                    ) : (
-                      segmentedPlayers.map((player) => (
-                        <div key={player.id} className="flex items-center gap-3 p-2.5 rounded-lg bg-background hover:bg-muted transition-colors">
-                          <div
-                            className="w-8 h-8 rounded-lg flex items-center justify-center shrink-0 cursor-pointer"
-                            style={{ background: `rgba(${player.rgb}, 0.15)` }}
-                            onClick={() => setSegmentedPlayers((ps) => ps.map((p) => p.id === player.id ? { ...p, visible: !p.visible } : p))}
-                          >
-                            <div className="w-3 h-3 rounded-full" style={{ background: player.color, opacity: player.visible ? 1 : 0.3 }} />
-                          </div>
-                          <div className="flex-1 min-w-0">
-                            <p className="text-xs font-medium text-foreground">{player.name}</p>
-                            <p className="text-[10px] text-muted-foreground">
-                              ({Math.round(player.clickX)}, {Math.round(player.clickY)})
-                            </p>
-                          </div>
-                          <button
-                            onClick={() => setSegmentedPlayers((ps) => ps.filter((p) => p.id !== player.id))}
-                            className="text-muted-foreground hover:text-destructive transition-colors"
-                          >
-                            <X className="w-3 h-3" />
-                          </button>
-                        </div>
-                      ))
-                    )}
-                  </CardBody>
-
-                  {segmentedPlayers.length > 0 && (
-                    <div className="px-3 py-2.5 border-t border-border/30">
-                      <div className="flex justify-between text-[10px]">
-                        <span className="text-muted-foreground">{segmentedPlayers.length} player{segmentedPlayers.length !== 1 ? "s" : ""} detected</span>
-                        <button
-                          onClick={() => { setSegmentedPlayers([]); setShowPlayerOverlay(false); }}
-                          className="text-muted-foreground hover:text-destructive transition-colors"
-                        >
-                          Clear all
-                        </button>
-                      </div>
-                    </div>
-                  )}
-                </Card>
+                </div>
               )}
 
               {/* Pose analysis panel */}
               {activeTab === "pose" && showPoseOverlay && !aiOpen && (
-                <Card isBlurred className="bg-background/60 dark:bg-content1/60 flex flex-col h-full overflow-hidden">
-                  <CardHeader className="px-3 py-2.5 border-b border-content3/30 flex items-center justify-between">
-                    <span className="text-xs font-medium text-foreground">
-                      {isPoseProcessing ? "Pose Analysis" : detectedPersons.length > 0 ? `${detectedPersons.length} Person${detectedPersons.length > 1 ? "s" : ""}` : "Pose Analysis"}
-                    </span>
-                    {(isDetectingPose || isPoseProcessing) && <Spinner size="sm" color="primary" />}
-                  </CardHeader>
-                  <CardBody className="flex-1 overflow-y-auto p-2 space-y-2">
-                    {isPoseProcessing ? (
-                      <div className="text-center py-6">
-                        <Loader2 className="w-6 h-6 text-primary mx-auto mb-3 animate-spin" />
-                        <p className="text-xs text-foreground mb-1">Pose estimation running...</p>
-                        <p className="text-[10px] text-muted-foreground">Analyzing player movements frame by frame.</p>
-                        <p className="text-[10px] text-muted-foreground mt-1">This may take a minute for longer videos.</p>
-                        {session?.selected_player && (
-                          <p className="text-[10px] text-primary mt-2">Tracking Player {session.selected_player.player_idx + 1}</p>
+                <div className="glass-context rounded-xl flex flex-col h-full overflow-hidden">
+                  <div className="px-3 py-2.5 border-b border-[#363436]/30 flex items-center justify-between">
+                    <span className="text-xs font-medium text-[#E8E6E3]">Pose & Strokes</span>
+                    {(isDetectingPose || isPoseProcessing) && <Loader2 className="w-3 h-3 text-[#9B7B5B] animate-spin" />}
+                  </div>
+                  <div className="flex-1 overflow-y-auto p-2 space-y-2">
+                    {showPlayerSelection && (
+                      <PlayerSelection
+                        sessionId={gameId}
+                        variant="inline"
+                        onClose={() => setShowPlayerSelection(false)}
+                        onAnalysisStarted={() => {
+                          queryClient.invalidateQueries({ queryKey: sessionKeys.detail(gameId) });
+                        }}
+                      />
+                    )}
+
+                    {/* ── Live Stroke Indicator (synced to video frame) ── */}
+                    {hasStrokes && (
+                      <div className={cn(
+                        "p-2.5 rounded-lg transition-all duration-200",
+                        activeStroke
+                          ? activeStroke.stroke_type === "forehand" ? "bg-[#9B7B5B]/15 ring-1 ring-[#9B7B5B]/40"
+                          : activeStroke.stroke_type === "backhand" ? "bg-[#5B9B7B]/15 ring-1 ring-[#5B9B7B]/40"
+                          : "bg-[#1E1D1F]"
+                          : "bg-[#1E1D1F]"
+                      )}>
+                        {activeStroke ? (
+                          <div className="flex items-center gap-2">
+                            <div className={cn(
+                              "w-2 h-2 rounded-full animate-pulse",
+                              activeStroke.stroke_type === "forehand" ? "bg-[#9B7B5B]"
+                              : activeStroke.stroke_type === "backhand" ? "bg-[#5B9B7B]"
+                              : "bg-[#8A8885]"
+                            )} />
+                            <span className={cn(
+                              "text-sm font-medium capitalize",
+                              activeStroke.stroke_type === "forehand" ? "text-[#9B7B5B]"
+                              : activeStroke.stroke_type === "backhand" ? "text-[#5B9B7B]"
+                              : "text-[#8A8885]"
+                            )}>
+                              {activeStroke.stroke_type}
+                            </span>
+                            <span className="text-[10px] text-[#6A6865] ml-auto">
+                              Form {activeStroke.form_score.toFixed(0)}
+                            </span>
+                          </div>
+                        ) : lastStroke ? (
+                          <div className="flex items-center gap-2">
+                            <div className="w-2 h-2 rounded-full bg-[#363436]" />
+                            <span className="text-xs text-[#6A6865]">
+                              Last: <span className={cn(
+                                "capitalize",
+                                lastStroke.stroke_type === "forehand" ? "text-[#9B7B5B]"
+                                : lastStroke.stroke_type === "backhand" ? "text-[#5B9B7B]"
+                                : "text-[#8A8885]"
+                              )}>{lastStroke.stroke_type}</span>
+                            </span>
+                            <span className="text-[10px] text-[#6A6865] ml-auto">
+                              Form {lastStroke.form_score.toFixed(0)}
+                            </span>
+                          </div>
+                        ) : (
+                          <p className="text-[10px] text-[#6A6865] text-center">Play video to see live stroke detection</p>
                         )}
                       </div>
-                    ) : session?.status === "failed" && !hasPose ? (
-                      <div className="text-center py-6">
-                        <Activity className="w-6 h-6 text-destructive mx-auto mb-3" />
-                        <p className="text-xs text-destructive mb-1">Pose analysis failed</p>
-                        <p className="text-[10px] text-muted-foreground mb-3">Pose estimation failed. Re-upload the video to retry.</p>
-                      </div>
-                    ) : detectedPersons.length === 0 && !isDetectingPose && !hasPose ? (
-                      <div className="text-center py-6">
-                        <Activity className="w-5 h-5 text-border mx-auto mb-2" />
-                        <p className="text-xs text-muted-foreground mb-3">No pose data yet</p>
-                        <p className="text-[10px] text-foreground/40">Pose runs automatically on upload.</p>
-                      </div>
-                    ) : null}
-                    {!isPoseProcessing && detectedPersons.map((person) => {
-                      const isSelected = person.id === selectedPersonId;
-                      const color = ["#9B7B5B", "#5B9B7B", "#7B5B9B", "#C8B464"][(person.id - 1) % 4];
-                      return (
-                        <button
-                          key={person.id}
-                          onClick={() => setSelectedPersonId(isSelected ? null : person.id)}
-                          className={`w-full p-2.5 rounded-lg text-left transition-colors ${
-                            isSelected ? "bg-border/60 ring-1" : "bg-background hover:bg-border/30"
-                          }`}
-                          style={isSelected ? { borderColor: color, borderWidth: 1 } : undefined}
-                        >
-                          <div className="flex items-center gap-2 mb-2">
-                            <div className="w-3 h-3 rounded-full" style={{ backgroundColor: color }} />
-                            <span className="text-xs font-medium text-foreground">Player {person.id}</span>
-                            <span className="text-[10px] text-muted-foreground ml-auto">{(person.confidence * 100).toFixed(0)}%</span>
-                          </div>
-                          {isSelected && (
-                            <div className="space-y-1.5 mt-2">
-                              <p className="text-[10px] text-muted-foreground uppercase tracking-wider">Keypoints</p>
-                              <div className="grid grid-cols-2 gap-1">
-                                {person.keypoints.filter((k) => k.conf > 0.3).map((kp) => (
-                                  <div key={kp.name} className="flex justify-between text-[10px]">
-                                    <span className="text-muted-foreground truncate">{kp.name.replace("_", " ")}</span>
-                                    <span className="text-foreground font-mono">{kp.conf.toFixed(2)}</span>
-                                  </div>
-                                ))}
-                              </div>
-                              <div className="mt-2 pt-2 border-t border-border/30">
-                                <p className="text-[10px] text-muted-foreground uppercase tracking-wider mb-1">Bbox</p>
-                                <p className="text-[10px] text-muted-foreground font-mono">
-                                  {person.bbox[0]},{person.bbox[1]} — {person.bbox[2]},{person.bbox[3]}
-                                  <span className="text-muted-foreground/70 ml-2">
-                                    ({person.bbox[2] - person.bbox[0]}x{person.bbox[3] - person.bbox[1]}px)
-                                  </span>
-                                </p>
-                              </div>
-                            </div>
-                          )}
-                        </button>
-                      );
-                    })}
+                    )}
 
-                    {/* Stroke Analysis Section */}
+                    {/* ── Stroke Summary Stats ── */}
                     {hasPose && !isPoseProcessing && (
-                      <div className="mt-3 pt-3 border-t border-border/30">
+                      <>
                         {hasStrokes ? (
                           <div className="space-y-2">
-                            <p className="text-[10px] text-muted-foreground uppercase tracking-wider">Stroke Analysis</p>
-                            <div className="grid grid-cols-2 gap-2">
-                              <div className="p-2 rounded-lg bg-background">
-                                <p className="text-[10px] text-muted-foreground">Forehand</p>
-                                <p className="text-lg font-light text-[#9B7B5B]">{strokeSummary?.forehand_count ?? 0}</p>
-                              </div>
-                              <div className="p-2 rounded-lg bg-background">
-                                <p className="text-[10px] text-muted-foreground">Backhand</p>
-                                <p className="text-lg font-light text-[#5B9B7B]">{strokeSummary?.backhand_count ?? 0}</p>
+                            {/* Camera facing toggle + Re-analyze */}
+                            <div className="flex items-center justify-between">
+                              <p className="text-[10px] text-[#6A6865] uppercase tracking-wider">Stroke Breakdown</p>
+                              <div className="flex items-center gap-2">
+                                <button
+                                  onClick={() => strokeMutation.mutate()}
+                                  disabled={strokeMutation.isPending}
+                                  className="flex items-center gap-1 text-[10px] text-[#6A6865] hover:text-[#9B7B5B] transition-colors disabled:opacity-50"
+                                  title="Re-analyze strokes with current settings"
+                                >
+                                  <RefreshCw className={cn("w-3 h-3", strokeMutation.isPending && "animate-spin")} />
+                                </button>
+                                <button
+                                  onClick={() => {
+                                    const cycle = { auto: "toward" as const, toward: "away" as const, away: "auto" as const };
+                                    const current = (session?.camera_facing ?? "auto") as "auto" | "toward" | "away";
+                                    updateSessionMutation.mutate({ camera_facing: cycle[current] });
+                                  }}
+                                  className="flex items-center gap-1 text-[10px] text-[#6A6865] hover:text-[#E8E6E3] transition-colors"
+                                  title="Camera orientation: auto-detect, facing toward camera, or facing away"
+                                >
+                                  <span>Cam:</span>
+                                  <span className={`px-1.5 py-0.5 rounded font-medium ${
+                                    (session?.camera_facing ?? "auto") === "auto"
+                                      ? "bg-[#9B7B5B]/20 text-[#9B7B5B]"
+                                      : (session?.camera_facing ?? "auto") === "toward"
+                                      ? "bg-[#6B8E6B]/20 text-[#6B8E6B]"
+                                      : "bg-[#7B8ECE]/20 text-[#7B8ECE]"
+                                  }`}>
+                                    {(session?.camera_facing ?? "auto") === "auto" ? "Auto" : (session?.camera_facing ?? "auto") === "toward" ? "Front" : "Back"}
+                                  </span>
+                                </button>
                               </div>
                             </div>
-                            <div className="space-y-1.5">
-                              <div className="flex justify-between text-[10px]">
-                                <span className="text-muted-foreground">Avg Form Score</span>
-                                <span className="text-foreground font-mono">{strokeSummary?.average_form_score?.toFixed(1)}</span>
+                            <div className="grid grid-cols-2 gap-1.5">
+                              <div className="p-2 rounded-lg bg-[#1E1D1F] text-center">
+                                <p className="text-lg font-light text-[#9B7B5B]">{strokeSummary?.forehand_count ?? 0}</p>
+                                <p className="text-[9px] text-[#6A6865]">Forehand</p>
                               </div>
-                              <div className="flex justify-between text-[10px]">
-                                <span className="text-muted-foreground">Best Form Score</span>
-                                <span className="text-[#9B7B5B] font-mono">{strokeSummary?.best_form_score?.toFixed(1)}</span>
-                              </div>
-                              <div className="flex justify-between text-[10px]">
-                                <span className="text-muted-foreground">Consistency</span>
-                                <span className="text-foreground font-mono">{strokeSummary?.consistency_score?.toFixed(1)}</span>
-                              </div>
-                              <div className="flex justify-between text-[10px]">
-                                <span className="text-muted-foreground">Serves</span>
-                                <span className="text-foreground font-mono">{strokeSummary?.serve_count ?? 0}</span>
-                              </div>
-                              <div className="flex justify-between text-[10px]">
-                                <span className="text-muted-foreground">Total Strokes</span>
-                                <span className="text-foreground font-mono">{strokeSummary?.total_strokes ?? 0}</span>
+                              <div className="p-2 rounded-lg bg-[#1E1D1F] text-center">
+                                <p className="text-lg font-light text-[#5B9B7B]">{strokeSummary?.backhand_count ?? 0}</p>
+                                <p className="text-[9px] text-[#6A6865]">Backhand</p>
                               </div>
                             </div>
                             {/* FH/BH ratio bar */}
                             {(strokeSummary?.total_strokes ?? 0) > 0 && (
-                              <div className="mt-1">
-                                <div className="flex h-1.5 rounded-full overflow-hidden bg-border">
-                                  <div
-                                    className="bg-[#9B7B5B] transition-all"
-                                    style={{ width: `${((strokeSummary?.forehand_count ?? 0) / (strokeSummary?.total_strokes ?? 1)) * 100}%` }}
-                                  />
-                                  <div
-                                    className="bg-[#5B9B7B] transition-all"
-                                    style={{ width: `${((strokeSummary?.backhand_count ?? 0) / (strokeSummary?.total_strokes ?? 1)) * 100}%` }}
-                                  />
+                              <div>
+                                <div className="flex h-1.5 rounded-full overflow-hidden bg-[#363436]">
+                                  <div className="bg-[#9B7B5B] transition-all" style={{ width: `${((strokeSummary?.forehand_count ?? 0) / (strokeSummary?.total_strokes ?? 1)) * 100}%` }} />
+                                  <div className="bg-[#5B9B7B] transition-all" style={{ width: `${((strokeSummary?.backhand_count ?? 0) / (strokeSummary?.total_strokes ?? 1)) * 100}%` }} />
                                 </div>
                                 <div className="flex justify-between mt-1">
                                   <span className="text-[9px] text-[#9B7B5B]">FH {Math.round(((strokeSummary?.forehand_count ?? 0) / (strokeSummary?.total_strokes ?? 1)) * 100)}%</span>
@@ -1004,52 +1290,120 @@ export default function GameViewerPage() {
                                 </div>
                               </div>
                             )}
-                            {/* Individual stroke list */}
-                            {strokes.length > 0 && (
-                              <div className="mt-2 space-y-1 max-h-40 overflow-y-auto">
-                                <p className="text-[9px] text-muted-foreground uppercase tracking-wider mb-1">Shots</p>
-                                {strokes.map((s, i) => {
-                                  const isActive = selectedStroke?.id === s.id;
-                                  const typeColor = s.stroke_type === "forehand" ? "#9B7B5B" : s.stroke_type === "backhand" ? "#5B9B7B" : "#5B7B9B";
+                            {/* Form metrics */}
+                            <div className="space-y-1">
+                              <div className="flex justify-between text-[10px]">
+                                <span className="text-[#8A8885]">Avg Form</span>
+                                <span className="text-[#E8E6E3] font-mono">{strokeSummary?.average_form_score?.toFixed(1)}</span>
+                              </div>
+                              <div className="flex justify-between text-[10px]">
+                                <span className="text-[#8A8885]">Best Form</span>
+                                <span className="text-[#9B7B5B] font-mono">{strokeSummary?.best_form_score?.toFixed(1)}</span>
+                              </div>
+                              <div className="flex justify-between text-[10px]">
+                                <span className="text-[#8A8885]">Consistency</span>
+                                <span className="text-[#E8E6E3] font-mono">{strokeSummary?.consistency_score?.toFixed(1)}</span>
+                              </div>
+                            </div>
+
+                            {/* Stroke timeline — each stroke as a mini pill */}
+                            <div>
+                              <p className="text-[10px] text-[#6A6865] uppercase tracking-wider mb-1.5">Stroke Timeline</p>
+                              <div className="flex flex-wrap gap-1">
+                                {strokeSummary?.strokes.map((s, i) => {
+                                  const isActive = activeStroke?.id === s.id;
+                                  const color = s.stroke_type === "forehand" ? "#9B7B5B"
+                                    : s.stroke_type === "backhand" ? "#5B9B7B"
+                                    : "#8A8885";
                                   return (
                                     <button
                                       key={s.id}
                                       onClick={() => {
-                                        setSelectedStroke(isActive ? null : s);
-                                        if (!isActive && videoRef.current) {
-                                          videoRef.current.currentTime = s.peak_frame / fps;
-                                        }
+                                        if (videoRef.current) videoRef.current.currentTime = s.peak_frame / fps;
                                       }}
                                       className={cn(
-                                        "w-full flex items-center justify-between px-2 py-1.5 rounded-lg text-left transition-colors",
-                                        isActive ? "bg-border/50" : "hover:bg-background"
+                                        "px-1.5 py-0.5 rounded text-[9px] font-medium transition-all cursor-pointer",
+                                        isActive ? "ring-1 scale-110" : "opacity-70 hover:opacity-100"
                                       )}
+                                      style={{
+                                        backgroundColor: `${color}20`,
+                                        color,
+                                        ...(isActive ? { ringColor: color } : {}),
+                                      }}
+                                      title={`${s.stroke_type} — Frame ${s.peak_frame} — Form ${s.form_score.toFixed(0)}`}
                                     >
-                                      <div className="flex items-center gap-2">
-                                        <span
-                                          className="text-[9px] font-semibold px-1.5 py-0.5 rounded-full"
-                                          style={{ background: `${typeColor}20`, color: typeColor }}
-                                        >
-                                          {s.stroke_type === "forehand" ? "FH" : s.stroke_type === "backhand" ? "BH" : "SV"}
-                                        </span>
-                                        <span className="text-[10px] text-muted-foreground font-mono">#{i + 1}</span>
-                                      </div>
-                                      <span className="text-[10px] font-mono" style={{ color: typeColor }}>
-                                        {s.form_score.toFixed(0)}
-                                      </span>
+                                      {s.stroke_type === "forehand" ? "FH" : s.stroke_type === "backhand" ? "BH" : "?"}
                                     </button>
                                   );
                                 })}
+                              </div>
+                            </div>
+
+                            {/* All Insights throughout the video */}
+                            {videoTips.length > 0 && (
+                              <div>
+                                <p className="text-[10px] text-[#6A6865] uppercase tracking-wider mb-1.5">
+                                  Insights ({videoTips.filter(t => !t.id.includes("follow") && !t.id.includes("summary")).length})
+                                </p>
+                                <div className="space-y-1 max-h-[200px] overflow-y-auto pr-1">
+                                  {videoTips
+                                    .filter(t => !t.id.includes("follow") && !t.id.includes("summary"))
+                                    .map((tip) => {
+                                      const isActive = activeTip?.id === tip.id;
+                                      const isPast = currentTime > tip.timestamp + tip.duration;
+                                      return (
+                                        <button
+                                          key={tip.id}
+                                          onClick={() => {
+                                            if (videoRef.current) {
+                                              videoRef.current.currentTime = tip.timestamp;
+                                            }
+                                          }}
+                                          className={cn(
+                                            "w-full text-left p-2 rounded-lg transition-all",
+                                            isActive
+                                              ? "bg-[#9B7B5B]/15 ring-1 ring-[#9B7B5B]/40"
+                                              : isPast
+                                                ? "bg-[#2D2C2E]/50 hover:bg-[#2D2C2E]"
+                                                : "bg-[#2D2C2E]/30 hover:bg-[#2D2C2E]"
+                                          )}
+                                        >
+                                          <div className="flex items-center gap-2">
+                                            <span className={cn(
+                                              "text-[10px] font-mono shrink-0",
+                                              isActive ? "text-[#9B7B5B]" : "text-[#6A6865]"
+                                            )}>
+                                              {fmtTime(tip.timestamp)}
+                                            </span>
+                                            <span className={cn(
+                                              "text-[11px] truncate",
+                                              isActive ? "text-[#E8E6E3]" : isPast ? "text-[#8A8885]" : "text-[#E8E6E3]"
+                                            )}>
+                                              {tip.title}
+                                            </span>
+                                          </div>
+                                          {tip.message && (
+                                            <p className={cn(
+                                              "text-[10px] mt-1 line-clamp-2",
+                                              isActive ? "text-[#8A8885]" : "text-[#6A6865]"
+                                            )}>
+                                              {tip.message}
+                                            </p>
+                                          )}
+                                        </button>
+                                      );
+                                    })}
+                                </div>
                               </div>
                             )}
                           </div>
                         ) : (
                           <div className="text-center py-3">
-                            <p className="text-[10px] text-muted-foreground mb-2">Detect forehand & backhand strokes</p>
+                            <p className="text-[10px] text-[#6A6865] mb-2">Detect forehand & backhand strokes</p>
                             <button
                               onClick={() => strokeMutation.mutate()}
                               disabled={strokeMutation.isPending}
-                              className="text-xs px-3 py-1.5 rounded-lg bg-primary text-primary-foreground hover:bg-primary/90 transition-colors disabled:opacity-50"
+                              className="text-xs px-3 py-1.5 rounded-lg bg-[#9B7B5B] text-[#1E1D1F] hover:bg-[#8A6B4B] transition-colors disabled:opacity-50"
                             >
                               {strokeMutation.isPending ? (
                                 <span className="flex items-center gap-1.5">
@@ -1062,10 +1416,150 @@ export default function GameViewerPage() {
                             </button>
                           </div>
                         )}
+                      </>
+                    )}
+
+                    {/* ── Divider ── */}
+                    {hasPose && !isPoseProcessing && detectedPersons.length > 0 && (
+                      <div className="border-t border-[#363436]/30 pt-2 mt-1">
+                        <p className="text-[10px] text-[#6A6865] uppercase tracking-wider mb-1.5">Pose Estimation</p>
                       </div>
                     )}
-                  </CardBody>
-                </Card>
+
+                    {/* ── Processing / Error / Empty states ── */}
+                    {isPoseProcessing ? (
+                      <div className="text-center py-6">
+                        <Loader2 className="w-6 h-6 text-[#9B7B5B] mx-auto mb-3 animate-spin" />
+                        <p className="text-xs text-[#E8E6E3] mb-1">Pose estimation running...</p>
+                        <p className="text-[10px] text-[#6A6865]">Analyzing player movements frame by frame.</p>
+                        <p className="text-[10px] text-[#6A6865] mt-1">This may take a minute for longer videos.</p>
+                        {session?.selected_player && (
+                          <p className="text-[10px] text-[#9B7B5B] mt-2">Tracking Player {session.selected_player.player_idx + 1}</p>
+                        )}
+                      </div>
+                    ) : session?.status === "failed" && !hasPose ? (
+                      <div className="text-center py-6">
+                        <Activity className="w-6 h-6 text-[#C45C5C] mx-auto mb-3" />
+                        <p className="text-xs text-[#C45C5C] mb-1">Pose analysis failed</p>
+                        <p className="text-[10px] text-[#6A6865] mb-3">Something went wrong during processing.</p>
+                        <button
+                          onClick={() => setShowPlayerSelection(true)}
+                          className="text-[10px] text-[#9B7B5B] hover:text-[#B8956D] transition-colors underline"
+                        >
+                          Retry with player selection
+                        </button>
+                      </div>
+                    ) : detectedPersons.length === 0 && !isDetectingPose && !hasPose ? (
+                      <div className="text-center py-6">
+                        <Activity className="w-5 h-5 text-[#363436] mx-auto mb-2" />
+                        <p className="text-xs text-[#6A6865] mb-3">No pose data yet</p>
+                        <button
+                          onClick={() => setShowPlayerSelection(true)}
+                          className="text-[10px] text-[#9B7B5B] hover:text-[#B8956D] transition-colors underline"
+                        >
+                          Run pose estimation
+                        </button>
+                      </div>
+                    ) : null}
+
+                    {/* ── Per-person pose metrics ── */}
+                    {!isPoseProcessing && detectedPersons.map((person) => {
+                      const isSelected = person.id === selectedPersonId;
+                      const color = ["#9B7B5B", "#5B9B7B", "#7B5B9B", "#C8B464"][(person.id - 1) % 4];
+                      return (
+                        <button
+                          key={person.id}
+                          onClick={() => setSelectedPersonId(isSelected ? null : person.id)}
+                          className={`w-full p-2.5 rounded-lg text-left transition-colors ${
+                            isSelected ? "bg-[#363436]/60 ring-1" : "bg-[#1E1D1F] hover:bg-[#363436]/30"
+                          }`}
+                          style={isSelected ? { borderColor: color, borderWidth: 1 } : undefined}
+                        >
+                          <div className="flex items-center gap-2 mb-2">
+                            <div className="w-3 h-3 rounded-full" style={{ backgroundColor: color }} />
+                            <span className="text-xs font-medium text-[#E8E6E3]">Player {person.id}</span>
+                            <span className="text-[10px] text-[#6A6865] ml-auto">{(person.confidence * 100).toFixed(0)}%</span>
+                          </div>
+                          {isSelected && (
+                            <div className="space-y-3 mt-2">
+                              {/* Overall Detection Quality */}
+                              <div>
+                                <div className="flex items-center justify-between mb-1">
+                                  <p className="text-[10px] text-[#6A6865] uppercase tracking-wider">Detection Quality</p>
+                                  <span className="text-[10px] font-medium text-[#E8E6E3]">{(person.confidence * 100).toFixed(0)}%</span>
+                                </div>
+                                <div className="h-1.5 bg-[#363436] rounded-full overflow-hidden">
+                                  <div 
+                                    className="h-full rounded-full transition-all"
+                                    style={{ 
+                                      width: `${person.confidence * 100}%`,
+                                      backgroundColor: color,
+                                    }}
+                                  />
+                                </div>
+                              </div>
+
+                              {/* Keypoint Confidence Bars */}
+                              <div>
+                                <p className="text-[10px] text-[#6A6865] uppercase tracking-wider mb-1.5">Keypoint Confidence</p>
+                                <div className="space-y-1">
+                                  {person.keypoints
+                                    .filter((k) => k.conf > 0.3)
+                                    .sort((a, b) => b.conf - a.conf)
+                                    .slice(0, 8)
+                                    .map((kp) => {
+                                      const conf = kp.conf * 100;
+                                      const barColor = conf >= 90 ? '#5B9B7B' : conf >= 70 ? color : '#8A8885';
+                                      return (
+                                        <div key={kp.name}>
+                                          <div className="flex items-center justify-between mb-0.5">
+                                            <span className="text-[9px] text-[#8A8885] capitalize truncate">
+                                              {kp.name.replace(/_/g, " ")}
+                                            </span>
+                                            <span className="text-[9px] text-[#E8E6E3] font-mono ml-2">
+                                              {conf.toFixed(0)}%
+                                            </span>
+                                          </div>
+                                          <div className="h-1 bg-[#363436] rounded-full overflow-hidden">
+                                            <div 
+                                              className="h-full rounded-full transition-all"
+                                              style={{ 
+                                                width: `${conf}%`,
+                                                backgroundColor: barColor,
+                                              }}
+                                            />
+                                          </div>
+                                        </div>
+                                      );
+                                    })}
+                                </div>
+                              </div>
+
+                              {/* Body Dimensions */}
+                              <div className="pt-2 border-t border-[#363436]/30">
+                                <p className="text-[10px] text-[#6A6865] uppercase tracking-wider mb-1.5">Body Metrics</p>
+                                <div className="grid grid-cols-2 gap-2">
+                                  <div className="bg-[#1E1D1F] rounded-lg p-2">
+                                    <p className="text-[9px] text-[#6A6865] mb-0.5">Width</p>
+                                    <p className="text-xs font-medium text-[#E8E6E3]">
+                                      {(person.bbox[2] - person.bbox[0]).toFixed(0)}px
+                                    </p>
+                                  </div>
+                                  <div className="bg-[#1E1D1F] rounded-lg p-2">
+                                    <p className="text-[9px] text-[#6A6865] mb-0.5">Height</p>
+                                    <p className="text-xs font-medium text-[#E8E6E3]">
+                                      {(person.bbox[3] - person.bbox[1]).toFixed(0)}px
+                                    </p>
+                                  </div>
+                                </div>
+                              </div>
+                            </div>
+                          )}
+                        </button>
+                      );
+                    })}
+                  </div>
+                </div>
               )}
 
               {/* Court 3D view — side panel synced to video */}
@@ -1075,109 +1569,152 @@ export default function GameViewerPage() {
                 </div>
               )}
 
+              {/* Analytics Dashboard — full-width panel */}
+              {activeTab === "analytics" && !aiOpen && (
+                <div className="bg-background/60 dark:bg-content1/60 rounded-xl overflow-y-auto h-full">
+                  <AnalyticsDashboard sessionId={gameId} />
+                </div>
+              )}
+
               {/* AI Chat — inline right panel */}
               {aiOpen && (
-                <Card isBlurred className="bg-background/60 dark:bg-content1/60 flex flex-col h-full overflow-hidden rounded-xl">
-                  {/* Minimal header — just close button */}
-                  <div className="flex items-center justify-between px-4 py-2.5">
-                    <span className="text-xs text-muted-foreground">Ask anything about this game</span>
-                    <button onClick={() => setAiOpen(false)} className="w-6 h-6 rounded-full hover:bg-muted flex items-center justify-center text-muted-foreground hover:text-foreground transition-colors">
-                      <X className="w-3.5 h-3.5" />
-                    </button>
-                  </div>
-                  <div className="h-px bg-border/30 mx-3" />
+                <div className="h-full p-1">
+                  <div className="relative h-full rounded-2xl border border-foreground/5 shadow-[0_4px_16px_rgba(0,0,0,0.12)] flex flex-col overflow-hidden">
+                    <div className="absolute inset-0 pointer-events-none">
+                      <div className="absolute inset-0 bg-[url('/background.jpeg')] bg-cover bg-center opacity-20" />
+                      <div className="absolute inset-0 bg-content1/75 backdrop-blur-xl" />
+                    </div>
 
-                  {/* Messages */}
-                  <div className="flex-1 overflow-y-auto p-3 space-y-3">
-                    {chatMessages.map((msg, i) => (
-                      <div key={i} className={cn("flex", msg.role === "user" ? "justify-end" : "justify-start")}>
-                        {msg.role === "tool" ? (
-                          <div className="flex items-center gap-2 px-3 py-1.5 rounded-lg bg-[#9B7B5B]/8 text-[10px] text-[#9B7B5B] w-full">
-                            <Loader2 className="w-3 h-3 animate-spin shrink-0" />
-                            <span className="font-mono truncate">{msg.toolName}</span>
-                          </div>
-                        ) : (
-                          <div className={cn("max-w-[90%] rounded-2xl px-3 py-2 text-xs leading-relaxed",
-                            msg.role === "user" ? "bg-primary text-primary-foreground rounded-br-md" : "bg-card text-foreground rounded-bl-md")}>
-                            {msg.content.split("\n").map((line, j) => (
-                              <p key={j} className={j > 0 ? "mt-1" : ""}>
-                                {line.split("**").map((part, k) => k % 2 === 1 ? <strong key={k} className={msg.role === "user" ? "font-semibold" : "text-[#9B7B5B] font-medium"}>{part}</strong> : part)}
-                              </p>
-                            ))}
-                          </div>
-                        )}
+                    <div className="relative z-10 flex items-center justify-between px-4 py-3 border-b border-foreground/10">
+                      <div>
+                        <p className="text-sm font-semibold text-foreground/90">AI Analyst</p>
+                        <p className="text-[10px] text-foreground/50">Ask anything about this game</p>
                       </div>
-                    ))}
-                    {isAiThinking && (
-                      <div className="flex justify-start">
-                        <div className="bg-card rounded-2xl rounded-bl-md px-4 py-3 flex items-center gap-2">
-                          <div className="w-1.5 h-1.5 rounded-full bg-[#9B7B5B] animate-pulse" />
-                          <div className="w-1.5 h-1.5 rounded-full bg-[#9B7B5B] animate-pulse" style={{ animationDelay: "0.15s" }} />
-                          <div className="w-1.5 h-1.5 rounded-full bg-[#9B7B5B] animate-pulse" style={{ animationDelay: "0.3s" }} />
-                        </div>
-                      </div>
-                    )}
-                    <div ref={chatEndRef} />
-                  </div>
-
-                  <div className="h-px bg-border/30 mx-3" />
-
-                  {/* Input */}
-                  <div className="p-3">
-                    <div className="flex items-center gap-2 bg-background/50 rounded-xl px-3 py-1 focus-within:ring-1 focus-within:ring-primary/20 transition-all">
-                      <input type="text" value={chatInput} onChange={(e) => setChatInput(e.target.value)}
-                        onKeyDown={(e) => { if (e.key === "Enter") handleChatSend(); }}
-                        placeholder="Ask about the game..."
-                        className="flex-1 py-2 bg-transparent text-xs text-foreground placeholder-muted-foreground focus:outline-none" />
-                      <button onClick={handleChatSend} disabled={!chatInput.trim() || isAiThinking}
-                        className="w-7 h-7 rounded-full bg-primary flex items-center justify-center text-primary-foreground disabled:opacity-20 hover:bg-primary/90 transition-all shrink-0">
-                        <Send className="w-3 h-3" />
+                      <button
+                        onClick={() => setAiOpen(false)}
+                        className="w-7 h-7 rounded-full hover:bg-content2 flex items-center justify-center text-foreground/50 hover:text-foreground transition-colors"
+                        aria-label="Close AI analyst"
+                      >
+                        <X className="w-3.5 h-3.5" />
                       </button>
                     </div>
+
+                    {/* Messages */}
+                    <div className="relative z-10 flex-1 overflow-y-auto p-3 space-y-3">
+                      {chatMessages.map((msg, i) => (
+                        <div key={i} className={cn("flex", msg.role === "user" ? "justify-end" : "justify-start")}>
+                          {msg.role === "tool" ? (
+                            <div className="flex items-center gap-2 px-3 py-1.5 rounded-lg bg-primary/10 text-[10px] text-primary w-full">
+                              <Loader2 className="w-3 h-3 animate-spin shrink-0" />
+                              <span className="font-mono truncate">{msg.toolName}</span>
+                            </div>
+                          ) : (
+                            <div
+                              className={cn(
+                                "max-w-[90%] rounded-2xl px-3 py-2 text-xs leading-relaxed",
+                                msg.role === "user"
+                                  ? "bg-primary text-primary-foreground rounded-br-md"
+                                  : "bg-content2 text-foreground rounded-bl-md"
+                              )}
+                            >
+                              {msg.content.split("\n").map((line, j) => (
+                                <p key={j} className={j > 0 ? "mt-1" : ""}>
+                                  {line.split("**").map((part, k) =>
+                                    k % 2 === 1 ? (
+                                      <strong
+                                        key={k}
+                                        className={msg.role === "user" ? "font-semibold" : "text-primary font-medium"}
+                                      >
+                                        {part}
+                                      </strong>
+                                    ) : (
+                                      part
+                                    )
+                                  )}
+                                </p>
+                              ))}
+                            </div>
+                          )}
+                        </div>
+                      ))}
+                      {isAiThinking && (
+                        <div className="flex justify-start">
+                          <div className="bg-content2 rounded-2xl rounded-bl-md px-4 py-3 flex items-center gap-2">
+                            <div className="w-1.5 h-1.5 rounded-full bg-primary animate-pulse" />
+                            <div className="w-1.5 h-1.5 rounded-full bg-primary animate-pulse" style={{ animationDelay: "0.15s" }} />
+                            <div className="w-1.5 h-1.5 rounded-full bg-primary animate-pulse" style={{ animationDelay: "0.3s" }} />
+                          </div>
+                        </div>
+                      )}
+                      <div ref={chatEndRef} />
+                    </div>
+
+                    {/* Input */}
+                    <div className="relative z-10 border-t border-foreground/10 p-3">
+                      <div className="flex items-center gap-2 bg-content2/70 rounded-xl px-3 py-1 focus-within:ring-1 focus-within:ring-primary/30 transition-all">
+                        <input
+                          type="text"
+                          value={chatInput}
+                          onChange={(e) => setChatInput(e.target.value)}
+                          onKeyDown={(e) => {
+                            if (e.key === "Enter") handleChatSend();
+                          }}
+                          placeholder="Ask about the game..."
+                          className="flex-1 py-2 bg-transparent text-xs text-foreground placeholder:text-foreground/40 focus:outline-none"
+                        />
+                        <button
+                          onClick={handleChatSend}
+                          disabled={!chatInput.trim() || isAiThinking}
+                          className="w-7 h-7 rounded-full bg-primary flex items-center justify-center text-primary-foreground disabled:opacity-20 hover:opacity-90 transition-all shrink-0"
+                        >
+                          <Send className="w-3 h-3" />
+                        </button>
+                      </div>
+                    </div>
                   </div>
-                </Card>
+                </div>
               )}
+              </div>
               </div>
             </div>
           )}
         </div>
 
         {(isTracking || isDetecting) && (
-          <Card isBlurred className="bg-background/60 dark:bg-content1/60 p-3 flex-row items-center gap-3 mt-2 shrink-0">
-            <Loader2 className="w-4 h-4 text-primary animate-spin" />
-            <span className="text-xs text-muted-foreground">{isDetecting ? "Detecting balls with YOLO..." : "Tracking ball with TrackNet..."}</span>
-          </Card>
+          <div className="glass-context p-3 flex items-center gap-3 mt-2 shrink-0">
+            <Loader2 className="w-4 h-4 text-[#9B7B5B] animate-spin" />
+            <span className="text-xs text-[#8A8885]">{isDetecting ? "Detecting balls with YOLO..." : "Tracking ball with TrackNet..."}</span>
+          </div>
         )}
       </div>
-
       {/* YOLO Detection result modal */}
-      {detectionResult && (
+      {detection && (
         <div className="fixed inset-0 bg-black/60 backdrop-blur-sm flex items-center justify-center z-50 p-4" onClick={() => setDetectionResult(null)}>
-          <div className="bg-card rounded-2xl max-w-lg w-full overflow-hidden" onClick={(e) => e.stopPropagation()}>
+          <div className="bg-[#282729] rounded-2xl max-w-lg w-full overflow-hidden" onClick={(e) => e.stopPropagation()}>
             <div className="p-4">
-              <p className="text-sm font-medium text-foreground mb-1">
-                {detectionResult.detections.length > 0
-                  ? `Detected ${detectionResult.detections.length} ball${detectionResult.detections.length > 1 ? "s" : ""}`
+              <p className="text-sm font-medium text-[#E8E6E3] mb-1">
+                {detection.detections.length > 0
+                  ? `Detected ${detection.detections.length} ball${detection.detections.length > 1 ? "s" : ""}`
                   : "No balls detected"}
               </p>
-              <p className="text-[10px] text-muted-foreground">
-                {detectionResult.detections.length > 0
+              <p className="text-[10px] text-[#6A6865]">
+                {detection.detections.length > 0
                   ? "Click a detection to track, or click manually on the video"
                   : "Try a different frame, or click manually on the ball in the video"}
               </p>
             </div>
             <div className="px-4">
-              <img src={detectionResult.preview_image} alt="YOLO detections" className="w-full rounded-lg" />
+              <img src={detection.preview_image} alt="YOLO detections" className="w-full rounded-lg" />
             </div>
-            {detectionResult.detections.length > 0 && (
+            {detection.detections.length > 0 && (
               <div className="p-4 space-y-2">
-                {detectionResult.detections.map((det, i) => (
+                {detection.detections.map((det, i) => (
                   <button
                     key={i}
                     onClick={() => handleConfirmDetection(det)}
-                    className="w-full flex items-center justify-between p-2.5 rounded-lg bg-background hover:bg-border transition-colors text-left"
+                    className="w-full flex items-center justify-between p-2.5 rounded-lg bg-[#1E1D1F] hover:bg-[#363436] transition-colors text-left"
                   >
-                    <span className="text-xs text-foreground">
+                    <span className="text-xs text-[#E8E6E3]">
                       {det.class_name} — {det.size[0]}x{det.size[1]}px
                     </span>
                     <span className="text-[10px] text-[#9B7B5B] font-medium">{(det.confidence * 100).toFixed(0)}%</span>
@@ -1186,10 +1723,10 @@ export default function GameViewerPage() {
               </div>
             )}
             <div className="p-4 flex gap-3">
-              <button onClick={() => setDetectionResult(null)} className="flex-1 py-2 rounded-lg text-xs text-muted-foreground hover:bg-muted transition-colors">
+              <button onClick={() => setDetectionResult(null)} className="flex-1 py-2 rounded-lg text-xs text-[#8A8885] hover:bg-[#2D2C2E] transition-colors">
                 Cancel
               </button>
-              <button onClick={() => { setDetectionResult(null); setTrackingMode(true); }} className="flex-1 py-2 rounded-lg text-xs text-foreground border border-border hover:border-primary transition-colors">
+              <button onClick={() => { setDetectionResult(null); setTrackingMode(true); }} className="flex-1 py-2 rounded-lg text-xs text-[#E8E6E3] border border-[#363436] hover:border-[#9B7B5B] transition-colors">
                 Click Manually
               </button>
             </div>
@@ -1197,7 +1734,6 @@ export default function GameViewerPage() {
         </div>
       )}
 
-    
     </>
   );
 }
