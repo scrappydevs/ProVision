@@ -686,11 +686,11 @@ export default function PlayerProfilePage() {
                       );
                     }
                   }}
-                  className="group cursor-pointer flex gap-5 items-start p-4 rounded-2xl transition-all relative overflow-hidden border border-foreground/10 hover:border-foreground/20"
+                  className="group cursor-pointer flex gap-5 items-start p-4 rounded-2xl transition-all relative overflow-hidden border border-foreground/20 hover:border-primary/40 shadow-lg"
                 >
                   {/* Liquid glass background */}
-                  <div className="absolute inset-0 bg-gradient-to-br from-content1/95 via-content1/90 to-content1/85 group-hover:from-content1 group-hover:via-content1/95 group-hover:to-content1/90 transition-all duration-300"></div>
-                  <div className="absolute inset-0 opacity-60 group-hover:opacity-80 transition-opacity duration-300" style={{ background: 'radial-gradient(ellipse at top left, rgba(155,123,91,0.08), transparent 50%), radial-gradient(ellipse at bottom right, rgba(91,155,123,0.05), transparent 50%)' }}></div>
+                  <div className="absolute inset-0 bg-gradient-to-br from-content1 via-content1 to-content1/95 group-hover:from-content1 group-hover:via-content1 group-hover:to-content1 transition-all duration-300"></div>
+                  <div className="absolute inset-0 opacity-80 group-hover:opacity-100 transition-opacity duration-300" style={{ background: 'radial-gradient(ellipse at top left, rgba(155,123,91,0.12), transparent 50%), radial-gradient(ellipse at bottom right, rgba(91,155,123,0.08), transparent 50%)' }}></div>
                   
                   {rec.video_path && (
                     <div className="relative w-36 h-24 rounded-xl overflow-hidden shrink-0 ring-1 ring-white/10 z-10">
@@ -698,29 +698,29 @@ export default function PlayerProfilePage() {
                     </div>
                   )}
                   <div className="flex-1 min-w-0 pt-1 relative z-10">
-                    <p className="text-base font-semibold text-foreground/95 truncate mb-1.5">{rec.title}</p>
+                    <p className="text-base font-semibold text-foreground truncate mb-1.5">{rec.title}</p>
                     <div className="flex items-center gap-2.5 mb-2">
-                      <span className="text-[10px] uppercase tracking-[0.2em] text-primary font-semibold px-2 py-0.5 rounded-md bg-primary/15">{rec.type}</span>
-                      <span className="w-1 h-1 rounded-full bg-foreground/20" />
-                      <span className="text-xs text-foreground/40">
+                      <span className="text-[10px] uppercase tracking-[0.2em] text-primary font-semibold px-2 py-0.5 rounded-md bg-primary/20">{rec.type}</span>
+                      <span className="w-1 h-1 rounded-full bg-foreground/30" />
+                      <span className="text-xs text-foreground/60">
                         {new Date(rec.created_at).toLocaleDateString("en-US", { month: "short", day: "numeric" })}
                       </span>
                     </div>
                     {rec.session_id ? (
                       <div className="flex items-center gap-1.5">
-                        <CheckCircle className="w-3.5 h-3.5 text-success/80" />
-                        <span className="text-xs text-success/80 font-medium">Ready to view</span>
+                        <CheckCircle className="w-3.5 h-3.5 text-success" />
+                        <span className="text-xs text-success font-medium">Ready to view</span>
                       </div>
                     ) : analyzingRecordingId === rec.id ? (
                       <div className="flex items-center gap-1.5">
                         <Loader2 className="w-3.5 h-3.5 text-primary animate-spin" />
-                        <span className="text-xs text-primary/80 font-medium">Analyzing...</span>
+                        <span className="text-xs text-primary font-medium">Analyzing...</span>
                       </div>
                     ) : (
-                      <span className="text-xs text-foreground/30 group-hover:text-primary/70 font-medium transition-colors">Click to analyze</span>
+                      <span className="text-xs text-foreground/50 group-hover:text-primary font-medium transition-colors">Click to analyze</span>
                     )}
                   </div>
-                  <ChevronRight className="w-5 h-5 text-foreground/20 group-hover:text-primary/60 shrink-0 transition-all group-hover:translate-x-1 relative z-10" />
+                  <ChevronRight className="w-5 h-5 text-foreground/30 group-hover:text-primary shrink-0 transition-all group-hover:translate-x-1 relative z-10" />
                 </div>
               ))
             ) : (
