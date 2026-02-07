@@ -509,11 +509,22 @@ class PoseProcessor:
         OPPONENT_COLOR = (91, 123, 205)   # Orange
         BORDER_COLOR = (232, 230, 227)    # Light
 
-        fourcc = cv2.VideoWriter_fourcc(*'avc1')
-        out = cv2.VideoWriter(output_path, fourcc, fps, (width, height))
+        # Try multiple codecs — avc1 (H.264) isn't available on all platforms (e.g. Render)
+        out = None
+        for codec in ['avc1', 'mp4v', 'XVID', 'MJPG']:
+            try:
+                fourcc = cv2.VideoWriter_fourcc(*codec)
+                out = cv2.VideoWriter(output_path, fourcc, fps, (width, height))
+                if out.isOpened():
+                    print(f"[PoseProcessor] Using video codec: {codec}")
+                    break
+                out.release()
+                out = None
+            except Exception:
+                out = None
 
-        if not out.isOpened():
-            raise ValueError(f"Failed to create video writer: {output_path}")
+        if out is None or not out.isOpened():
+            raise ValueError(f"Failed to create video writer: {output_path} (no working codec found)")
 
         frame_idx = 0
         last_player_kpts = None
