@@ -885,6 +885,9 @@ export interface PlayerInsights {
 export const getPlayerInsights = (playerId: string) =>
   api.get<PlayerInsights>(`/api/players/insights/${playerId}`);
 
+export const generatePlayerDescription = (playerId: string) =>
+  api.post<{ player_id: string; description: string; generated_at: string }>(`/api/players/generate-description/${playerId}`);
+
 // Video types
 export interface Video {
   id: string;

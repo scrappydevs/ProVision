@@ -253,3 +253,14 @@ export function usePlayerInsights(playerId: string) {
     staleTime: 10 * 60 * 1000, // 10 minutes
   });
 }
+
+export function useGenerateDescription() {
+  const queryClient = useQueryClient();
+  
+  return useMutation({
+    mutationFn: (playerId: string) => generatePlayerDescription(playerId),
+    onSuccess: (data) => {
+      queryClient.invalidateQueries({ queryKey: playerKeys.detail(data.data.player_id) });
+    },
+  });
+}
