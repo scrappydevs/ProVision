@@ -1,5 +1,5 @@
 """
-Pose estimation service using YOLOv11.
+Pose estimation service using a pose model.
 Extracts body keypoints and calculates joint angles from video.
 """
 
@@ -32,10 +32,10 @@ class PoseFrame:
 
 class PoseProcessor:
     """
-    Processes video to extract pose information using YOLOv11.
+    Processes video to extract pose information using a pose model.
     """
 
-    # YOLO pose keypoints (COCO format - 17 keypoints)
+    # Pose keypoints (COCO format - 17 keypoints)
     LANDMARK_NAMES = [
         'nose',              # 0
         'left_eye',          # 1
@@ -56,7 +56,7 @@ class PoseProcessor:
         'right_ankle'        # 16
     ]
 
-    # YOLO pose skeleton connections
+    # Pose skeleton connections
     SKELETON = [
         # Face
         (0, 1), (0, 2),  # nose to eyes
@@ -77,10 +77,10 @@ class PoseProcessor:
 
     def __init__(self, model_name: str = 'yolo11n-pose.pt', conf: float = 0.3):
         """
-        Initialize the pose processor with YOLOv11.
+        Initialize the pose processor with a pose model.
 
         Args:
-            model_name: YOLO model to use (yolo11n-pose.pt, yolo11s-pose.pt, etc.)
+            model_name: Pose model to use (e.g., yolo11n-pose.pt, yolo11s-pose.pt, etc.)
             conf: Confidence threshold for detections
         """
         print(f"[PoseProcessor] Loading YOLOv11 model: {model_name}")
@@ -247,7 +247,7 @@ class PoseProcessor:
         Find the player closest to the last tracked position.
 
         Args:
-            results: YOLO detection results
+            results: Pose detection results
             last_center: Last known center position {"x": float, "y": float}
 
         Returns:
@@ -323,7 +323,7 @@ class PoseProcessor:
 
             timestamp = frame_number / fps
 
-            # Run YOLO inference
+            # Run pose inference
             results = self.model(frame, conf=self.conf, verbose=False)
 
             # Process detected person
@@ -390,7 +390,7 @@ class PoseProcessor:
                                      sample_rate: int = 1,
                                      target_player: Optional[Dict] = None) -> str:
         """
-        Generate a video with pose skeleton overlay using YOLOv11.
+        Generate a video with pose skeleton overlay using the pose model.
 
         Args:
             video_path: Path to input video
@@ -439,7 +439,7 @@ class PoseProcessor:
 
                 # Process every sample_rate frame
                 if frame_idx % sample_rate == 0:
-                    # Run YOLO inference
+                    # Run pose inference
                     results = self.model(frame, conf=self.conf, verbose=False)
 
                     # Get keypoints from tracked person
@@ -507,7 +507,7 @@ class PoseProcessor:
         return output_path
 
     def _extract_keypoints(self, kpts: np.ndarray) -> Dict[str, Keypoint]:
-        """Extract keypoints from YOLO output."""
+        """Extract keypoints from pose output."""
         keypoints = {}
 
         for idx, name in enumerate(self.LANDMARK_NAMES):
@@ -515,7 +515,7 @@ class PoseProcessor:
             keypoints[name] = Keypoint(
                 x=float(kpt[0]),
                 y=float(kpt[1]),
-                z=0.0,  # YOLO doesn't provide z-coordinate
+                z=0.0,  # Model doesn't provide z-coordinate
                 visibility=float(kpt[2])  # confidence score
             )
 
@@ -665,4 +665,4 @@ class PoseProcessor:
 
     def __del__(self):
         """Cleanup resources."""
-        pass  # YOLO handles cleanup automatically
+        pass  # Model handles cleanup automatically

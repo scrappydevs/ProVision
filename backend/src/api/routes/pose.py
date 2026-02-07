@@ -9,18 +9,32 @@ from ..utils.video_utils import download_video_from_storage, extract_video_path_
 router = APIRouter()
 
 
-def _get_player_handedness(supabase, session_id: str) -> str:
-    """Look up the handedness of the player linked to a session via game_players."""
+def _get_player_settings(supabase, session_id: str, session_data: dict = None) -> dict:
+    """Look up handedness (from player) and camera_facing (from session)."""
+    settings = {"handedness": "right", "camera_facing": "auto"}
+
+    # camera_facing lives on the session
+    if session_data and session_data.get("camera_facing"):
+        settings["camera_facing"] = session_data["camera_facing"]
+    else:
+        try:
+            sess = supabase.table("sessions").select("camera_facing").eq("id", session_id).single().execute()
+            if sess.data and sess.data.get("camera_facing"):
+                settings["camera_facing"] = sess.data["camera_facing"]
+        except Exception:
+            pass
+
+    # handedness lives on the player
     try:
         gp_result = supabase.table("game_players").select("player_id").eq("game_id", session_id).limit(1).execute()
         if gp_result.data:
             player_id = gp_result.data[0]["player_id"]
             player_result = supabase.table("players").select("handedness").eq("id", player_id).single().execute()
             if player_result.data and player_result.data.get("handedness"):
-                return player_result.data["handedness"]
+                settings["handedness"] = player_result.data["handedness"]
     except Exception:
         pass
-    return "right"
+    return settings
 
 
 class Keypoint(BaseModel):
@@ -544,17 +558,21 @@ async def get_strokes(
     if not pose_result.data:
         return {"session_id": session_id, "strokes": [], "count": 0}
 
-    # Look up player handedness
-    handedness = _get_player_handedness(supabase, session_id)
+    # Look up player settings (handedness + camera facing)
+    player_settings = _get_player_settings(supabase, session_id)
 
     from ..services.stroke_classifier import classify_strokes
-    strokes = classify_strokes(pose_result.data, handedness=handedness)
+    strokes = classify_strokes(
+        pose_result.data,
+        handedness=player_settings["handedness"],
+        camera_facing=player_settings["camera_facing"],
+    )
 
     return {
         "session_id": session_id,
         "strokes": strokes,
         "count": len(strokes),
-        "handedness": handedness,
+        "handedness": player_settings["handedness"],
     }
 
 
@@ -585,13 +603,227 @@ async def get_match_analytics(
             "weakness_analysis": {"summary": "No pose data available"},
         }
 
-    # Look up player handedness
-    handedness = _get_player_handedness(supabase, session_id)
+    # Look up player settings (handedness + camera facing)
+    player_settings = _get_player_settings(supabase, session_id)
 
     from ..services.stroke_classifier import build_match_analytics
-    analytics = build_match_analytics(pose_result.data, handedness=handedness)
+    analytics = build_match_analytics(
+        pose_result.data,
+        handedness=player_settings["handedness"],
+        camera_facing=player_settings["camera_facing"],
+    )
     analytics["session_id"] = session_id
     analytics["status"] = session_result.data.get("status")
-    analytics["handedness"] = handedness
+    analytics["handedness"] = player_settings["handedness"]
 
     return analytics
+
+
+@router.get("/debug-frame/{session_id}")
+async def debug_frame(
+    session_id: str,
+    frame: int,
+    user_id: str = Depends(get_current_user_id),
+):
+    """
+    Diagnostic endpoint: compute all raw stroke-detection signals for a window
+    of frames around the given frame number. Used for tuning thresholds.
+    """
+    from ..services.stroke_classifier import (
+        _get_kp, _visible, _body_width, detect_camera_facing, _resolve_facing,
+        _normalize_angle_delta,
+    )
+
+    supabase = get_supabase()
+
+    session_result = supabase.table("sessions").select("*").eq("id", session_id).eq("user_id", user_id).single().execute()
+    if not session_result.data:
+        raise HTTPException(status_code=404, detail="Session not found")
+
+    player_settings = _get_player_settings(supabase, session_id, session_result.data)
+    handedness = player_settings["handedness"]
+    camera_facing_setting = player_settings["camera_facing"]
+
+    # For auto-detection, sample from the FULL video (not just the window)
+    # to avoid flip-flopping between "toward" and "away" on different windows
+    if camera_facing_setting == "auto":
+        full_sample = supabase.table("pose_analysis")\
+            .select("keypoints")\
+            .eq("session_id", session_id)\
+            .order("frame_number")\
+            .execute()
+        resolved_facing = detect_camera_facing(full_sample.data if full_sample.data else [])
+    else:
+        resolved_facing = camera_facing_setting
+
+    window = 5
+    pose_result = supabase.table("pose_analysis")\
+        .select("frame_number, timestamp, keypoints, joint_angles, body_metrics")\
+        .eq("session_id", session_id)\
+        .gte("frame_number", frame - window)\
+        .lte("frame_number", frame + window)\
+        .order("frame_number")\
+        .execute()
+
+    if not pose_result.data or len(pose_result.data) < 3:
+        return {
+            "session_id": session_id,
+            "frame": frame,
+            "error": "Not enough pose data around this frame",
+            "frames_found": len(pose_result.data) if pose_result.data else 0,
+        }
+
+    frames_data = pose_result.data
+
+    actual_hand = handedness
+    if resolved_facing == "away":
+        model_dom = "left" if actual_hand == "right" else "right"
+        model_off = "right" if actual_hand == "right" else "left"
+    else:
+        model_dom = actual_hand
+        model_off = "left" if actual_hand == "right" else "right"
+
+    debug_frames = []
+    for i in range(len(frames_data)):
+        curr = frames_data[i]
+        prev = frames_data[i - 1] if i >= 1 else None
+        prev2 = frames_data[i - 2] if i >= 2 else None
+
+        curr_angles = curr.get("joint_angles", {})
+        prev_angles = prev.get("joint_angles", {}) if prev else {}
+        prev2_angles = prev2.get("joint_angles", {}) if prev2 else {}
+
+        curr_metrics = curr.get("body_metrics", {})
+        prev_metrics = prev.get("body_metrics", {}) if prev else {}
+
+        bw = _body_width(curr)
+        nose = _get_kp(curr, "nose")
+        nose_vis = nose.get("visibility", 0) if nose else 0
+
+        dom_elbow = curr_angles.get(f"{model_dom}_elbow", 0)
+        off_elbow = curr_angles.get(f"{model_off}_elbow", 0)
+        dom_elbow_prev = prev_angles.get(f"{model_dom}_elbow", 0) if prev else 0
+        dom_elbow_prev2 = prev2_angles.get(f"{model_dom}_elbow", 0) if prev2 else 0
+
+        elbow_vel = abs(dom_elbow - dom_elbow_prev) if prev else 0
+        elbow_delta_2f = (dom_elbow - dom_elbow_prev2) if prev2 else 0
+
+        dom_shoulder = curr_angles.get(f"{model_dom}_shoulder", 0)
+        dom_shoulder_prev = prev_angles.get(f"{model_dom}_shoulder", 0) if prev else 0
+        shoulder_vel = abs(dom_shoulder - dom_shoulder_prev) if prev else 0
+
+        wrist = _get_kp(curr, f"{model_dom}_wrist")
+        prev_wrist = _get_kp(prev, f"{model_dom}_wrist") if prev else {}
+        wx = wrist.get("x", 0)
+        wy = wrist.get("y", 0)
+        prev_wx = prev_wrist.get("x", 0)
+        prev_wy = prev_wrist.get("y", 0)
+        dx_norm = abs(wx - prev_wx) / bw if prev else 0
+        dy_norm = abs(wy - prev_wy) / bw if prev else 0
+        wrist_speed = (dx_norm**2 + dy_norm**2) ** 0.5
+
+        shoulder_rot = curr_metrics.get("shoulder_rotation", 0)
+        prev_shoulder_rot = prev_metrics.get("shoulder_rotation", 0) if prev else 0
+        rot_delta = _normalize_angle_delta(shoulder_rot - prev_shoulder_rot) if prev else 0
+
+        hip_rot = curr_metrics.get("hip_rotation", 0)
+        prev_hip_rot = prev_metrics.get("hip_rotation", 0) if prev else 0
+        hip_delta = _normalize_angle_delta(hip_rot - prev_hip_rot) if prev else 0
+
+        ls = _get_kp(curr, "left_shoulder")
+        rs = _get_kp(curr, "right_shoulder")
+        mid_x = (ls.get("x", 0) + rs.get("x", 0)) / 2
+        dom_wx = wrist.get("x", 0) if _visible(wrist) else 0
+        wrist_relative = (dom_wx - mid_x) / bw if bw else 0
+
+        elbow_strong = elbow_vel > 8
+        shoulder_active = shoulder_vel > 4
+        wrist_fast = wrist_speed > 0.12
+        signal_count = sum([elbow_strong, shoulder_active, wrist_fast])
+
+        effective_rot = rot_delta if resolved_facing == "toward" else -rot_delta
+        effective_hip = hip_delta if resolved_facing == "toward" else -hip_delta
+        effective_wrist_rel = wrist_relative if resolved_facing == "toward" else -wrist_relative
+
+        fh_score = 0.0
+        bh_score = 0.0
+        if actual_hand == "right":
+            if effective_rot < -1: fh_score += min(abs(effective_rot) / 5, 1.0)
+            elif effective_rot > 1: bh_score += min(abs(effective_rot) / 5, 1.0)
+            if effective_wrist_rel > 0.1: fh_score += 0.5
+            elif effective_wrist_rel < -0.1: bh_score += 0.5
+            if effective_hip < -0.5: fh_score += 0.3
+            elif effective_hip > 0.5: bh_score += 0.3
+        else:
+            if effective_rot > 1: fh_score += min(abs(effective_rot) / 5, 1.0)
+            elif effective_rot < -1: bh_score += min(abs(effective_rot) / 5, 1.0)
+            if effective_wrist_rel < -0.1: fh_score += 0.5
+            elif effective_wrist_rel > 0.1: bh_score += 0.5
+            if effective_hip > 0.5: fh_score += 0.3
+            elif effective_hip < -0.5: bh_score += 0.3
+
+        would_classify = "forehand" if fh_score >= bh_score else "backhand"
+        would_trigger = signal_count >= 2 and elbow_strong and elbow_delta_2f >= -5
+
+        debug_frames.append({
+            "frame_number": curr.get("frame_number"),
+            "timestamp": round(curr.get("timestamp", 0), 4),
+            "dom_elbow_angle": round(dom_elbow, 1),
+            "off_elbow_angle": round(off_elbow, 1),
+            "elbow_velocity": round(elbow_vel, 2),
+            "elbow_delta_2f": round(elbow_delta_2f, 2),
+            "dom_shoulder_angle": round(dom_shoulder, 1),
+            "shoulder_velocity": round(shoulder_vel, 2),
+            "wrist_x": round(wx, 1),
+            "wrist_y": round(wy, 1),
+            "wrist_speed_norm": round(wrist_speed, 4),
+            "shoulder_rotation": round(shoulder_rot, 2),
+            "shoulder_rotation_delta": round(rot_delta, 2),
+            "hip_rotation": round(hip_rot, 2),
+            "hip_rotation_delta": round(hip_delta, 2),
+            "wrist_relative": round(wrist_relative, 4),
+            "body_width": round(bw, 1),
+            "nose_visibility": round(nose_vis, 3),
+            "signals": {
+                "elbow_strong": elbow_strong,
+                "shoulder_active": shoulder_active,
+                "wrist_fast": wrist_fast,
+                "count": signal_count,
+                "extension_ok": elbow_delta_2f >= -5,
+            },
+            "vote": {
+                "fh_score": round(fh_score, 2),
+                "bh_score": round(bh_score, 2),
+                "would_classify": would_classify,
+                "would_trigger": would_trigger,
+            },
+        })
+
+    nearby_strokes = []
+    try:
+        strokes_result = supabase.table("stroke_analytics")\
+            .select("stroke_type, peak_frame, form_score, start_frame, end_frame")\
+            .eq("session_id", session_id)\
+            .gte("peak_frame", frame - 10)\
+            .lte("peak_frame", frame + 10)\
+            .order("peak_frame")\
+            .execute()
+        if strokes_result.data:
+            nearby_strokes = strokes_result.data
+    except Exception:
+        pass
+
+    center_frame = next((f for f in frames_data if f.get("frame_number") == frame), frames_data[len(frames_data) // 2])
+
+    return {
+        "session_id": session_id,
+        "frame": frame,
+        "timestamp": round(center_frame.get("timestamp", 0), 4),
+        "handedness": handedness,
+        "camera_facing": camera_facing_setting,
+        "resolved_facing": resolved_facing,
+        "model_dominant_side": model_dom,
+        "model_off_side": model_off,
+        "detected_strokes_nearby": nearby_strokes,
+        "frames": debug_frames,
+    }
