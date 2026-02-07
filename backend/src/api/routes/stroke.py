@@ -20,6 +20,7 @@ class StrokeResponse(BaseModel):
     max_velocity: float
     form_score: float
     metrics: dict
+    confidence: float = 0.0
 
 
 class StrokeSummaryResponse(BaseModel):
@@ -101,7 +102,8 @@ def process_stroke_detection(session_id: str):
                 "duration": stroke.duration,
                 "max_velocity": stroke.max_velocity,
                 "form_score": stroke.form_score,
-                "metrics": stroke.metrics
+                "metrics": stroke.metrics,
+                "confidence": stroke.confidence
             }).execute()
 
         # Calculate overall statistics
@@ -200,7 +202,8 @@ async def get_stroke_summary(
             duration=s["duration"],
             max_velocity=s["max_velocity"],
             form_score=s["form_score"],
-            metrics=s["metrics"]
+            metrics=s["metrics"],
+            confidence=s.get("confidence", 0.0)
         )
         for s in strokes_result.data
     ]
