@@ -362,7 +362,16 @@ class PoseProcessor:
                         # Find closest to opponent center (excluding player_idx)
                         opp_idx = self._find_closest_player(results, opponent_center, exclude_indices=[player_idx])
                         if frame_number == 0:
-                            print(f"[PoseProcessor] Frame 0: Found opponent at idx {opp_idx}, player at idx {player_idx}, total detections: {len(keypoints_data)}")
+                            # Debug: show all detection centers
+                            print(f"[PoseProcessor] Frame 0 debug:")
+                            print(f"  Selected opponent center: {opponent_center}")
+                            for idx, box in enumerate(results[0].boxes):
+                                bbox = box.xyxy[0].cpu().numpy()
+                                center_x = (bbox[0] + bbox[2]) / 2
+                                center_y = (bbox[1] + bbox[3]) / 2
+                                dist = math.sqrt((center_x - opponent_center["x"]) ** 2 + (center_y - opponent_center["y"]) ** 2)
+                                print(f"  Detection {idx}: center=({center_x:.1f}, {center_y:.1f}), distance={dist:.1f}")
+                            print(f"  Matched: player=idx{player_idx}, opponent=idx{opp_idx}")
                         if opp_idx is None and len(keypoints_data) > 1:
                             # Fallback: pick any other person
                             opp_idx = 1 if player_idx == 0 else 0

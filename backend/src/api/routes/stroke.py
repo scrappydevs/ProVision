@@ -76,10 +76,11 @@ def process_stroke_detection(session_id: str):
         camera_facing = player_settings["camera_facing"]
         print(f"[StrokeDetection] Player handedness: {handedness}, camera_facing: {camera_facing}")
 
-        # Get all pose analysis data for the session
+        # Get all pose analysis data for the session (player only, person_id=0)
         pose_result = supabase.table("pose_analysis")\
             .select("*")\
             .eq("session_id", session_id)\
+            .eq("person_id", 0)\
             .order("timestamp")\
             .execute()
 
@@ -315,10 +316,11 @@ async def get_stroke_detail(
     if not session_result.data:
         raise HTTPException(status_code=404, detail="Session not found")
 
-    # Get pose frames for this stroke
+    # Get pose frames for this stroke (player only, person_id=0)
     pose_frames_result = supabase.table("pose_analysis")\
         .select("*")\
         .eq("session_id", stroke["session_id"])\
+        .eq("person_id", 0)\
         .gte("frame_number", stroke["start_frame"])\
         .lte("frame_number", stroke["end_frame"])\
         .order("frame_number")\

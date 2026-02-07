@@ -705,6 +705,7 @@ async def debug_frame(
         full_sample = supabase.table("pose_analysis")\
             .select("keypoints")\
             .eq("session_id", session_id)\
+            .eq("person_id", 0)\
             .order("frame_number")\
             .execute()
         resolved_facing = detect_camera_facing(full_sample.data if full_sample.data else [])
@@ -715,6 +716,7 @@ async def debug_frame(
     pose_result = supabase.table("pose_analysis")\
         .select("frame_number, timestamp, keypoints, joint_angles, body_metrics")\
         .eq("session_id", session_id)\
+        .eq("person_id", 0)\
         .gte("frame_number", frame - window)\
         .lte("frame_number", frame + window)\
         .order("frame_number")\
