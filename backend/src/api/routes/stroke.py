@@ -20,7 +20,6 @@ class StrokeResponse(BaseModel):
     max_velocity: float
     form_score: float
     metrics: dict
-    confidence: float = 0.0
 
 
 class StrokeSummaryResponse(BaseModel):
@@ -31,22 +30,35 @@ class StrokeSummaryResponse(BaseModel):
     total_strokes: int
     forehand_count: int
     backhand_count: int
-    serve_count: int
     strokes: List[StrokeResponse]
 
 
-def _get_handedness_for_session(supabase, session_id: str) -> str:
-    """Look up the handedness of the player linked to this session."""
+def _get_player_settings_for_session(supabase, session_id: str, session_data: dict = None) -> dict:
+    """Look up handedness (from player) and camera_facing (from session)."""
+    settings = {"handedness": "right", "camera_facing": "auto"}
+
+    # camera_facing lives on the session
+    if session_data and session_data.get("camera_facing"):
+        settings["camera_facing"] = session_data["camera_facing"]
+    else:
+        try:
+            sess = supabase.table("sessions").select("camera_facing").eq("id", session_id).single().execute()
+            if sess.data and sess.data.get("camera_facing"):
+                settings["camera_facing"] = sess.data["camera_facing"]
+        except Exception:
+            pass
+
+    # handedness lives on the player
     try:
         gp_result = supabase.table("game_players").select("player_id").eq("game_id", session_id).limit(1).execute()
         if gp_result.data:
             player_id = gp_result.data[0]["player_id"]
             player_result = supabase.table("players").select("handedness").eq("id", player_id).single().execute()
             if player_result.data and player_result.data.get("handedness"):
-                return player_result.data["handedness"]
+                settings["handedness"] = player_result.data["handedness"]
     except Exception:
         pass
-    return "right"
+    return settings
 
 
 def process_stroke_detection(session_id: str):
@@ -58,9 +70,11 @@ def process_stroke_detection(session_id: str):
     try:
         print(f"[StrokeDetection] Starting stroke detection for session: {session_id}")
 
-        # Determine player handedness
-        handedness = _get_handedness_for_session(supabase, session_id)
-        print(f"[StrokeDetection] Player handedness: {handedness}")
+        # Determine player handedness and camera facing
+        player_settings = _get_player_settings_for_session(supabase, session_id)
+        handedness = player_settings["handedness"]
+        camera_facing = player_settings["camera_facing"]
+        print(f"[StrokeDetection] Player handedness: {handedness}, camera_facing: {camera_facing}")
 
         # Get all pose analysis data for the session
         pose_result = supabase.table("pose_analysis")\
@@ -76,12 +90,13 @@ def process_stroke_detection(session_id: str):
         pose_frames = pose_result.data
         print(f"[StrokeDetection] Analyzing {len(pose_frames)} frames")
 
-        # Initialize stroke detector with handedness
+        # Initialize stroke detector with handedness and camera facing
         detector = StrokeDetector(
             velocity_threshold=50.0,
             min_stroke_duration=5,
             max_stroke_duration=60,
             handedness=handedness,
+            camera_facing=camera_facing,
         )
 
         # Detect strokes
@@ -102,8 +117,7 @@ def process_stroke_detection(session_id: str):
                 "duration": stroke.duration,
                 "max_velocity": stroke.max_velocity,
                 "form_score": stroke.form_score,
-                "metrics": stroke.metrics,
-                "confidence": stroke.confidence
+                "metrics": stroke.metrics
             }).execute()
 
         # Calculate overall statistics
@@ -202,8 +216,7 @@ async def get_stroke_summary(
             duration=s["duration"],
             max_velocity=s["max_velocity"],
             form_score=s["form_score"],
-            metrics=s["metrics"],
-            confidence=s.get("confidence", 0.0)
+            metrics=s["metrics"]
         )
         for s in strokes_result.data
     ]
@@ -216,7 +229,6 @@ async def get_stroke_summary(
         total_strokes=stroke_summary.get("total_strokes", 0),
         forehand_count=stroke_summary.get("forehand_count", 0),
         backhand_count=stroke_summary.get("backhand_count", 0),
-        serve_count=stroke_summary.get("serve_count", 0),
         strokes=strokes
     )
 

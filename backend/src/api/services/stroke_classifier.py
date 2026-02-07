@@ -7,6 +7,11 @@ Uses multi-signal approach:
 2. Shoulder rotation change (torso turn direction = FH vs BH indicator)
 3. Wrist trajectory relative to body midline
 4. Shoulder angle change (arm raise pattern)
+
+Camera facing correction:
+When a player faces away from the camera, pose estimators swap left/right
+keypoints (the model's "left_wrist" is actually the player's right wrist).
+We detect this via nose visibility and swap keypoint names accordingly.
 """
 from typing import List
 
@@ -32,30 +37,116 @@ def _body_width(frame: dict) -> float:
     return max((dx**2 + dy**2) ** 0.5, 20.0)
 
 
-def classify_strokes(pose_frames: List[dict], handedness: str = "right") -> List[dict]:
+def _normalize_angle_delta(delta: float) -> float:
+    """Normalize an angle delta to [-180, 180] to handle ±180° wrapping."""
+    if delta > 180:
+        delta -= 360
+    elif delta < -180:
+        delta += 360
+    return delta
+
+
+def _flip_side(name: str) -> str:
+    """Swap 'left' <-> 'right' in a keypoint name."""
+    if name.startswith("left_"):
+        return "right_" + name[5:]
+    if name.startswith("right_"):
+        return "left_" + name[6:]
+    return name
+
+
+def detect_camera_facing(pose_frames: List[dict], sample_count: int = 30) -> str:
+    """
+    Auto-detect whether the player faces toward or away from the camera.
+
+    Uses nose visibility as the primary signal:
+    - Nose clearly visible → facing toward camera
+    - Nose not visible but shoulders/ears present → facing away
+
+    Returns 'toward' or 'away'.
+    """
+    if not pose_frames:
+        return "toward"
+
+    # Sample evenly spaced frames
+    step = max(1, len(pose_frames) // sample_count)
+    sampled = pose_frames[::step][:sample_count]
+
+    toward_votes = 0
+    away_votes = 0
+
+    for frame in sampled:
+        nose = _get_kp(frame, "nose")
+        left_ear = _get_kp(frame, "left_ear")
+        right_ear = _get_kp(frame, "right_ear")
+        left_shoulder = _get_kp(frame, "left_shoulder")
+        right_shoulder = _get_kp(frame, "right_shoulder")
+
+        nose_vis = nose.get("visibility", 0) if nose else 0
+        lear_vis = left_ear.get("visibility", 0) if left_ear else 0
+        rear_vis = right_ear.get("visibility", 0) if right_ear else 0
+        ls_vis = left_shoulder.get("visibility", 0) if left_shoulder else 0
+        rs_vis = right_shoulder.get("visibility", 0) if right_shoulder else 0
+
+        has_body = (ls_vis > 0.3 or rs_vis > 0.3)
+        if not has_body:
+            continue
+
+        if nose_vis > 0.5:
+            toward_votes += 1
+        elif nose_vis < 0.2 and (lear_vis > 0.3 or rear_vis > 0.3):
+            away_votes += 1
+        elif nose_vis < 0.3:
+            away_votes += 0.5
+        else:
+            toward_votes += 0.5
+
+    if toward_votes + away_votes == 0:
+        return "toward"
+
+    return "toward" if toward_votes >= away_votes else "away"
+
+
+def _resolve_facing(camera_facing: str, pose_frames: List[dict]) -> str:
+    """Resolve 'auto' to a concrete facing direction."""
+    if camera_facing in ("toward", "away"):
+        return camera_facing
+    return detect_camera_facing(pose_frames)
+
+
+def classify_strokes(pose_frames: List[dict], handedness: str = "right", camera_facing: str = "auto") -> List[dict]:
     """
     Classify strokes from pose analysis frames.
 
     Args:
         pose_frames: List of pose analysis frame dicts from database
         handedness: 'right' or 'left' — the player's dominant hand
+        camera_facing: 'auto', 'toward', or 'away' — camera orientation relative to player
 
-    Multi-signal detection:
-    - Primary: elbow angle velocity (rapid extension/flexion > threshold)
-    - Secondary: shoulder rotation delta (positive = rotating right, negative = left)
-    - Tertiary: wrist position relative to shoulder midline
-    - Confidence: combination of keypoint visibility and signal strength
-
-    Handedness determines:
-    - Which arm is primary for stroke detection (dominant arm checked first)
-    - Forehand = dominant wrist on same side as dominant hand relative to body midline
-    - Backhand = dominant wrist crosses to opposite side
+    When camera_facing is 'away', pose estimators swap left/right keypoints.
+    We correct for this by flipping the keypoint names we look up.
     """
     if len(pose_frames) < 4:
         return []
 
-    dominant = handedness  # "right" or "left"
-    off_hand = "left" if dominant == "right" else "right"
+    facing = _resolve_facing(camera_facing, pose_frames)
+
+    # actual_hand = the player's real dominant hand (for FH/BH classification logic)
+    actual_hand = handedness  # "right" or "left"
+
+    # model_dom / model_off = keypoint name prefixes to read from the pose model
+    # When facing away, model's "left" = player's "right", so we flip
+    if facing == "away":
+        model_dom = "left" if actual_hand == "right" else "right"
+        model_off = "right" if actual_hand == "right" else "left"
+    else:
+        model_dom = actual_hand
+        model_off = "left" if actual_hand == "right" else "right"
+
+    # For keypoint lookups we use model_dom/model_off
+    # For classification (FH vs BH direction) we use actual_hand
+    dominant = model_dom
+    off_hand = model_off
 
     strokes = []
     cooldown = 0
@@ -96,6 +187,13 @@ def classify_strokes(pose_frames: List[dict], handedness: str = "right") -> List
             elbow_vel = abs(elbow_now - elbow_prev)
             elbow_accel = abs((elbow_now - elbow_prev) - (elbow_prev - elbow_prev2))
 
+            # --- Elbow extension check ---
+            # Real strokes involve elbow EXTENDING (angle increasing) at contact.
+            # Wind-ups are flexion (angle decreasing). Reject pure flexion peaks.
+            elbow_delta = elbow_now - elbow_prev2  # positive = extension over 2 frames
+            if elbow_delta < -5:
+                continue  # elbow flexing hard — this is a wind-up, skip
+
             # --- Signal 2: Shoulder angle velocity ---
             shoulder_now = curr_angles.get(f"{side}_shoulder", 0)
             shoulder_prev = prev_angles.get(f"{side}_shoulder", 0)
@@ -116,7 +214,9 @@ def classify_strokes(pose_frames: List[dict], handedness: str = "right") -> List
             wrist_fast = wrist_speed > 0.12
 
             signals = sum([elbow_strong, shoulder_active, wrist_fast])
-            if signals < 2:
+            # Require at least 2 signals AND elbow must be involved.
+            # shoulder+wrist alone (no elbow) produces too many false positives.
+            if signals < 2 or not elbow_strong:
                 continue
 
             # --- Forehand vs Backhand classification using handedness ---
@@ -124,10 +224,10 @@ def classify_strokes(pose_frames: List[dict], handedness: str = "right") -> List
             # not the arm that moved. Even if the off-hand arm triggers a stroke
             # (two-handed backhand), we classify based on body orientation.
 
-            # 1. Shoulder rotation direction
+            # 1. Shoulder rotation direction (normalized for ±180° wrapping)
             shoulder_rot = curr_metrics.get("shoulder_rotation", 0)
             prev_shoulder_rot = prev_metrics.get("shoulder_rotation", 0)
-            rot_delta = shoulder_rot - prev_shoulder_rot
+            rot_delta = _normalize_angle_delta(shoulder_rot - prev_shoulder_rot)
 
             # 2. Dominant wrist position relative to body midline
             dom_wrist = _get_kp(curr, f"{dominant}_wrist")
@@ -137,49 +237,57 @@ def classify_strokes(pose_frames: List[dict], handedness: str = "right") -> List
             dom_wx = dom_wrist.get("x", 0) if _visible(dom_wrist) else wx
             wrist_relative = (dom_wx - mid_x) / bw
 
-            # 3. Hip rotation
+            # 3. Hip rotation (normalized for ±180° wrapping)
             hip_rot = curr_metrics.get("hip_rotation", 0)
             prev_hip_rot = prev_metrics.get("hip_rotation", 0)
-            hip_delta = hip_rot - prev_hip_rot
+            hip_delta = _normalize_angle_delta(hip_rot - prev_hip_rot)
 
-            # Voting based on handedness
+            # Voting based on ACTUAL handedness (not model keypoint names)
             fh_score = 0.0
             bh_score = 0.0
 
             # Shoulder rotation: for right-hander, FH = rotating left (negative delta)
-            if dominant == "right":
-                if rot_delta < -1:
-                    fh_score += min(abs(rot_delta) / 5, 1.0)
-                elif rot_delta > 1:
-                    bh_score += min(abs(rot_delta) / 5, 1.0)
+            # Note: when facing away, shoulder_rotation from the model is also mirrored,
+            # so we flip rot_delta interpretation too
+            effective_rot = rot_delta if facing == "toward" else -rot_delta
+            effective_hip = hip_delta if facing == "toward" else -hip_delta
+
+            if actual_hand == "right":
+                if effective_rot < -1:
+                    fh_score += min(abs(effective_rot) / 5, 1.0)
+                elif effective_rot > 1:
+                    bh_score += min(abs(effective_rot) / 5, 1.0)
             else:  # left-handed: FH = rotating right (positive delta)
-                if rot_delta > 1:
-                    fh_score += min(abs(rot_delta) / 5, 1.0)
-                elif rot_delta < -1:
-                    bh_score += min(abs(rot_delta) / 5, 1.0)
+                if effective_rot > 1:
+                    fh_score += min(abs(effective_rot) / 5, 1.0)
+                elif effective_rot < -1:
+                    bh_score += min(abs(effective_rot) / 5, 1.0)
 
             # Wrist position: FH = dominant wrist on same side, BH = crossed
-            if dominant == "right":
-                if wrist_relative > 0.1:
+            # When facing away, wrist_relative is also mirrored
+            effective_wrist_rel = wrist_relative if facing == "toward" else -wrist_relative
+
+            if actual_hand == "right":
+                if effective_wrist_rel > 0.1:
                     fh_score += 0.5
-                elif wrist_relative < -0.1:
+                elif effective_wrist_rel < -0.1:
                     bh_score += 0.5
             else:  # left-handed
-                if wrist_relative < -0.1:
+                if effective_wrist_rel < -0.1:
                     fh_score += 0.5
-                elif wrist_relative > 0.1:
+                elif effective_wrist_rel > 0.1:
                     bh_score += 0.5
 
             # Hip rotation supports the same direction as shoulder
-            if dominant == "right":
-                if hip_delta < -0.5:
+            if actual_hand == "right":
+                if effective_hip < -0.5:
                     fh_score += 0.3
-                elif hip_delta > 0.5:
+                elif effective_hip > 0.5:
                     bh_score += 0.3
             else:
-                if hip_delta > 0.5:
+                if effective_hip > 0.5:
                     fh_score += 0.3
-                elif hip_delta < -0.5:
+                elif effective_hip < -0.5:
                     bh_score += 0.3
 
             # If this was detected on the off-hand arm, slightly boost backhand
@@ -202,7 +310,8 @@ def classify_strokes(pose_frames: List[dict], handedness: str = "right") -> List
                 "timestamp": curr.get("timestamp", 0),
                 "type": stroke_type,
                 "hand": side,
-                "dominant_hand": dominant,
+                "dominant_hand": actual_hand,
+                "camera_facing": facing,
                 "elbow_angle": round(elbow_now, 1),
                 "shoulder_angle": round(shoulder_now, 1),
                 "confidence": confidence,
@@ -280,14 +389,17 @@ def analyze_weaknesses(strokes: List[dict]) -> dict:
     }
 
 
-def build_match_analytics(pose_frames: List[dict], handedness: str = "right") -> dict:
+def build_match_analytics(pose_frames: List[dict], handedness: str = "right", camera_facing: str = "auto") -> dict:
     """Build complete match analytics from pose data."""
-    strokes = classify_strokes(pose_frames, handedness=handedness)
+    strokes = classify_strokes(pose_frames, handedness=handedness, camera_facing=camera_facing)
     weakness = analyze_weaknesses(strokes)
+
+    facing = _resolve_facing(camera_facing, pose_frames) if camera_facing == "auto" else camera_facing
 
     return {
         "strokes": strokes,
         "stroke_count": len(strokes),
         "dominant_hand": handedness,
+        "camera_facing": facing,
         "weakness_analysis": weakness,
     }
