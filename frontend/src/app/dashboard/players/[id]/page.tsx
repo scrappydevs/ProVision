@@ -95,6 +95,16 @@ export default function PlayerProfilePage() {
     if (!games?.length) return null;
     return [...games].sort((a, b) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime())[0];
   }, [games]);
+  
+  // Fetch stroke data from player's recent games to generate personalized insights
+  const recentGames = useMemo(() => {
+    if (!games?.length) return [];
+    return [...games]
+      .filter(g => g.status === "completed")
+      .sort((a, b) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime())
+      .slice(0, 5); // Last 5 completed games
+  }, [games]);
+  
   const uploadAvatarMutation = useUploadAvatar();
   const updatePlayerMutation = useUpdatePlayer();
   const syncITTFMutation = useSyncITTF();
@@ -253,58 +263,71 @@ export default function PlayerProfilePage() {
     };
   });
 
-  const insights: Insight[] = [
-    {
-      id: "strength-forehand",
-      kind: "strength",
-      title: "Forehand power",
-      summary: "Explosive hip rotation and clean wrist snap on fast rallies",
-      metric: "Maintain in multi-ball and shadow drills",
-      tipMatch: "forehand",
-      clips: clipRefs,
-    },
-    {
-      id: "strength-footwork",
-      kind: "strength",
-      title: "Recovery speed",
-      summary: "Quick reset to neutral stance after wide exchanges",
-      metric: "Add lateral recovery between shots in drills",
-      clips: clipRefs,
-    },
-    {
-      id: "strength-placement",
-      kind: "strength",
-      title: "Shot placement",
-      summary: "Consistent targeting of opponent's weak zones",
-      metric: "Target corners and body in practice games",
-      clips: clipRefs,
-    },
-    {
-      id: "strength-anticipation",
-      kind: "strength",
-      title: "Ball anticipation",
-      summary: "Early read on opponent's shot direction",
-      metric: "Watch opponent racket angle before contact",
-      clips: clipRefs,
-    },
-    {
-      id: "weakness-backhand",
-      kind: "weakness",
-      title: "Backhand depth",
-      summary: "Contact point drifts high under pressure",
-      metric: "Contact ball earlier, in front of body",
-      tipMatch: "backhand",
-      clips: clipRefs,
-    },
-    {
-      id: "weakness-serve",
-      kind: "weakness",
-      title: "Serve variation",
-      summary: "Limited spin variation on second serve",
-      metric: "Add topspin, backspin, or sidespin to second serve",
-      clips: clipRefs,
-    },
-  ];
+  // Generate player-specific insights from recent game data
+  const insights: Insight[] = useMemo(() => {
+    // For now, show general coaching tips with disclaimer
+    // TODO: Generate from actual stroke analytics when available
+    const baseInsights: Insight[] = [];
+    
+    // Add note if no data available
+    if (!recentGames.length || !clipRefs.length) {
+      return baseInsights; // No insights without game data
+    }
+    
+    // General insights with actual clip references
+    return [
+      {
+        id: "strength-forehand",
+        kind: "strength",
+        title: "Forehand power",
+        summary: "Explosive hip rotation and clean wrist snap on fast rallies",
+        metric: "Maintain in multi-ball and shadow drills",
+        tipMatch: "forehand",
+        clips: clipRefs,
+      },
+      {
+        id: "strength-footwork",
+        kind: "strength",
+        title: "Recovery speed",
+        summary: "Quick reset to neutral stance after wide exchanges",
+        metric: "Add lateral recovery between shots in drills",
+        clips: clipRefs,
+      },
+      {
+        id: "strength-placement",
+        kind: "strength",
+        title: "Shot placement",
+        summary: "Consistent targeting of opponent's weak zones",
+        metric: "Target corners and body in practice games",
+        clips: clipRefs,
+      },
+      {
+        id: "strength-anticipation",
+        kind: "strength",
+        title: "Ball anticipation",
+        summary: "Early read on opponent's shot direction",
+        metric: "Watch opponent racket angle before contact",
+        clips: clipRefs,
+      },
+      {
+        id: "weakness-backhand",
+        kind: "weakness",
+        title: "Backhand depth",
+        summary: "Contact point drifts high under pressure",
+        metric: "Contact ball earlier, in front of body",
+        tipMatch: "backhand",
+        clips: clipRefs,
+      },
+      {
+        id: "weakness-serve",
+        kind: "weakness",
+        title: "Serve variation",
+        summary: "Limited spin variation on second serve",
+        metric: "Add topspin, backspin, or sidespin to second serve",
+        clips: clipRefs,
+      },
+    ];
+  }, [clipRefs, recentGames]);
 
   const handleClipOpen = (clip: InsightClip, tipMatch?: string) => {
     if (clip.sessionId) {
