@@ -298,7 +298,25 @@ export default function PlayerProfilePage() {
     },
   ];
 
-  // Early returns AFTER all hooks
+  const handleClipOpen = (clip: InsightClip, tipMatch?: string) => {
+    if (clip.sessionId) {
+      const params = new URLSearchParams();
+      if (tipMatch) {
+        params.set("tip", tipMatch);
+      } else if (clip.startSeconds != null) {
+        params.set("t", clip.startSeconds.toFixed(2));
+      }
+      const query = params.toString() ? `?${params.toString()}` : "";
+      router.push(`/dashboard/games/${clip.sessionId}${query}`);
+      return;
+    }
+    if (clip.videoUrl) {
+      const params = new URLSearchParams({ url: clip.videoUrl });
+      if (clip.startSeconds != null) params.set("t", clip.startSeconds.toFixed(2));
+      router.push(`/dashboard/watch?${params.toString()}`);
+    }
+  };
+
   if (playerLoading) {
     return (
       <div className="flex items-center justify-center h-64">
@@ -349,25 +367,6 @@ export default function PlayerProfilePage() {
     statusOptions.find((o) => o.value === status)?.label ?? status;
 
   const ittfData = player.ittf_data;
-
-  const handleClipOpen = (clip: InsightClip, tipMatch?: string) => {
-    if (clip.sessionId) {
-      const params = new URLSearchParams();
-      if (tipMatch) {
-        params.set("tip", tipMatch);
-      } else if (clip.startSeconds != null) {
-        params.set("t", clip.startSeconds.toFixed(2));
-      }
-      const query = params.toString() ? `?${params.toString()}` : "";
-      router.push(`/dashboard/games/${clip.sessionId}${query}`);
-      return;
-    }
-    if (clip.videoUrl) {
-      const params = new URLSearchParams({ url: clip.videoUrl });
-      if (clip.startSeconds != null) params.set("t", clip.startSeconds.toFixed(2));
-      router.push(`/dashboard/watch?${params.toString()}`);
-    }
-  };
 
   return (
     <div className="-m-6 h-[calc(100vh-4rem)] relative overflow-hidden player-profile">

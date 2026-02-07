@@ -914,7 +914,7 @@ def _run_tracknet_pass(frame_list, model, device, postprocess_fn):
             x_pred, y_pred, conf_pred = postprocess_fn(output)
             ball_track.append((x_pred, y_pred))
             conf_track.append(conf_pred)
-            if ball_track[-1][0] and ball_track[-2][0]:
+            if ball_track[-1][0] is not None and ball_track[-2][0] is not None:
                 dist = distance.euclidean(ball_track[-1], ball_track[-2])
             else:
                 dist = -1
@@ -978,6 +978,8 @@ async def tracknet_track(request: SAM2TrackRequest):
     bwd_det = sum(1 for b in bwd_track if b[0] is not None)
     logger.info(f"TrackNet backward: {bwd_det}/{n} detections")
     
+    from scipy.spatial import distance
+
     # === Merge: higher confidence wins, fill gaps from either ===
     ball_track = [(None, None)] * n
     conf_track = [0.0] * n
@@ -986,9 +988,49 @@ async def tracknet_track(request: SAM2TrackRequest):
         bwd_pt = bwd_track[i] if i < len(bwd_track) else (None, None)
         fc = fwd_conf[i] if i < len(fwd_conf) else 0.0
         bc = bwd_conf[i] if i < len(bwd_conf) else 0.0
+        prev_pt = ball_track[i - 1] if i > 0 else (None, None)
+        prev2_pt = ball_track[i - 2] if i > 1 else (None, None)
+        pred_pt = (None, None)
+        if prev_pt[0] is not None and prev2_pt[0] is not None:
+            pred_pt = (
+                prev_pt[0] + (prev_pt[0] - prev2_pt[0]),
+                prev_pt[1] + (prev_pt[1] - prev2_pt[1]),
+            )
         
         if fwd_pt[0] is not None and bwd_pt[0] is not None:
-            if fc >= bc:
+            if pred_pt[0] is not None:
+                df = distance.euclidean(pred_pt, fwd_pt)
+                db = distance.euclidean(pred_pt, bwd_pt)
+                if abs(df - db) > 20:
+                    if df <= db:
+                        ball_track[i] = fwd_pt
+                        conf_track[i] = fc
+                    else:
+                        ball_track[i] = bwd_pt
+                        conf_track[i] = bc
+                elif fc >= bc:
+                    ball_track[i] = fwd_pt
+                    conf_track[i] = fc
+                else:
+                    ball_track[i] = bwd_pt
+                    conf_track[i] = bc
+            elif prev_pt[0] is not None:
+                df = distance.euclidean(prev_pt, fwd_pt)
+                db = distance.euclidean(prev_pt, bwd_pt)
+                if abs(df - db) > 25:
+                    if df <= db:
+                        ball_track[i] = fwd_pt
+                        conf_track[i] = fc
+                    else:
+                        ball_track[i] = bwd_pt
+                        conf_track[i] = bc
+                elif fc >= bc:
+                    ball_track[i] = fwd_pt
+                    conf_track[i] = fc
+                else:
+                    ball_track[i] = bwd_pt
+                    conf_track[i] = bc
+            elif fc >= bc:
                 ball_track[i] = fwd_pt
                 conf_track[i] = fc
             else:
@@ -1005,7 +1047,6 @@ async def tracknet_track(request: SAM2TrackRequest):
     logger.info(f"TrackNet merged: {merged_det}/{n} detections (fwd={fwd_det}, bwd={bwd_det})")
     
     # === Post-processing ===
-    from scipy.spatial import distance
     dists = [-1] * n
     for i in range(1, n):
         if ball_track[i][0] is not None and ball_track[i-1][0] is not None:
@@ -1018,6 +1059,62 @@ async def tracknet_track(request: SAM2TrackRequest):
     for i in range(n):
         if ball_track[i][0] is not None and conf_track[i] < 0.15:
             ball_track[i] = (None, None)
+    
+    # Third pass: teleport filter using local motion + confidence gating
+    valid_dists = [
+        distance.euclidean(ball_track[i], ball_track[i - 1])
+        for i in range(1, n)
+        if ball_track[i][0] is not None and ball_track[i - 1][0] is not None
+    ]
+    median_dist = float(np.median(valid_dists)) if valid_dists else 0.0
+    fps_scale = max(1.0, 30.0 / max(fps, 1.0))
+    base_jump = max(60.0, median_dist * 3.0) * fps_scale
+    hard_jump = max(110.0, median_dist * 5.0) * fps_scale
+    for i in range(1, n - 1):
+        if ball_track[i][0] is None:
+            continue
+        prev_pt = ball_track[i - 1]
+        next_pt = ball_track[i + 1]
+        if prev_pt[0] is not None and next_pt[0] is not None:
+            d_prev = distance.euclidean(ball_track[i], prev_pt)
+            d_next = distance.euclidean(ball_track[i], next_pt)
+            d_skip = distance.euclidean(prev_pt, next_pt)
+            if d_prev > base_jump and d_next > base_jump and d_skip < base_jump * 1.2 and conf_track[i] < 0.45:
+                ball_track[i] = (None, None)
+                continue
+        if prev_pt[0] is not None:
+            d_prev = distance.euclidean(ball_track[i], prev_pt)
+            if d_prev > hard_jump and conf_track[i] < 0.35:
+                ball_track[i] = (None, None)
+                continue
+        if i >= 2 and prev_pt[0] is not None:
+            prev2_pt = ball_track[i - 2]
+            if prev2_pt[0] is not None:
+                pred = (
+                    prev_pt[0] + (prev_pt[0] - prev2_pt[0]),
+                    prev_pt[1] + (prev_pt[1] - prev2_pt[1]),
+                )
+                d_pred = distance.euclidean(ball_track[i], pred)
+                if d_pred > hard_jump and conf_track[i] < 0.5:
+                    ball_track[i] = (None, None)
+
+    # Fourth pass: median window spike filter (mid-flight teleports)
+    window = 2
+    for i in range(window, n - window):
+        if ball_track[i][0] is None:
+            continue
+        neighbors = []
+        for j in range(i - window, i + window + 1):
+            if j == i:
+                continue
+            if ball_track[j][0] is not None:
+                neighbors.append(ball_track[j])
+        if len(neighbors) >= 3:
+            mx = float(np.median([p[0] for p in neighbors]))
+            my = float(np.median([p[1] for p in neighbors]))
+            d_med = distance.euclidean(ball_track[i], (mx, my))
+            if d_med > base_jump * 0.8 and conf_track[i] < 0.55:
+                ball_track[i] = (None, None)
     
     subtracks = split_track(ball_track)
     
