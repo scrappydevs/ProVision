@@ -300,11 +300,11 @@ def _generate_player_description_with_agent(
 
     system = (
         "You are a concise tennis coach assistant. "
-        "Write exactly two short paragraphs about the player's patient playing style, strengths, and weaknesses. "
-        "Use the data provided; do not invent stats. Avoid bullet points and headings."
+        "Write a brief 1-2 sentence description of the player's playing style, highlighting their key strength and weakness. "
+        "Use the data provided; do not invent stats. Be concise and impactful."
     )
     user_msg = (
-        "Using this JSON data, write the 2-paragraph description.\n\n"
+        "Using this JSON data, write a 1-2 sentence player description.\n\n"
         f"{json.dumps(context, ensure_ascii=True)}"
     )
 
@@ -313,7 +313,7 @@ def _generate_player_description_with_agent(
         client = anthropic.Anthropic(api_key=anthropic_key)
         response = client.messages.create(
             model="claude-sonnet-4-20250514",
-            max_tokens=500,
+            max_tokens=150,
             system=system,
             messages=[{"role": "user", "content": user_msg}],
         )
@@ -557,7 +557,7 @@ async def analyze_player_matchup(
         def _call_model(system_prompt: str, prompt: str) -> str:
             response = client.messages.create(
                 model="claude-sonnet-4-20250514",
-                max_tokens=450,
+                max_tokens=1024,
                 system=system_prompt,
                 messages=[{"role": "user", "content": prompt}],
             )

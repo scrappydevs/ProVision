@@ -54,18 +54,18 @@ export default function LandingPage() {
         className="fixed top-0 left-0 right-0 z-50 px-8 py-6"
       >
         <div className="max-w-7xl mx-auto flex items-center justify-between">
-          <div className="flex items-center gap-2.5">
-            <img src="/logo.png" alt="ProVision" className="w-5 h-5 dark:invert" />
-            <span className="text-sm font-medium tracking-wide">ProVision</span>
+          <div className="flex items-center gap-3">
+            <img src="/logo.png" alt="ProVision" className="w-7 h-7 dark:invert" />
+            <span className="text-lg font-medium tracking-wide">ProVision</span>
           </div>
           <div className="flex items-center gap-8">
-            <a href="#how" className="text-sm text-muted-foreground hover:text-foreground transition-colors">How it works</a>
-            <a href="#features" className="text-sm text-muted-foreground hover:text-foreground transition-colors">Features</a>
+            <a href="#how" className="text-base text-muted-foreground hover:text-foreground transition-colors">How it works</a>
+            <a href="#features" className="text-base text-muted-foreground hover:text-foreground transition-colors">Features</a>
             <Button 
               onClick={() => user ? router.push("/dashboard") : signInWithGoogle()} 
               disabled={isLoading}
               variant="ghost"
-              className="text-sm text-primary hover:text-foreground hover:bg-transparent"
+              className="text-base text-primary hover:text-foreground hover:bg-transparent"
             >
               {isLoading ? "..." : user ? "Dashboard" : "Sign in"}
             </Button>
@@ -101,11 +101,11 @@ export default function LandingPage() {
               animate={{ opacity: 1, y: 0 }}
               transition={{ duration: 1, delay: 0.8 }}
             >
-              <h1 className="text-5xl md:text-7xl lg:text-8xl font-light leading-[1.05] tracking-tight mb-8">
+              <h1 className="text-4xl md:text-5xl lg:text-6xl font-light leading-[1.1] tracking-tight mb-6">
                 <span className="text-[#9B7B5B]">Telemetry</span> for Table Tennis
               </h1>
-              <p className="text-xl md:text-2xl text-muted-foreground max-w-4xl leading-relaxed">
-                AI and computer vision to automatically track the ball, analyze stroke mechanics, estimate player pose, and deliver real-time coaching insights from any match or practice video
+              <p className="text-lg md:text-xl text-muted-foreground max-w-3xl leading-relaxed">
+                AI and computer vision to automatically track the ball, analyze paddle mechanics and deliver real-time coaching insights
               </p>
             </motion.div>
           </div>

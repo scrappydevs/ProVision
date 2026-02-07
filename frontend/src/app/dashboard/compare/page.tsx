@@ -2,8 +2,7 @@
 
 import { useMemo, useState, useEffect, useRef } from "react";
 import { useQueries } from "@tanstack/react-query";
-import { Swords, Sparkles } from "lucide-react";
-import { Button } from "@/components/ui/button";
+import { RotateCw } from "lucide-react";
 import { usePlayers, usePlayerGames } from "@/hooks/usePlayers";
 import { tournamentKeys, useTournaments } from "@/hooks/useTournaments";
 import { analyzePlayerMatchup, getTournamentMatchups, Matchup, MatchupAnalysisResponse, Player } from "@/lib/api";
@@ -87,12 +86,55 @@ const getSafeDescription = (value?: string) => {
 
 const tryParseJsonString = (value?: string) => {
   if (!value) return null;
-  const trimmed = value.trim();
-  if (!trimmed.startsWith("{") && !trimmed.startsWith("[")) return null;
+  // Strip markdown code fences
+  let cleaned = value.trim().replace(/^```(?:json)?\s*/i, "").replace(/\s*```\s*$/, "").trim();
+  // Extract from first { to last }
+  const start = cleaned.indexOf("{");
+  const end = cleaned.lastIndexOf("}");
+  if (start === -1) return null;
+  if (end > start) cleaned = cleaned.slice(start, end + 1);
+  else cleaned = cleaned.slice(start);
   try {
-    return JSON.parse(trimmed);
+    return JSON.parse(cleaned);
   } catch {
-    return null;
+    // Repair truncated JSON using a bracket stack
+    const stack: string[] = [];
+    let inStr = false;
+    let esc = false;
+    let lastSafe = 0; // position after last complete value/comma
+    for (let i = 0; i < cleaned.length; i++) {
+      const ch = cleaned[i];
+      if (esc) { esc = false; continue; }
+      if (ch === "\\" && inStr) { esc = true; continue; }
+      if (ch === '"') { inStr = !inStr; continue; }
+      if (inStr) continue;
+      if (ch === "{") stack.push("}");
+      else if (ch === "[") stack.push("]");
+      else if ((ch === "}" || ch === "]") && stack.length) stack.pop();
+      if (ch === "," || ch === "}" || ch === "]") lastSafe = i;
+    }
+    if (stack.length === 0) return null; // wasn't a truncation issue
+    let repaired = cleaned.slice(0, lastSafe + 1).replace(/,\s*$/, "");
+    // Re-scan to get current stack state after truncation
+    const stack2: string[] = [];
+    let inStr2 = false;
+    let esc2 = false;
+    for (let i = 0; i < repaired.length; i++) {
+      const ch = repaired[i];
+      if (esc2) { esc2 = false; continue; }
+      if (ch === "\\" && inStr2) { esc2 = true; continue; }
+      if (ch === '"') { inStr2 = !inStr2; continue; }
+      if (inStr2) continue;
+      if (ch === "{") stack2.push("}");
+      else if (ch === "[") stack2.push("]");
+      else if ((ch === "}" || ch === "]") && stack2.length) stack2.pop();
+    }
+    while (stack2.length) repaired += stack2.pop();
+    try {
+      return JSON.parse(repaired);
+    } catch {
+      return null;
+    }
   }
 };
 
@@ -100,20 +142,23 @@ const normalizeMatchupAnalysis = (data?: MatchupAnalysisResponse | null) => {
   if (!data) return null;
   let base: MatchupAnalysisResponse = data;
 
-  const parsedFromRaw =
-    typeof data.raw === "string" ? tryParseJsonString(data.raw) : null;
-  const parsedFromHeadline =
-    typeof data.headline === "string" ? tryParseJsonString(data.headline) : null;
-  const parsedFromTactical =
-    typeof (data as { tactical_advantage?: unknown }).tactical_advantage === "string"
-      ? tryParseJsonString(data.tactical_advantage as unknown as string)
-      : null;
+  // Collect candidate strings that might contain the full JSON response
+  const candidates: string[] = [];
+  if (typeof data.raw === "string" && data.raw.includes("{")) candidates.push(data.raw);
+  if (typeof data.headline === "string" && data.headline.includes("{")) candidates.push(data.headline);
+  // Backend puts raw JSON into tactical_advantage as ["<json>"] when parsing fails
+  const ta = data.tactical_advantage;
+  if (typeof ta === "string" && ta.includes("{")) candidates.push(ta);
+  if (Array.isArray(ta) && ta.length === 1 && typeof ta[0] === "string" && ta[0].includes("{")) {
+    candidates.push(ta[0]);
+  }
 
-  const parsed =
-    parsedFromRaw || parsedFromHeadline || parsedFromTactical;
-
-  if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) {
-    base = { ...data, ...(parsed as MatchupAnalysisResponse) };
+  for (const candidate of candidates) {
+    const parsed = tryParseJsonString(candidate);
+    if (parsed && typeof parsed === "object" && !Array.isArray(parsed) && (parsed.headline || parsed.tactical_advantage)) {
+      base = { ...data, ...(parsed as MatchupAnalysisResponse) };
+      break;
+    }
   }
 
   const normalizeList = (value: unknown) => {
@@ -378,23 +423,14 @@ export default function ComparePage() {
         </select>
       </div>
       {player ? (
-        <div className="flex items-center gap-3">
-          {player.avatar_url ? (
-            <img src={player.avatar_url} alt={player.name} className="w-12 h-12 rounded-full object-cover shrink-0" />
-          ) : (
-            <div className="w-12 h-12 rounded-full bg-foreground/5 flex items-center justify-center text-sm text-foreground/30 shrink-0">
-              {player.name.split(" ").map((n) => n[0]).join("").slice(0, 2).toUpperCase()}
-            </div>
+        <div>
+          <p className="text-base font-medium text-foreground mb-1">{player.name}</p>
+          <p className="text-sm text-foreground/50 mb-2">{buildStyleSummary(player)}</p>
+          {getSafeDescription(player.description ?? player.notes) && (
+            <p className="text-sm text-foreground/60 leading-relaxed">
+              {getSafeDescription(player.description ?? player.notes)}
+            </p>
           )}
-          <div className="min-w-0">
-            <p className="text-base font-medium text-foreground truncate">{player.name}</p>
-            <p className="text-sm text-foreground/50">{buildStyleSummary(player)}</p>
-            {getSafeDescription(player.description ?? player.notes) && (
-              <p className="text-sm text-foreground/40 mt-1 line-clamp-2">
-                {getSafeDescription(player.description ?? player.notes)}
-              </p>
-            )}
-          </div>
         </div>
       ) : (
         <p className="text-sm text-foreground/20 py-3">No player selected</p>
@@ -403,44 +439,58 @@ export default function ComparePage() {
   );
 
   return (
-    <div className="-m-6 h-[calc(100vh-4rem)] overflow-y-auto">
-      <div className="px-8 py-6 max-w-5xl mx-auto space-y-6">
+    <div className="-m-6 h-[calc(100vh-4rem)] overflow-y-auto relative">
+      {/* Background player images */}
+      {canCompare && (leftPlayer?.avatar_url || rightPlayer?.avatar_url) && (
+        <div className="fixed inset-0 pointer-events-none">
+          <div className="absolute inset-y-0 left-0 w-1/2">
+            {leftPlayer?.avatar_url && (
+              <img src={leftPlayer.avatar_url} alt="" className="w-full h-full object-cover object-center opacity-[0.07]" />
+            )}
+          </div>
+          <div className="absolute inset-y-0 right-0 w-1/2">
+            {rightPlayer?.avatar_url && (
+              <img src={rightPlayer.avatar_url} alt="" className="w-full h-full object-cover object-center opacity-[0.07]" />
+            )}
+          </div>
+          <div className="absolute inset-y-0 left-1/2 w-32 -translate-x-1/2 bg-gradient-to-r from-transparent via-background to-transparent" />
+          <div className="absolute inset-0 bg-gradient-to-b from-background/60 via-transparent to-background" />
+        </div>
+      )}
+
+      <div className="relative px-8 py-6 max-w-5xl mx-auto space-y-6">
         {/* Header */}
         <div className="flex items-center justify-between">
-          <div className="flex items-center gap-3">
-            <Swords className="w-5 h-5 text-primary" />
-            <h1 className="text-xl font-medium text-foreground">Player Comparison</h1>
-          </div>
-          <div className="flex items-center gap-2">
-            {canCompare && (
-              <Button
-                size="sm"
+          <h1 className="text-xl font-medium text-foreground">Compare</h1>
+          {canCompare && (
+            <div className="flex items-center gap-2">
+              <button
                 onClick={() => {
                   setAnalysisData(null);
                   setAnalysisError(null);
                   analyzeMatchupMutation.mutate();
                 }}
                 disabled={analyzeMatchupMutation.isPending}
-                className="flex items-center gap-1.5"
+                className="text-xs text-foreground/40 hover:text-foreground/70 transition-colors disabled:opacity-30 flex items-center gap-1"
               >
-                <Sparkles className="w-3.5 h-3.5" />
-                Re-analyze
-              </Button>
-            )}
-            <Button
-              variant="outline"
-              size="sm"
-              onClick={() => {
-                setLeftId("");
-                setRightId("");
-                setAnalysisOpen(false);
-                setAnalysisData(null);
-                lastAnalysisKey.current = null;
-              }}
-            >
-              Reset
-            </Button>
-          </div>
+                <RotateCw className={`w-3 h-3 ${analyzeMatchupMutation.isPending ? "animate-spin" : ""}`} />
+                Refresh
+              </button>
+              <span className="text-foreground/10">|</span>
+              <button
+                onClick={() => {
+                  setLeftId("");
+                  setRightId("");
+                  setAnalysisOpen(false);
+                  setAnalysisData(null);
+                  lastAnalysisKey.current = null;
+                }}
+                className="text-xs text-foreground/40 hover:text-foreground/70 transition-colors"
+              >
+                Clear
+              </button>
+            </div>
+          )}
         </div>
 
         {/* Player Selection */}
@@ -540,17 +590,15 @@ export default function ComparePage() {
                       <p className="text-xs uppercase tracking-widest text-foreground/30 mb-2">Player Profiles</p>
                       <ResponsiveContainer width="100%" height={260}>
                         <RadarChart data={normalizedAnalysis.scores.axes}>
-                          <PolarGrid stroke="currentColor" className="text-foreground/8" />
+                          <PolarGrid stroke="#363436" />
                           <PolarAngleAxis
                             dataKey="axis"
-                            tick={{ fill: "currentColor", fontSize: 11 }}
-                            className="text-foreground/50"
+                            tick={{ fill: "#8A8885", fontSize: 11 }}
                           />
                           <PolarRadiusAxis
                             angle={90}
                             domain={[0, 100]}
-                            tick={false}
-                            axisLine={false}
+                            tick={{ fill: "#6A6865", fontSize: 9 }}
                           />
                           <Radar
                             name={leftPlayer?.name ?? "Player A"}
@@ -572,10 +620,11 @@ export default function ComparePage() {
                           <Legend wrapperStyle={{ fontSize: "12px" }} iconSize={10} />
                           <Tooltip
                             contentStyle={{
-                              backgroundColor: "var(--background)",
-                              border: "1px solid var(--foreground-10)",
+                              backgroundColor: "#1E1D1F",
+                              border: "1px solid #363436",
                               borderRadius: "8px",
                               fontSize: "12px",
+                              color: "#E8E6E3",
                             }}
                           />
                         </RadarChart>
@@ -605,8 +654,8 @@ export default function ComparePage() {
               </>
             )}
 
-            {/* Head-to-head insights */}
-            {matchupInsights.length > 0 && (
+            {/* Head-to-head insights — only after analysis finishes */}
+            {!analyzeMatchupMutation.isPending && matchupInsights.length > 0 && (
               <div className="pt-2">
                 <p className="text-xs uppercase tracking-widest text-foreground/30 mb-2">Head-to-Head</p>
                 <div className="flex flex-wrap gap-x-4 gap-y-1">
