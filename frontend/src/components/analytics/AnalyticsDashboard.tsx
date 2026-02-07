@@ -944,12 +944,12 @@ export function AnalyticsDashboard({ sessionId, onSeekToTime, playerName }: Anal
             <h2 className="text-sm font-semibold text-[#E8E6E3]">Advanced Shot Analysis</h2>
             <p className="text-[10px] text-[#8A8885] mt-0.5">
               {runpodMutation.isPending
-                ? "Running analysis on RunPod GPU..."
+                ? "Running advanced shot analysis + 3D shot reconstruction on RunPod GPU (~10 minutes)..."
                 : runpodArtifacts.length > 0
                 ? `${runpodArtifacts.length} artifact(s) available`
                 : runpodLoading
                 ? "Checking for results..."
-                : "Waiting for analysis to complete. Polling every 30s."}
+                : "Waiting for advanced shot analysis + 3D shot reconstruction. Polling every 30s."}
             </p>
           </div>
           <Button
@@ -983,8 +983,8 @@ export function AnalyticsDashboard({ sessionId, onSeekToTime, playerName }: Anal
             )}
             <p className="text-xs text-[#8A8885] text-center max-w-xs">
               {runpodMutation.isPending
-                ? "Processing video on RunPod GPU. This may take a few minutes..."
-                : "Analysis results will appear here automatically. Polling every 30 seconds."}
+                ? "Processing video on RunPod GPU for advanced shot analysis and 3D shot reconstruction. This usually takes about 10 minutes."
+                : "Analysis and 3D reconstruction results will appear here automatically. Typical runtime is about 10 minutes. Polling every 30 seconds."}
             </p>
           </div>
         ) : (

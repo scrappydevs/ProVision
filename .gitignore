@@ -58,6 +58,8 @@ Thumbs.db
 *.log
 npm-debug.log*
 pnpm-debug.log*
+backend/src/api/services/logs/
+backend/src/api/services/stroke_run_logs/
 
 # Package lock (root level, not needed — frontend uses pnpm-lock)
 /package-lock.json
