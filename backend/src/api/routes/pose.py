@@ -94,11 +94,11 @@ def process_pose_analysis(session_id: str, video_path: str, video_url: str, targ
 
         print(f"[PoseAnalysis] Extracted pose data from {len(pose_frames)} frames")
 
-        # Store pose data in database
+        # Store pose data in database - batch insert for performance
+        pose_records = []
         for pose_frame in pose_frames:
             pose_dict = processor.pose_frame_to_dict(pose_frame)
-
-            supabase.table("pose_analysis").insert({
+            pose_records.append({
                 "session_id": session_id,
                 "frame_number": pose_dict['frame_number'],
                 "timestamp": pose_dict['timestamp'],
@@ -106,7 +106,14 @@ def process_pose_analysis(session_id: str, video_path: str, video_url: str, targ
                 "keypoints": pose_dict['keypoints'],
                 "joint_angles": pose_dict['joint_angles'],
                 "body_metrics": pose_dict['body_metrics']
-            }).execute()
+            })
+        
+        # Insert in batches of 100 to avoid connection timeout
+        batch_size = 100
+        for i in range(0, len(pose_records), batch_size):
+            batch = pose_records[i:i + batch_size]
+            supabase.table("pose_analysis").insert(batch).execute()
+            print(f"[PoseAnalysis] Inserted batch {i//batch_size + 1}/{(len(pose_records) + batch_size - 1)//batch_size}")
 
         # Generate pose overlay video
         print(f"[PoseAnalysis] Generating pose overlay video for session: {session_id}")
