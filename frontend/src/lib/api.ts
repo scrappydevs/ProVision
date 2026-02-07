@@ -1114,5 +1114,26 @@ export const getClipStreamingUrl = (clipId: string) =>
     expires: string;
   }>(`/api/youtube-clips/${clipId}/streaming-url`);
 
+// Key Moments
+export interface KeyMoment {
+  id: string;
+  session_id: string;
+  start_frame: number;
+  end_frame: number;
+  start_time: number;
+  end_time: number;
+  moment_type: "rally" | "point" | "stroke" | "serve";
+  intensity: number;
+  label?: string;
+  metadata?: Record<string, unknown>;
+  created_at?: string;
+}
+
+export const getKeyMoments = (sessionId: string) =>
+  api.get<KeyMoment[]>(`/api/sessions/${sessionId}/key-moments`);
+
+export const recomputeKeyMoments = (sessionId: string) =>
+  api.post<KeyMoment[]>(`/api/sessions/${sessionId}/key-moments/recompute`);
+
 export { api };
 export default api;
