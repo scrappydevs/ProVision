@@ -361,21 +361,28 @@ class PoseProcessor:
                     if opponent_center and len(keypoints_data) > 1:
                         # Find closest to opponent center (excluding player_idx)
                         opp_idx = self._find_closest_player(results, opponent_center, exclude_indices=[player_idx])
-                        if frame_number == 0:
-                            # Debug: show all detection centers
-                            print(f"[PoseProcessor] Frame 0 debug:")
-                            print(f"  Selected opponent center: {opponent_center}")
-                            for idx, box in enumerate(results[0].boxes):
-                                bbox = box.xyxy[0].cpu().numpy()
-                                center_x = (bbox[0] + bbox[2]) / 2
-                                center_y = (bbox[1] + bbox[3]) / 2
-                                dist = math.sqrt((center_x - opponent_center["x"]) ** 2 + (center_y - opponent_center["y"]) ** 2)
-                                print(f"  Detection {idx}: center=({center_x:.1f}, {center_y:.1f}), distance={dist:.1f}")
-                            print(f"  Matched: player=idx{player_idx}, opponent=idx{opp_idx}")
+                        
+                        # Validate the match distance - if too far, the selected opponent isn't in frame
+                        if opp_idx is not None:
+                            bbox = results[0].boxes[opp_idx].xyxy[0].cpu().numpy()
+                            center_x = (bbox[0] + bbox[2]) / 2
+                            center_y = (bbox[1] + bbox[3]) / 2
+                            dist = math.sqrt((center_x - opponent_center["x"]) ** 2 + (center_y - opponent_center["y"]) ** 2)
+                            
+                            if dist > 200:  # More than 200px away - likely wrong person
+                                print(f"[PoseProcessor] WARNING: Closest opponent match is {dist:.0f}px away (> 200px threshold)")
+                                print(f"  Selected opponent center: ({opponent_center['x']:.1f}, {opponent_center['y']:.1f})")
+                                print(f"  Matched detection center: ({center_x:.1f}, {center_y:.1f})")
+                                print(f"  Skipping opponent tracking - selected person not in frame")
+                                opp_idx = None  # Don't track wrong person
+                                opponent_center = None  # Stop trying to track opponent
+                        
+                        if frame_number == 0 and opp_idx is not None:
+                            print(f"[PoseProcessor] Frame 0: Opponent matched successfully at idx {opp_idx}")
+                        
                         if opp_idx is None and len(keypoints_data) > 1:
-                            # Fallback: pick any other person
-                            opp_idx = 1 if player_idx == 0 else 0
-                            print(f"[PoseProcessor] WARNING: Could not find opponent near initial center, using fallback idx {opp_idx}")
+                            # Fallback disabled - don't track wrong person
+                            pass
                     elif len(keypoints_data) > 1:
                         # No opponent selected - pick the other person
                         opp_idx = 1 if player_idx == 0 else 0
