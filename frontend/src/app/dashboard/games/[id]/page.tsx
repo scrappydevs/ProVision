@@ -1385,17 +1385,24 @@ export default function GameViewerPage() {
                   >
                     <Scissors className="w-3.5 h-3.5" />
                   </button>
-                  <button
-                    onClick={() => {
-                      const rates = [0.25, 0.5, 1, 1.5, 2];
-                      const next = rates[(rates.indexOf(playbackRate) + 1) % rates.length];
-                      setPlaybackRate(next);
-                      if (videoRef.current) videoRef.current.playbackRate = next;
-                    }}
-                    className="text-[10px] px-1.5 py-0.5 rounded text-[#9B7B5B] hover:bg-[#2D2C2E] transition-colors font-mono"
-                  >
-                    {playbackRate}x
-                  </button>
+                  <div className="flex items-center gap-1">
+                    <span className="text-[10px] text-[#9B7B5B] font-mono w-7 text-right">{playbackRate}x</span>
+                    <input
+                      type="range"
+                      min={0}
+                      max={4}
+                      step={1}
+                      value={[0.25, 0.5, 1, 1.5, 2].indexOf(playbackRate)}
+                      onChange={(e) => {
+                        const rates = [0.25, 0.5, 1, 1.5, 2];
+                        const rate = rates[parseInt(e.target.value)];
+                        setPlaybackRate(rate);
+                        if (videoRef.current) videoRef.current.playbackRate = rate;
+                      }}
+                      className="w-14 h-1 accent-[#9B7B5B] cursor-pointer"
+                      title={`Speed: ${playbackRate}x`}
+                    />
+                  </div>
                   <Button variant="ghost" size="icon" className="h-7 w-7" onClick={() => setIsMuted((m) => !m)}>{isMuted ? <VolumeX className="w-3 h-3" /> : <Volume2 className="w-3 h-3" />}</Button>
                   <span className="text-[10px] text-[#6A6865] w-10 text-right tabular-nums">{fmtTime(duration)}</span>
                 </div>

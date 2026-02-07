@@ -30,11 +30,11 @@ const RESTITUTION = 0.85;
 
 // Camera preset positions: [position, target]
 const CAMERA_PRESETS: Record<CameraPreset, { pos: [number, number, number]; label: string }> = {
-  default: { pos: [2.2, 2.2, 2.2], label: "3D" },
-  top:     { pos: [0, 4.0, 0.01], label: "Top" },
-  side:    { pos: [0, 1.2, 3.5], label: "Side" },
-  end:     { pos: [4.0, 1.5, 0], label: "End" },
-  player:  { pos: [-3.0, 1.3, 0], label: "Player" },
+  default: { pos: [2.6, 2.6, 2.6], label: "3D" },
+  top:     { pos: [0, 4.5, 0.01], label: "Top" },
+  side:    { pos: [0, 1.4, 4.0], label: "Side" },
+  end:     { pos: [4.5, 1.8, 0], label: "End" },
+  player:  { pos: [-3.5, 1.5, 0], label: "Player" },
 };
 
 function Table({ onClick }: { onClick?: (point: THREE.Vector3) => void }) {
@@ -88,7 +88,7 @@ function Table({ onClick }: { onClick?: (point: THREE.Vector3) => void }) {
       ))}
       {/* Floor */}
       <mesh position={[0, -0.01, 0]} rotation={[-Math.PI / 2, 0, 0]} receiveShadow>
-        <planeGeometry args={[10, 7]} />
+        <planeGeometry args={[8, 5]} />
         <meshStandardMaterial color="#1E1D1F" roughness={0.9} />
       </mesh>
     </group>
@@ -346,18 +346,14 @@ function videoToTable(
   py: number,
   bounds: TrajectoryBounds,
 ): [number, number, number] {
-  const iqrX = bounds.xP75 - bounds.xP25 || 1;
-  const iqrY = bounds.yP75 - bounds.yP25 || 1;
+  // X (along table length): use wider P10-P90 range so the ball path
+  // is less compressed horizontally and uses more of the table.
+  const wideRangeX = (bounds.xP75 - bounds.xP25) * 1.6 || 1; // approximate P10-P90
+  const midX = (bounds.xP25 + bounds.xP75) / 2;
+  const nx = (px - midX) / wideRangeX; // ~-0.5 to +0.5 for the central 80%
+  const x = nx * TABLE_W * 1.3; // 1.3x table width so rallies span the table well
 
-  // X: P25→-TABLE_W/2, P75→+TABLE_W/2. Points outside IQR extend beyond table.
-  const nx = (px - bounds.xP25) / iqrX; // 0 at P25, 1 at P75
-  const x = (nx - 0.5) * TABLE_W; // centered: -W/2 to +W/2 for IQR
-
-  // Z (depth): same approach with Y IQR
-  const ny = (py - bounds.yP25) / iqrY;
-  const z = (ny - 0.5) * TABLE_D;
-
-  // Height: deviation above the baseline at this X position
+  // Height: deviation above the per-bucket baseline
   const rangeX = bounds.maxX - bounds.minX || 1;
   const bucketIdx = Math.min(
     bounds.bucketCount - 1,
@@ -366,16 +362,28 @@ function videoToTable(
   const baselineY = bounds.baselineByBucket[bucketIdx];
   const heightPx = Math.max(0, baselineY - py); // pixels above baseline (video Y is inverted)
   const fullRange = bounds.maxY - bounds.minY || 1;
-  const heightFrac = Math.min(1, heightPx / (fullRange * 0.7));
-  const maxHeight = 0.8; // 80cm max for high lobs/serves
-  const y = SURFACE_Y + 0.02 + Math.sqrt(heightFrac) * maxHeight;
+  const heightFrac = Math.min(1, heightPx / (fullRange * 0.5));
+  const maxHeight = 0.35; // 35cm max — realistic ping pong arc height
+  const y = SURFACE_Y + 0.015 + heightFrac * heightFrac * maxHeight;
+
+  // Z (depth across table): compress — in a spectator view, most
+  // vertical pixel variation is HEIGHT not depth.
+  const fullRangeY = bounds.maxY - bounds.minY || 1;
+  const nyFull = (py - bounds.minY) / fullRangeY; // 0–1 across full Y range
+  const zRaw = (nyFull - 0.5) * TABLE_D;
+  const zLimit = TABLE_D * 0.6;
+  const z = Math.abs(zRaw) > zLimit
+    ? Math.sign(zRaw) * (zLimit + Math.tanh((Math.abs(zRaw) - zLimit) / 0.3) * 0.3)
+    : zRaw;
 
   return [x, y, z];
 }
 
 /**
  * Generate smooth 3D curve points for an arc using CatmullRom interpolation.
- * Returns ~20 points per arc for rendering.
+ * After generating the spline, enforces net clearance: if the arc crosses
+ * x=0, the ball must arc over the net — we inject height via a parabolic
+ * bump centered at the net crossing point.
  */
 function arcTo3DCurve(
   arc: ArcSegment,
@@ -383,20 +391,82 @@ function arcTo3DCurve(
 ): [number, number, number][] {
   const pts = arc.points;
   if (pts.length < 2) return [];
-  if (pts.length === 2) {
-    return [videoToTable(pts[0].x, pts[0].y, bounds), videoToTable(pts[1].x, pts[1].y, bounds)];
-  }
 
   // Map all arc points to 3D
-  const controlPoints = pts.map(p => {
-    const [x, y, z] = videoToTable(p.x, p.y, bounds);
-    return new THREE.Vector3(x, y, z);
-  });
+  const mapped = pts.map(p => videoToTable(p.x, p.y, bounds));
 
-  // Use CatmullRom spline through the control points
-  const curve = new THREE.CatmullRomCurve3(controlPoints, false, "centripetal", 0.5);
-  const subdivisions = Math.max(10, pts.length * 4);
-  return curve.getPoints(subdivisions).map(v => [v.x, v.y, v.z] as [number, number, number]);
+  if (mapped.length === 2) {
+    // Even with only 2 points, enforce net arc
+    return enforceNetArc(mapped);
+  }
+
+  const controlPoints = mapped.map(([x, y, z]) => new THREE.Vector3(x, y, z));
+
+  // CatmullRom with moderate tension
+  const curve = new THREE.CatmullRomCurve3(controlPoints, false, "catmullrom", 0.3);
+  const subdivisions = Math.max(10, pts.length * 3);
+  const raw = curve.getPoints(subdivisions);
+
+  // Clamp scene bounds
+  const X_LIMIT = TABLE_W * 2.0;
+  const Z_LIMIT = TABLE_D * 1.5;
+  const Y_MAX = SURFACE_Y + 0.6;
+
+  const clamped: [number, number, number][] = raw.map(v => [
+    Math.max(-X_LIMIT, Math.min(X_LIMIT, v.x)),
+    Math.max(SURFACE_Y, Math.min(Y_MAX, v.y)),
+    Math.max(-Z_LIMIT, Math.min(Z_LIMIT, v.z)),
+  ]);
+
+  // Enforce net clearance arc
+  return enforceNetArc(clamped);
+}
+
+/**
+ * If the curve crosses x=0 (the net), ensure the ball arcs over it.
+ * Adds a parabolic height bump so the crossing point is at least
+ * NET_H + margin above the table surface.
+ */
+function enforceNetArc(
+  points: [number, number, number][]
+): [number, number, number][] {
+  if (points.length < 2) return points;
+
+  // Find the net crossing index
+  let crossIdx = -1;
+  for (let i = 1; i < points.length; i++) {
+    if ((points[i - 1][0] < 0 && points[i][0] >= 0) ||
+        (points[i - 1][0] > 0 && points[i][0] <= 0)) {
+      crossIdx = i;
+      break;
+    }
+  }
+
+  if (crossIdx < 0) return points; // no crossing
+
+  // Interpolate the Y (height) at the crossing
+  const prevX = points[crossIdx - 1][0];
+  const curX = points[crossIdx][0];
+  const t = Math.abs(prevX) / (Math.abs(prevX) + Math.abs(curX) || 1);
+  const yAtCross = points[crossIdx - 1][1] + t * (points[crossIdx][1] - points[crossIdx - 1][1]);
+
+  const minClearance = SURFACE_Y + NET_H + 0.04; // net top + 4cm margin
+  if (yAtCross >= minClearance) return points; // already clears
+
+  // Need to add height. Apply a parabolic bump centered at the crossing,
+  // fading to zero at the arc endpoints. This creates a natural arc shape.
+  const peakBoost = minClearance - yAtCross + 0.06; // extra 6cm for a nice arc
+  const crossT = crossIdx / (points.length - 1); // 0–1 position of crossing
+
+  return points.map((p, i) => {
+    const ti = i / (points.length - 1);
+    // Parabolic bump: peaks at crossT, zero at start and end
+    // bump(t) = 4 * h * (t - 0)(t_end - t) / (t_end)^2, shifted to peak at crossT
+    const distFromCross = (ti - crossT);
+    const width = Math.max(crossT, 1 - crossT) * 1.2; // how wide the bump is
+    const bump = Math.max(0, 1 - (distFromCross / width) ** 2) * peakBoost;
+    return [p[0], p[1] + bump, p[2]] as [number, number, number];
+  });
 }
 
 /**
