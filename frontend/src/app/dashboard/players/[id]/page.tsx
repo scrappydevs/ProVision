@@ -7,8 +7,8 @@ import { Card, CardBody, CardHeader, CardFooter, ScrollShadow } from "@heroui/re
 import {
   ArrowLeft, Edit2, Loader2, Search, Upload, Plus, Play,
   Clock, CheckCircle, XCircle, Gamepad2, Calendar, ChevronRight,
-  RefreshCw, Trophy, Scissors, Film,
-  Video, Clapperboard, Trash2,
+  RefreshCw, Film,
+  Video, Trash2,
 } from "lucide-react";
 import { motion, AnimatePresence } from "framer-motion";
 import {
@@ -18,7 +18,7 @@ import {
   usePlayerInsights, useGeneratePlayerDescription,
 } from "@/hooks/usePlayers";
 import { GameTimeline } from "@/components/players/GameTimeline";
-import { createSession, GamePlayerInfo, RecordingType, Recording } from "@/lib/api";
+import { createSession, GamePlayerInfo, Recording } from "@/lib/api";
 import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { playerKeys } from "@/hooks/usePlayers";
 import { sessionKeys } from "@/hooks/useSessions";
@@ -26,7 +26,6 @@ import ClipSelector from "@/components/players/ClipSelector";
 import { useAIChat } from "@/contexts/AIChatContext";
 
 type Tab = "recordings" | "games";
-type RecordingFilter = "all" | RecordingType;
 type InsightKind = "strength" | "weakness";
 
 type InsightClip = {
@@ -48,19 +47,6 @@ type Insight = {
   clips: InsightClip[];
 };
 
-const RECORDING_TYPES: { value: RecordingType; label: string; icon: React.ReactNode }[] = [
-  { value: "match", label: "Match", icon: <Trophy className="w-3.5 h-3.5" /> },
-  { value: "informal", label: "Informal", icon: <Video className="w-3.5 h-3.5" /> },
-  { value: "clip", label: "Clip", icon: <Scissors className="w-3.5 h-3.5" /> },
-  { value: "highlight", label: "Highlight", icon: <Clapperboard className="w-3.5 h-3.5" /> },
-];
-
-const TYPE_COLORS: Record<RecordingType, string> = {
-  match: "bg-[#9B7B5B]/20 text-primary",
-  informal: "bg-[#6B8E6B]/20 text-[#6B8E6B]",
-  clip: "bg-[#7B8ECE]/20 text-[#7B8ECE]",
-  highlight: "bg-[#CE7B9B]/20 text-[#CE7B9B]",
-};
 
 export default function PlayerProfilePage() {
   const params = useParams();
@@ -69,7 +55,6 @@ export default function PlayerProfilePage() {
   const queryClient = useQueryClient();
 
   const [activeTab, setActiveTab] = useState<Tab>("recordings");
-  const [recordingFilter, setRecordingFilter] = useState<RecordingFilter>("all");
   const [searchQuery, setSearchQuery] = useState("");
   const [statusFilter, setStatusFilter] = useState<string>("");
   const [uploadOpen, setUploadOpen] = useState(false);
@@ -78,7 +63,6 @@ export default function PlayerProfilePage() {
   const [selectedFile, setSelectedFile] = useState<File | null>(null);
   const [gameName, setGameName] = useState("");
   const [gameDate, setGameDate] = useState(new Date().toISOString().split("T")[0]);
-  const [recordingType, setRecordingType] = useState<RecordingType>("match");
   const [recordingDescription, setRecordingDescription] = useState("");
   const [analyzingRecordingId, setAnalyzingRecordingId] = useState<string | null>(null);
   const [editingDescription, setEditingDescription] = useState(false);
@@ -89,10 +73,7 @@ export default function PlayerProfilePage() {
     search: searchQuery || undefined,
     status: statusFilter || undefined,
   });
-  const { data: recordings, isLoading: recordingsLoading } = usePlayerRecordings(
-    playerId,
-    recordingFilter === "all" ? undefined : recordingFilter
-  );
+  const { data: recordings, isLoading: recordingsLoading } = usePlayerRecordings(playerId);
   const { data: playerInsights } = usePlayerInsights(playerId);
   const latestGame = useMemo(() => {
     if (!games?.length) return null;
@@ -197,12 +178,12 @@ export default function PlayerProfilePage() {
   const handleUpload = () => {
     if (!selectedFile || !gameName.trim()) return;
 
-    if (activeTab === "recordings" || recordingType !== "match") {
+    if (activeTab === "recordings") {
       const formData = new FormData();
       formData.append("video", selectedFile);
       formData.append("title", gameName.trim());
       formData.append("player_id", playerId);
-      formData.append("type", recordingType);
+      formData.append("type", "match");
       if (recordingDescription.trim()) {
         formData.append("description", recordingDescription.trim());
       }
@@ -732,21 +713,6 @@ export default function PlayerProfilePage() {
                 Add
               </button>
             </div>
-            <div className="flex items-center gap-2 shrink-0">
-              {(["all", "match", "informal", "clip"] as const).map((f) => (
-                <button
-                  key={f}
-                  onClick={() => setRecordingFilter(f)}
-                  className={`text-[10px] px-2.5 py-1.5 rounded-full transition-all font-medium uppercase tracking-[0.15em] whitespace-nowrap ${
-                    recordingFilter === f
-                      ? "bg-primary/15 text-primary"
-                      : "text-foreground/40 hover:text-foreground/70 hover:bg-foreground/5"
-                  }`}
-                >
-                  {f === "all" ? "All" : f.charAt(0).toUpperCase() + f.slice(1)}
-                </button>
-              ))}
-            </div>
           </div>
 
           {/* Recording cards — larger with more details */}
@@ -794,8 +760,6 @@ export default function PlayerProfilePage() {
                   <div className="flex-1 min-w-0 pt-1 relative z-10">
                     <p className="text-base font-semibold text-foreground truncate mb-1.5">{rec.title}</p>
                     <div className="flex items-center gap-2.5 mb-2">
-                      <span className="text-[10px] uppercase tracking-[0.2em] text-primary font-semibold px-2 py-0.5 rounded-md bg-primary/20">{rec.type}</span>
-                      <span className="w-1 h-1 rounded-full bg-foreground/30" />
                       <span className="text-xs text-foreground/60">
                         {new Date(rec.created_at).toLocaleDateString("en-US", { month: "short", day: "numeric" })}
                       </span>
@@ -848,32 +812,12 @@ export default function PlayerProfilePage() {
 
               <div className="space-y-4">
                 <div>
-                  <label className="block text-[10px] uppercase tracking-[0.2em] text-foreground/50 mb-2">Type</label>
-                  <div className="grid grid-cols-4 gap-2">
-                    {RECORDING_TYPES.map((rt) => (
-                      <button
-                        key={rt.value}
-                        onClick={() => setRecordingType(rt.value)}
-                        className={`flex flex-col items-center gap-1.5 px-2 py-2.5 rounded-lg border transition-all text-[11px] ${
-                          recordingType === rt.value
-                            ? "border-[#9B7B5B] bg-[#9B7B5B]/10 text-primary"
-                            : "border-content3 text-foreground/40 hover:border-[#9B7B5B]/50 hover:text-foreground/60"
-                        }`}
-                      >
-                        {rt.icon}
-                        {rt.label}
-                      </button>
-                    ))}
-                  </div>
-                </div>
-
-                <div>
                   <label className="block text-[10px] uppercase tracking-[0.2em] text-foreground/50 mb-1.5">Title</label>
                   <input
                     type="text"
                     value={gameName}
                     onChange={(e) => setGameName(e.target.value)}
-                    placeholder={recordingType === "match" ? "Opponent, round" : "Practice session"}
+                    placeholder="Opponent, round"
                     className="w-full px-3 py-2 bg-background rounded-lg text-foreground placeholder-muted-foreground text-sm focus:outline-none focus:ring-1 focus:ring-primary/50"
                   />
                 </div>

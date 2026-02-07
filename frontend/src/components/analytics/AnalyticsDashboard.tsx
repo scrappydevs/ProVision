@@ -8,7 +8,7 @@ import { runRunpodDashboard, type RunpodDashboardArtifact } from "@/lib/api";
 import { Button } from "@/components/ui/button";
 import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { Loader2, AlertCircle, Activity, Zap, Play, RotateCcw } from "lucide-react";
-import { LineChart, Line, BarChart, Bar, ScatterChart, Scatter, RadarChart, PolarGrid, PolarAngleAxis, PolarRadiusAxis, Radar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, Legend, Cell, Area, AreaChart } from "recharts";
+import { LineChart, Line, ScatterChart, Scatter, RadarChart, PolarGrid, PolarAngleAxis, PolarRadiusAxis, Radar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, Legend, Area, AreaChart } from "recharts";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
 interface AnalyticsDashboardProps {
@@ -372,38 +372,17 @@ export function AnalyticsDashboard({ sessionId, onSeekToTime, playerName }: Anal
 
   const speedInsight = useMemo(() => {
     const cvSpeed = ballSpeed.avg > 0 ? ballSpeed.stddev / ballSpeed.avg : 0;
-    const parts: string[] = [];
-    if (cvSpeed > 0.6) {
-      parts.push("Wide speed variation across the match — mixing aggressive attacks with controlled placements. This tactical variety is effective at keeping opponents off-balance.");
-    } else if (cvSpeed < 0.3) {
-      parts.push("Very consistent ball speed throughout — solid baseline power but potentially predictable. Adding speed changes could create more openings.");
-    } else {
-      parts.push("Moderate speed variation — good balance between power shots and placement.");
-    }
-    if (ballSpeed.max > ballSpeed.avg * 3) {
-      parts.push(`Peak speed is ${(ballSpeed.max / ballSpeed.avg).toFixed(1)}x the average, showing the ability to generate explosive power on key shots.`);
-    }
-    return parts.join(" ");
+    if (cvSpeed > 0.6) return "Wide speed variation — mixing aggressive attacks with controlled placements.";
+    if (cvSpeed < 0.3) return "Very consistent ball speed — solid power but potentially predictable.";
+    return "Moderate speed variation — good balance between power and placement.";
   }, [ballSpeed]);
 
   const movementInsight = useMemo(() => {
     const avgVel = movement.avg_velocity;
-    const parts: string[] = [];
-    if (avgVel < 1) {
-      parts.push(`Minimal lateral movement — ${pName} stays planted and relies on reach rather than footwork. Better split-stepping and recovery movement would improve court coverage.`);
-    } else if (avgVel > 3) {
-      parts.push(`Excellent court coverage with high movement speed. ${pName} is reading the ball early and getting into position well ahead of contact.`);
-    } else {
-      parts.push(`Solid movement patterns with efficient positioning between shots.`);
-    }
-    if (contactAnalysis && contactAnalysis.total > 3) {
-      const highPct = Math.round((contactAnalysis.highCount / contactAnalysis.total) * 100);
-      const lowPct = Math.round((contactAnalysis.lowCount / contactAnalysis.total) * 100);
-      if (highPct > 40) parts.push(`${highPct}% of contacts are above average height — taking the ball early and aggressively.`);
-      if (lowPct > 40) parts.push(`${lowPct}% of contacts are below average height — often retrieving low balls, which limits attacking options.`);
-    }
-    return parts.join(" ");
-  }, [movement, contactAnalysis, pName]);
+    if (avgVel < 1) return `Minimal lateral movement — ${pName} relies on reach rather than footwork.`;
+    if (avgVel > 3) return `Excellent court coverage — ${pName} reads the ball early and positions well.`;
+    return "Solid movement patterns with efficient positioning between shots.";
+  }, [movement, pName]);
 
   const jointInsight = useMemo(() => {
     if (playerFrames.length === 0) return null;
@@ -536,7 +515,7 @@ export function AnalyticsDashboard({ sessionId, onSeekToTime, playerName }: Anal
   }));
 
   return (
-    <div className="p-4 space-y-4 h-full overflow-y-auto">
+    <div className="p-4 space-y-3 h-full overflow-y-auto">
       {/* Header Stats — inline styled */}
       <div className="space-y-3">
         <div className="flex items-baseline gap-6 flex-wrap">
@@ -565,6 +544,13 @@ export function AnalyticsDashboard({ sessionId, onSeekToTime, playerName }: Anal
               <span style={{ fontSize: 12, color: '#8A8885', marginLeft: 6 }}>consistency</span>
             </div>
           )}
+          {analytics.ball_analytics.spin?.estimate && (
+            <div className="flex items-center gap-1.5">
+              <Zap className="w-3.5 h-3.5 text-[#9B7B5B]" />
+              <span style={{ fontSize: 12, color: '#8A8885' }}>Spin:</span>
+              <span style={{ fontSize: 14, fontWeight: 600, color: '#E8E6E3' }}>{analytics.ball_analytics.spin.estimate}</span>
+            </div>
+          )}
         </div>
 
         {shotMix && (
@@ -584,23 +570,22 @@ export function AnalyticsDashboard({ sessionId, onSeekToTime, playerName }: Anal
           </div>
         )}
 
-        {/* AI Overview Insight */}
-        {overviewInsight && (
-          <p style={{ fontSize: 13, color: '#8A8885', lineHeight: 1.6, margin: 0 }}>
-            {overviewInsight}
-          </p>
-        )}
       </div>
 
       {/* Ball Speed Over Time */}
-      <div className="bg-[#282729]/40 backdrop-blur-xl rounded-xl p-4 border border-[#363436]/30">
-        <h3 className="text-xs font-medium text-[#E8E6E3] mb-1">Ball Speed Timeline</h3>
+      <div className="bg-[#282729]/40 backdrop-blur-xl rounded-xl p-3 border border-[#363436]/30">
+        <div className="flex items-center gap-2 mb-1">
+          <h3 className="text-xs font-medium text-[#E8E6E3]">Ball Speed Timeline</h3>
+          <span className="text-[9px] px-1.5 py-0.5 rounded-full bg-[#5B9B7B]/20 text-[#5B9B7B]">Slow {ballSpeed.distribution.slow}</span>
+          <span className="text-[9px] px-1.5 py-0.5 rounded-full bg-[#9B7B5B]/20 text-[#9B7B5B]">Med {ballSpeed.distribution.medium}</span>
+          <span className="text-[9px] px-1.5 py-0.5 rounded-full bg-[#C45C5C]/20 text-[#C45C5C]">Fast {ballSpeed.distribution.fast}</span>
+        </div>
         {speedInsight && (
-          <p style={{ fontSize: 12, color: '#8A8885', lineHeight: 1.5, margin: '0 0 8px 0' }}>
+          <p style={{ fontSize: 12, color: '#8A8885', lineHeight: 1.5, margin: '0 0 6px 0' }}>
             {speedInsight}
           </p>
         )}
-        <ResponsiveContainer width="100%" height={200}>
+        <ResponsiveContainer width="100%" height={160}>
           <AreaChart data={ballSpeedTimeline} onClick={handleTimelineClick}>
             <defs>
               <linearGradient id="speedGradient" x1="0" y1="0" x2="0" y2="1">
@@ -645,14 +630,14 @@ export function AnalyticsDashboard({ sessionId, onSeekToTime, playerName }: Anal
       {jointAngleData.length > 0 && (
         <div className="grid grid-cols-2 gap-3">
           {/* Joint Angles Timeline */}
-          <div className="bg-[#282729]/40 backdrop-blur-xl rounded-xl p-4 border border-[#363436]/30">
+          <div className="bg-[#282729]/40 backdrop-blur-xl rounded-xl p-3 border border-[#363436]/30">
             <h3 className="text-xs font-medium text-[#E8E6E3] mb-1">Joint Angles Over Time</h3>
             {jointInsight && (
-              <p style={{ fontSize: 12, color: '#8A8885', lineHeight: 1.5, margin: '0 0 8px 0' }}>
+              <p style={{ fontSize: 12, color: '#8A8885', lineHeight: 1.5, margin: '0 0 6px 0' }}>
                 {jointInsight}
               </p>
             )}
-            <ResponsiveContainer width="100%" height={220}>
+            <ResponsiveContainer width="100%" height={180}>
               <LineChart data={jointAngleData} onClick={handleTimelineClick}>
                 <CartesianGrid strokeDasharray="3 3" stroke="#363436" opacity={0.2} />
                 <XAxis 
@@ -688,11 +673,11 @@ export function AnalyticsDashboard({ sessionId, onSeekToTime, playerName }: Anal
           </div>
 
           {/* Average Joint Angles Radar */}
-          <div className="bg-[#282729]/40 backdrop-blur-xl rounded-xl p-4 border border-[#363436]/30">
-            <h3 className="text-xs font-medium text-[#E8E6E3] mb-3">
+          <div className="bg-[#282729]/40 backdrop-blur-xl rounded-xl p-3 border border-[#363436]/30">
+            <h3 className="text-xs font-medium text-[#E8E6E3] mb-2">
               {hasOpponentData ? "Joint Angle Comparison" : "Average Joint Angles"}
             </h3>
-            <ResponsiveContainer width="100%" height={220}>
+            <ResponsiveContainer width="100%" height={180}>
               <RadarChart data={hasOpponentData ? radarComparisonData : avgJointAngles}>
                 <PolarGrid stroke="#363436" />
                 <PolarAngleAxis
@@ -757,9 +742,9 @@ export function AnalyticsDashboard({ sessionId, onSeekToTime, playerName }: Anal
       {/* Stance Width & Arm Extension */}
       {stanceWidthTimeline.length > 0 && (
         <div className="grid grid-cols-2 gap-3">
-          <div className="bg-[#282729]/40 backdrop-blur-xl rounded-xl p-4 border border-[#363436]/30">
-            <h3 className="text-xs font-medium text-[#E8E6E3] mb-3">Stance Width</h3>
-            <ResponsiveContainer width="100%" height={180}>
+          <div className="bg-[#282729]/40 backdrop-blur-xl rounded-xl p-3 border border-[#363436]/30">
+            <h3 className="text-xs font-medium text-[#E8E6E3] mb-2">Stance Width</h3>
+            <ResponsiveContainer width="100%" height={150}>
               <AreaChart data={stanceWidthTimeline} onClick={handleTimelineClick}>
                 <defs>
                   <linearGradient id="stanceGradient" x1="0" y1="0" x2="0" y2="1">
@@ -789,9 +774,9 @@ export function AnalyticsDashboard({ sessionId, onSeekToTime, playerName }: Anal
             </ResponsiveContainer>
           </div>
 
-          <div className="bg-[#282729]/40 backdrop-blur-xl rounded-xl p-4 border border-[#363436]/30">
-            <h3 className="text-xs font-medium text-[#E8E6E3] mb-3">Arm Extension</h3>
-            <ResponsiveContainer width="100%" height={180}>
+          <div className="bg-[#282729]/40 backdrop-blur-xl rounded-xl p-3 border border-[#363436]/30">
+            <h3 className="text-xs font-medium text-[#E8E6E3] mb-2">Arm Extension</h3>
+            <ResponsiveContainer width="100%" height={150}>
               <LineChart data={armExtensionTimeline} onClick={handleTimelineClick}>
                 <CartesianGrid strokeDasharray="3 3" stroke="#363436" opacity={0.2} />
                 <XAxis dataKey="timeSec" stroke="#8A8885" tick={{ fill: '#6A6865', fontSize: 9 }} tickFormatter={formatSecondsTick} label={{ value: 'Time (s)', position: 'insideBottom', offset: -5, fill: '#8A8885', fontSize: 9 }} />
@@ -813,241 +798,97 @@ export function AnalyticsDashboard({ sessionId, onSeekToTime, playerName }: Anal
         </div>
       )}
 
-      {/* Speed Distribution */}
-      <div className="bg-[#282729]/40 backdrop-blur-xl rounded-xl p-4 border border-[#363436]/30">
-        <h3 className="text-xs font-medium text-[#E8E6E3] mb-3">Speed Distribution</h3>
-        <ResponsiveContainer width="100%" height={200}>
-          <BarChart data={[
-            { range: 'Slow', count: ballSpeed.distribution.slow, fill: '#5B9B7B' },
-            { range: 'Medium', count: ballSpeed.distribution.medium, fill: '#9B7B5B' },
-            { range: 'Fast', count: ballSpeed.distribution.fast, fill: '#C45C5C' },
-          ]}>
-            <CartesianGrid strokeDasharray="3 3" stroke="#363436" opacity={0.2} />
-            <XAxis dataKey="range" stroke="#8A8885" tick={{ fill: '#8A8885', fontSize: 10 }} />
-            <YAxis stroke="#8A8885" tick={{ fill: '#6A6865', fontSize: 10 }} />
-            <Tooltip 
-              cursor={false}
-              contentStyle={{ 
-                backgroundColor: '#1E1D1F', 
-                border: '1px solid #363436',
-                borderRadius: '8px',
-                fontSize: '10px',
-                color: '#E8E6E3'
-              }}
-              labelStyle={{ color: '#E8E6E3' }}
-              itemStyle={{ color: '#E8E6E3' }}
-            />
-            <Bar dataKey="count" radius={[6, 6, 0, 0]}>
-              {[
-                { range: 'Slow', count: ballSpeed.distribution.slow, fill: '#5B9B7B' },
-                { range: 'Medium', count: ballSpeed.distribution.medium, fill: '#9B7B5B' },
-                { range: 'Fast', count: ballSpeed.distribution.fast, fill: '#C45C5C' },
-              ].map((entry, index) => (
-                <Cell key={`cell-${index}`} fill={entry.fill} />
-              ))}
-            </Bar>
-          </BarChart>
-        </ResponsiveContainer>
-      </div>
 
       {/* Rally Analysis */}
       {trajectory.rallies.length > 0 && (
-        <div className="bg-[#282729]/40 backdrop-blur-xl rounded-xl p-4 border border-[#363436]/30">
-          <h3 className="text-xs font-medium text-[#E8E6E3] mb-3">Rally Breakdown</h3>
-          <div className="space-y-2">
+        <div className="bg-[#282729]/40 backdrop-blur-xl rounded-xl p-3 border border-[#363436]/30">
+          <h3 className="text-xs font-medium text-[#E8E6E3] mb-2">Rally Breakdown</h3>
+          <div className="flex gap-1.5 overflow-x-auto pb-1" style={{ scrollbarWidth: 'thin' }}>
             {trajectory.rallies.map((rally, idx) => (
-              <div key={idx} className="flex items-center gap-3 p-2 rounded-lg bg-[#1E1D1F]/40">
-                <div className="text-[10px] text-[#9B7B5B] font-medium w-16">
-                  Rally {idx + 1}
-                </div>
-                <div className="flex-1">
-                  <div className="h-1.5 bg-[#363436] rounded-full overflow-hidden">
-                    <div 
-                      className="h-full bg-[#9B7B5B] transition-all"
-                      style={{ width: `${(rally.length / Math.max(...trajectory.rallies.map(r => r.length))) * 100}%` }}
-                    />
-                  </div>
-                </div>
-                <div className="text-[10px] text-[#8A8885]">
-                  {rally.length} frames
-                </div>
-                <div className="text-[10px] text-[#9B7B5B] font-medium">
-                  {rally.avg_speed.toFixed(1)} px/f
-                </div>
+              <div key={idx} className="flex-shrink-0 flex items-center gap-1.5 px-2 py-1 rounded-full bg-[#1E1D1F]/60 border border-[#363436]/30">
+                <span className="text-[9px] text-[#9B7B5B] font-medium">R{idx + 1}</span>
+                <span className="text-[9px] text-[#8A8885]">{rally.length}f</span>
+                <span className="text-[9px] text-[#9B7B5B]">{rally.avg_speed.toFixed(1)}</span>
               </div>
             ))}
           </div>
         </div>
       )}
 
-      {/* Ball Contact Moments */}
-      {contact.contact_moments.length > 0 && (
-        <div className="bg-[#282729]/40 backdrop-blur-xl rounded-xl p-4 border border-[#363436]/30">
-          <h3 className="text-xs font-medium text-[#E8E6E3] mb-3">Ball Contact Analysis</h3>
-          <div className="grid grid-cols-3 gap-4 mb-3">
-            <div>
-              <div className="text-[10px] text-[#8A8885]">Total Contacts</div>
-              <div className="text-2xl font-bold text-[#9B7B5B]">{contact.contact_moments.length}</div>
+      {/* Contact + Velocity (2-col) */}
+      {(contact.contact_moments.length > 0 || velocityTimeline.length > 0) && (
+        <div className="grid grid-cols-2 gap-3">
+          {contact.contact_moments.length > 0 && (
+            <div className="bg-[#282729]/40 backdrop-blur-xl rounded-xl p-3 border border-[#363436]/30">
+              <h3 className="text-xs font-medium text-[#E8E6E3] mb-2">Ball Contact</h3>
+              <ResponsiveContainer width="100%" height={130}>
+                <ScatterChart onClick={handleTimelineClick}>
+                  <CartesianGrid strokeDasharray="3 3" stroke="#363436" opacity={0.2} />
+                  <XAxis
+                    dataKey="timeSec"
+                    name="Time"
+                    stroke="#8A8885"
+                    tick={{ fill: '#6A6865', fontSize: 9 }}
+                    tickFormatter={formatSecondsTick}
+                  />
+                  <YAxis
+                    dataKey="height"
+                    name="Height"
+                    stroke="#8A8885"
+                    tick={{ fill: '#6A6865', fontSize: 9 }}
+                  />
+                  <Tooltip
+                    contentStyle={{
+                      backgroundColor: '#1E1D1F',
+                      border: '1px solid #363436',
+                      borderRadius: '8px',
+                      fontSize: '10px'
+                    }}
+                    cursor={{ strokeDasharray: '3 3' }}
+                  />
+                  <Scatter
+                    data={contactMomentsTimeline}
+                    fill="#9B7B5B"
+                    opacity={0.7}
+                  />
+                </ScatterChart>
+              </ResponsiveContainer>
             </div>
-            <div>
-              <div className="text-[10px] text-[#8A8885]">Avg Height</div>
-              <div className="text-2xl font-bold text-[#E8E6E3]">
-                {contact.avg_contact_height.toFixed(0)}
-              </div>
-              <div className="text-[9px] text-[#6A6865]">px</div>
-            </div>
-            <div>
-              <div className="text-[10px] text-[#8A8885]">Height Distribution</div>
-              <div className="mt-1 space-y-0.5">
-                {contact.height_distribution.map((dist) => (
-                  <div key={dist.range} className="flex justify-between text-[10px]">
-                    <span className="text-[#8A8885] capitalize">{dist.range}:</span>
-                    <span className="text-[#E8E6E3] font-medium">{dist.count}</span>
-                  </div>
-                ))}
-              </div>
-            </div>
-          </div>
-          
-          {/* Contact moments timeline */}
-          <ResponsiveContainer width="100%" height={140}>
-            <ScatterChart onClick={handleTimelineClick}>
-              <CartesianGrid strokeDasharray="3 3" stroke="#363436" opacity={0.2} />
-              <XAxis 
-                dataKey="timeSec" 
-                name="Time" 
-                stroke="#8A8885" 
-                tick={{ fill: '#6A6865', fontSize: 9 }}
-                tickFormatter={formatSecondsTick}
-              />
-              <YAxis 
-                dataKey="height" 
-                name="Height" 
-                stroke="#8A8885" 
-                tick={{ fill: '#6A6865', fontSize: 9 }}
-              />
-              <Tooltip 
-                contentStyle={{ 
-                  backgroundColor: '#1E1D1F', 
-                  border: '1px solid #363436',
-                  borderRadius: '8px',
-                  fontSize: '10px'
-                }}
-                cursor={{ strokeDasharray: '3 3' }}
-              />
-              <Scatter 
-                data={contactMomentsTimeline} 
-                fill="#9B7B5B" 
-                opacity={0.7}
-              />
-            </ScatterChart>
-          </ResponsiveContainer>
-        </div>
-      )}
-
-      {/* Player Velocity */}
-      {velocityTimeline.length > 0 && (
-        <div className="bg-[#282729]/40 backdrop-blur-xl rounded-xl p-4 border border-[#363436]/30">
-          <h3 className="text-xs font-medium text-[#E8E6E3] mb-1">Player Velocity</h3>
-          {movementInsight && (
-            <p style={{ fontSize: 12, color: '#8A8885', lineHeight: 1.5, margin: '0 0 8px 0' }}>
-              {movementInsight}
-            </p>
           )}
-          <ResponsiveContainer width="100%" height={180}>
-            <AreaChart data={velocityTimeline} onClick={handleTimelineClick}>
-              <defs>
-                <linearGradient id="velocityGradient" x1="0" y1="0" x2="0" y2="1">
-                  <stop offset="5%" stopColor="#5B9B7B" stopOpacity={0.3}/>
-                  <stop offset="95%" stopColor="#5B9B7B" stopOpacity={0}/>
-                </linearGradient>
-              </defs>
-              <CartesianGrid strokeDasharray="3 3" stroke="#363436" opacity={0.2} />
-              <XAxis dataKey="timeSec" stroke="#8A8885" tick={{ fill: '#6A6865', fontSize: 9 }} tickFormatter={formatSecondsTick} label={{ value: 'Time (s)', position: 'insideBottom', offset: -5, fill: '#8A8885', fontSize: 9 }} />
-              <YAxis stroke="#8A8885" tick={{ fill: '#6A6865', fontSize: 9 }} />
-              <Tooltip 
-                contentStyle={{ 
-                  backgroundColor: '#1E1D1F', 
-                  border: '1px solid #363436',
-                  borderRadius: '8px',
-                  fontSize: '10px'
-                }}
-              />
-              <Area 
-                type="monotone" 
-                dataKey="velocity" 
-                stroke="#5B9B7B" 
-                strokeWidth={2}
-                fill="url(#velocityGradient)" 
-              />
-            </AreaChart>
-          </ResponsiveContainer>
-        </div>
-      )}
 
-      {/* Key Metrics Summary */}
-      <div className="grid grid-cols-2 gap-3">
-        <div className="bg-[#282729]/40 backdrop-blur-xl rounded-xl p-4 border border-[#363436]/30">
-          <h3 className="text-xs font-medium text-[#E8E6E3] mb-3">Ball Tracking</h3>
-          <div className="space-y-2">
-            <div className="flex justify-between text-[10px]">
-              <span className="text-[#8A8885]">Bounces</span>
-              <span className="text-[#E8E6E3] font-medium">{trajectory.bounce_count}</span>
+          {velocityTimeline.length > 0 && (
+            <div className="bg-[#282729]/40 backdrop-blur-xl rounded-xl p-3 border border-[#363436]/30">
+              <h3 className="text-xs font-medium text-[#E8E6E3] mb-2">Player Velocity</h3>
+              <ResponsiveContainer width="100%" height={130}>
+                <AreaChart data={velocityTimeline} onClick={handleTimelineClick}>
+                  <defs>
+                    <linearGradient id="velocityGradient" x1="0" y1="0" x2="0" y2="1">
+                      <stop offset="5%" stopColor="#5B9B7B" stopOpacity={0.3}/>
+                      <stop offset="95%" stopColor="#5B9B7B" stopOpacity={0}/>
+                    </linearGradient>
+                  </defs>
+                  <CartesianGrid strokeDasharray="3 3" stroke="#363436" opacity={0.2} />
+                  <XAxis dataKey="timeSec" stroke="#8A8885" tick={{ fill: '#6A6865', fontSize: 9 }} tickFormatter={formatSecondsTick} />
+                  <YAxis stroke="#8A8885" tick={{ fill: '#6A6865', fontSize: 9 }} />
+                  <Tooltip
+                    contentStyle={{
+                      backgroundColor: '#1E1D1F',
+                      border: '1px solid #363436',
+                      borderRadius: '8px',
+                      fontSize: '10px'
+                    }}
+                  />
+                  <Area
+                    type="monotone"
+                    dataKey="velocity"
+                    stroke="#5B9B7B"
+                    strokeWidth={2}
+                    fill="url(#velocityGradient)"
+                  />
+                </AreaChart>
+              </ResponsiveContainer>
             </div>
-            <div className="flex justify-between text-[10px]">
-              <span className="text-[#8A8885]">Direction Changes</span>
-              <span className="text-[#E8E6E3] font-medium">{trajectory.direction_changes}</span>
-            </div>
-            <div className="flex justify-between text-[10px]">
-              <span className="text-[#8A8885]">Contacts Detected</span>
-              <span className="text-[#E8E6E3] font-medium">{contact.contact_moments.length}</span>
-            </div>
-            <div className="flex justify-between text-[10px]">
-              <span className="text-[#8A8885]">Avg Contact Height</span>
-              <span className="text-[#E8E6E3] font-medium">{contact.avg_contact_height.toFixed(0)}px</span>
-            </div>
-          </div>
-        </div>
-
-        <div className="bg-[#282729]/40 backdrop-blur-xl rounded-xl p-4 border border-[#363436]/30">
-          <h3 className="text-xs font-medium text-[#E8E6E3] mb-3">Stroke Quality</h3>
-          <div className="space-y-2">
-            {shotMix ? (
-              <>
-                <div className="flex justify-between text-[10px]">
-                  <span className="text-[#8A8885]">Avg Form Score</span>
-                  <span className="text-[#E8E6E3] font-medium">{shotMix.avgForm}/100</span>
-                </div>
-                <div className="flex justify-between text-[10px]">
-                  <span className="text-[#9B7B5B]">Forehand Form</span>
-                  <span className="text-[#E8E6E3] font-medium">{shotMix.fhAvgForm}/100</span>
-                </div>
-                <div className="flex justify-between text-[10px]">
-                  <span className="text-[#5B9B7B]">Backhand Form</span>
-                  <span className="text-[#E8E6E3] font-medium">{shotMix.bhAvgForm}/100</span>
-                </div>
-                {consistency && (
-                  <div className="flex justify-between text-[10px]">
-                    <span className="text-[#8A8885]">Consistency</span>
-                    <span className="text-[#E8E6E3] font-medium">{consistency.score}/100</span>
-                  </div>
-                )}
-              </>
-            ) : (
-              <p className="text-[10px] text-[#6A6865]">Run stroke analysis to see quality metrics</p>
-            )}
-          </div>
-        </div>
-      </div>
-
-      {/* Spin Estimate */}
-      {analytics.ball_analytics.spin?.estimate && (
-        <div className="bg-[#282729]/40 backdrop-blur-xl rounded-xl p-3 border border-[#363436]/30">
-          <div className="flex items-center gap-2">
-            <Zap className="w-3.5 h-3.5 text-[#9B7B5B]" />
-            <span className="text-[10px] text-[#8A8885]">Estimated Spin:</span>
-            <span className="text-xs font-medium text-[#E8E6E3]">{analytics.ball_analytics.spin.estimate}</span>
-          </div>
+          )}
         </div>
       )}
 

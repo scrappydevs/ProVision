@@ -386,6 +386,19 @@ export default function ComparePage() {
     analyzeMatchupMutation.mutate();
   }, [canCompare, leftId, rightId, analyzeMatchupMutation]);
 
+  // Compute win odds from score axes
+  const winOdds = useMemo(() => {
+    const axes = normalizedAnalysis?.scores?.axes;
+    if (!axes?.length) return null;
+    const leftTotal = axes.reduce((s: number, a: { left?: number }) => s + (a.left ?? 0), 0);
+    const rightTotal = axes.reduce((s: number, a: { right?: number }) => s + (a.right ?? 0), 0);
+    const sum = leftTotal + rightTotal;
+    if (sum === 0) return null;
+    const leftPct = Math.round((leftTotal / sum) * 100);
+    const rightPct = 100 - leftPct;
+    return { left: leftPct, right: rightPct };
+  }, [normalizedAnalysis]);
+
   // Collect analysis sections
   const analysisSections = useMemo(() => {
     if (!normalizedAnalysis) return [];
@@ -413,12 +426,12 @@ export default function ComparePage() {
     setId: (v: string) => void
   ) => (
     <div>
-      <div className="flex items-center justify-between mb-2">
-        <p className="text-xs uppercase tracking-widest text-foreground/40">{label}</p>
+      <div className="flex items-center justify-between mb-1.5">
+        <p className="text-[10px] uppercase tracking-widest text-foreground/40">{label}</p>
         <select
           value={id}
           onChange={(e) => setId(e.target.value)}
-          className="px-3 py-1 bg-foreground/5 rounded-lg text-xs text-foreground focus:outline-none focus:ring-1 focus:ring-primary/40"
+          className="px-2 py-0.5 bg-foreground/5 rounded-lg text-xs text-foreground focus:outline-none focus:ring-1 focus:ring-primary/40"
         >
           <option value="">Select</option>
           {(players ?? []).map((p) => (
@@ -428,16 +441,16 @@ export default function ComparePage() {
       </div>
       {player ? (
         <div>
-          <p className="text-base font-medium text-foreground mb-1">{player.name}</p>
-          <p className="text-sm text-foreground/50 mb-2">{buildStyleSummary(player)}</p>
+          <p className="text-sm font-medium text-foreground mb-0.5">{player.name}</p>
+          <p className="text-xs text-foreground/50 mb-1">{buildStyleSummary(player)}</p>
           {getSafeDescription(player.description ?? player.notes) && (
-            <p className="text-sm text-foreground/60 leading-relaxed">
+            <p className="text-[13px] text-foreground/50 leading-relaxed">
               {getSafeDescription(player.description ?? player.notes)}
             </p>
           )}
         </div>
       ) : (
-        <p className="text-sm text-foreground/20 py-3">No player selected</p>
+        <p className="text-xs text-foreground/20 py-2">No player selected</p>
       )}
     </div>
   );
@@ -462,10 +475,10 @@ export default function ComparePage() {
         </div>
       )}
 
-      <div className="relative px-8 py-6 max-w-5xl mx-auto space-y-6">
+      <div className="relative px-8 py-4 max-w-5xl mx-auto space-y-4">
         {/* Header */}
         <div className="flex items-center justify-between">
-          <h1 className="text-xl font-medium text-foreground">Compare</h1>
+          <h1 className="text-lg font-medium text-foreground">Compare</h1>
           {canCompare && (
             <div className="flex items-center gap-2">
               <button
@@ -498,7 +511,7 @@ export default function ComparePage() {
         </div>
 
         {/* Player Selection */}
-        <div className="grid grid-cols-2 gap-8">
+        <div className="grid grid-cols-2 gap-6">
           {renderPlayerSlot("Player A", leftPlayer, leftId, setLeftId)}
           {renderPlayerSlot("Player B", rightPlayer, rightId, setRightId)}
         </div>
@@ -568,84 +581,125 @@ export default function ComparePage() {
 
         {/* Matchup Analysis */}
         {canCompare && analysisOpen && (
-          <div className="space-y-5">
+          <div className="space-y-3">
             {/* Loading / Error */}
-            {analyzeMatchupMutation.isPending && (
-              <p className="text-sm text-foreground/40">Generating matchup analysis...</p>
+            {analyzeMatchupMutation.isPending && !normalizedAnalysis && (
+              <p className="text-xs text-foreground/40">Generating matchup analysis...</p>
             )}
             {analysisError && (
-              <p className="text-sm text-red-400">{analysisError}</p>
+              <p className="text-xs text-red-400">{analysisError}</p>
             )}
 
             {normalizedAnalysis && (
               <>
+                {/* Win odds bar */}
+                {winOdds && (
+                  <div className="space-y-1">
+                    <div className="flex justify-between text-sm">
+                      <span className="text-foreground/60">{leftPlayer?.name} <span className="font-medium text-foreground">{winOdds.left}%</span></span>
+                      <span className="text-foreground/60"><span className="font-medium text-foreground">{winOdds.right}%</span> {rightPlayer?.name}</span>
+                    </div>
+                    <div className="flex h-1.5 rounded-full overflow-hidden">
+                      <div className="bg-[#9B7B5B] transition-all duration-500" style={{ width: `${winOdds.left}%` }} />
+                      <div className="bg-[#6B8E6B] transition-all duration-500" style={{ width: `${winOdds.right}%` }} />
+                    </div>
+                  </div>
+                )}
+
                 {/* Headline */}
                 {normalizedAnalysis.headline && (
-                  <p className="text-base text-foreground/70 leading-relaxed">
+                  <p className="text-sm text-foreground/50 leading-relaxed">
                     {normalizedAnalysis.headline}
                   </p>
                 )}
 
-                {/* Radar + Analysis sections */}
-                <div className="grid grid-cols-5 gap-6 items-start">
-                  {/* Combined radar chart */}
+                {/* Charts + Analysis sections */}
+                <div className="grid grid-cols-5 gap-4 items-start">
+                  {/* Left column: both charts stacked */}
                   {normalizedAnalysis.scores?.axes?.length ? (
-                    <div className="col-span-2">
-                      <p className="text-xs uppercase tracking-widest text-foreground/30 mb-2">Player Profiles</p>
-                      <ResponsiveContainer width="100%" height={260}>
-                        <RadarChart data={normalizedAnalysis.scores.axes}>
-                          <PolarGrid stroke="#363436" />
-                          <PolarAngleAxis
-                            dataKey="axis"
-                            tick={{ fill: "#8A8885", fontSize: 11 }}
-                          />
-                          <PolarRadiusAxis
-                            angle={90}
-                            domain={[0, 100]}
-                            tick={{ fill: "#6A6865", fontSize: 9 }}
-                          />
-                          <Radar
-                            name={leftPlayer?.name ?? "Player A"}
-                            dataKey="left"
-                            stroke="#9B7B5B"
-                            fill="#9B7B5B"
-                            fillOpacity={0.2}
-                            strokeWidth={2}
-                          />
-                          <Radar
-                            name={rightPlayer?.name ?? "Player B"}
-                            dataKey="right"
-                            stroke="#6B8E6B"
-                            fill="#6B8E6B"
-                            fillOpacity={0.15}
-                            strokeWidth={2}
-                            strokeDasharray="4 4"
-                          />
-                          <Legend wrapperStyle={{ fontSize: "12px" }} iconSize={10} />
-                          <Tooltip
-                            contentStyle={{
-                              backgroundColor: "#1E1D1F",
-                              border: "1px solid #363436",
-                              borderRadius: "8px",
-                              fontSize: "12px",
-                              color: "#E8E6E3",
-                            }}
-                          />
-                        </RadarChart>
-                      </ResponsiveContainer>
+                    <div className="col-span-2 space-y-3">
+                      <div>
+                        <p className="text-[10px] uppercase tracking-widest text-foreground/30 mb-1">Player Profiles</p>
+                        <ResponsiveContainer width="100%" height={200}>
+                          <RadarChart data={normalizedAnalysis.scores.axes}>
+                            <PolarGrid stroke="#363436" />
+                            <PolarAngleAxis
+                              dataKey="axis"
+                              tick={{ fill: "#8A8885", fontSize: 9 }}
+                            />
+                            <PolarRadiusAxis
+                              angle={90}
+                              domain={[0, 100]}
+                              tick={{ fill: "#6A6865", fontSize: 8 }}
+                            />
+                            <Radar
+                              name={leftPlayer?.name ?? "Player A"}
+                              dataKey="left"
+                              stroke="#9B7B5B"
+                              fill="#9B7B5B"
+                              fillOpacity={0.2}
+                              strokeWidth={2}
+                            />
+                            <Radar
+                              name={rightPlayer?.name ?? "Player B"}
+                              dataKey="right"
+                              stroke="#6B8E6B"
+                              fill="#6B8E6B"
+                              fillOpacity={0.15}
+                              strokeWidth={2}
+                              strokeDasharray="4 4"
+                            />
+                            <Legend wrapperStyle={{ fontSize: "10px" }} iconSize={8} />
+                            <Tooltip
+                              contentStyle={{
+                                backgroundColor: "#1E1D1F",
+                                border: "1px solid #363436",
+                                borderRadius: "8px",
+                                fontSize: "11px",
+                                color: "#E8E6E3",
+                              }}
+                            />
+                          </RadarChart>
+                        </ResponsiveContainer>
+                      </div>
+                      <div>
+                        <p className="text-[10px] uppercase tracking-widest text-foreground/30 mb-1">Score Breakdown</p>
+                        <ResponsiveContainer width="100%" height={150}>
+                          <BarChart
+                            data={normalizedAnalysis.scores.axes}
+                            layout="vertical"
+                            margin={{ top: 0, right: 8, bottom: 0, left: 0 }}
+                            barGap={2}
+                          >
+                            <XAxis type="number" domain={[0, 100]} tick={{ fill: "#6A6865", fontSize: 8 }} axisLine={false} tickLine={false} />
+                            <YAxis type="category" dataKey="axis" tick={{ fill: "#8A8885", fontSize: 9 }} width={90} axisLine={false} tickLine={false} />
+                            <Tooltip
+                              contentStyle={{
+                                backgroundColor: "#1E1D1F",
+                                border: "1px solid #363436",
+                                borderRadius: "8px",
+                                fontSize: "11px",
+                                color: "#E8E6E3",
+                              }}
+                            />
+                            <Bar dataKey="left" name={leftPlayer?.name ?? "Player A"} fill="#9B7B5B" radius={[0, 3, 3, 0]} barSize={10} />
+                            <Bar dataKey="right" name={rightPlayer?.name ?? "Player B"} fill="#6B8E6B" radius={[0, 3, 3, 0]} barSize={10} />
+                          </BarChart>
+                        </ResponsiveContainer>
+                      </div>
                     </div>
                   ) : null}
 
-                  {/* Analysis sections */}
-                  <div className={normalizedAnalysis.scores?.axes?.length ? "col-span-3 space-y-5" : "col-span-5 grid grid-cols-2 gap-5"}>
+                  {/* Right column: analysis sections */}
+                  <div className={normalizedAnalysis.scores?.axes?.length ? "col-span-3 space-y-3" : "col-span-5 grid grid-cols-2 gap-4"}>
                     {analysisSections.map((section) => (
                       <div key={section.title}>
-                        <p className="text-xs font-medium uppercase tracking-widest text-foreground/30 mb-2">
+                        <p className="text-xs font-medium uppercase tracking-widest text-foreground/30 mb-1">
                           {section.title}
                         </p>
-                        <ul className="space-y-1.5">
+                        <ul className="space-y-1">
                           {section.items.map((item, idx) => (
-                            <li key={idx} className="flex gap-2.5 text-sm text-foreground/60 leading-relaxed">
+                            <li key={idx} className="flex gap-2 text-sm text-foreground/60 leading-relaxed">
                               <span className="mt-2 h-1 w-1 rounded-full bg-primary/50 shrink-0" />
                               <span>{item}</span>
                             </li>
@@ -658,41 +712,11 @@ export default function ComparePage() {
               </>
             )}
 
-            {/* Score Comparison Bar Chart */}
-            {normalizedAnalysis && normalizedAnalysis.scores?.axes?.length ? (
-              <div>
-                <p className="text-xs uppercase tracking-widest text-foreground/30 mb-3">Score Breakdown</p>
-                <ResponsiveContainer width="100%" height={200}>
-                  <BarChart
-                    data={normalizedAnalysis.scores.axes}
-                    layout="vertical"
-                    margin={{ top: 0, right: 20, bottom: 0, left: 0 }}
-                    barGap={2}
-                  >
-                    <XAxis type="number" domain={[0, 100]} tick={{ fill: "#6A6865", fontSize: 10 }} axisLine={false} tickLine={false} />
-                    <YAxis type="category" dataKey="axis" tick={{ fill: "#8A8885", fontSize: 11 }} width={120} axisLine={false} tickLine={false} />
-                    <Tooltip
-                      contentStyle={{
-                        backgroundColor: "#1E1D1F",
-                        border: "1px solid #363436",
-                        borderRadius: "8px",
-                        fontSize: "12px",
-                        color: "#E8E6E3",
-                      }}
-                    />
-                    <Bar dataKey="left" name={leftPlayer?.name ?? "Player A"} fill="#9B7B5B" radius={[0, 4, 4, 0]} barSize={14} />
-                    <Bar dataKey="right" name={rightPlayer?.name ?? "Player B"} fill="#6B8E6B" radius={[0, 4, 4, 0]} barSize={14} />
-                    <Legend wrapperStyle={{ fontSize: "12px" }} iconSize={10} />
-                  </BarChart>
-                </ResponsiveContainer>
-              </div>
-            ) : null}
-
             {/* Head-to-head insights — only after analysis finishes */}
             {!analyzeMatchupMutation.isPending && matchupInsights.length > 0 && (
-              <div className="pt-2">
-                <p className="text-xs uppercase tracking-widest text-foreground/30 mb-2">Head-to-Head</p>
-                <div className="flex flex-wrap gap-x-4 gap-y-1">
+              <div className="pt-1">
+                <p className="text-xs uppercase tracking-widest text-foreground/30 mb-1">Head-to-Head</p>
+                <div className="flex flex-wrap gap-x-3 gap-y-0.5">
                   {matchupInsights.map((insight, idx) => (
                     <p key={idx} className="text-sm text-foreground/50">{insight}</p>
                   ))}
