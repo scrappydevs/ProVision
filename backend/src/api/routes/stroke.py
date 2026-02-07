@@ -462,13 +462,13 @@ def process_stroke_detection(
             },
         )
 
-        # Get pose analysis for tracked players (person_id 0=player, 1=opponent)
+        # Get pose analysis for tracked players (person_id 0=player, 1=opponent).
+        # We need both for hitter inference; player-only rows are filtered below.
         _update_progress_stage("load_pose_data", "running")
         pose_load_started = perf_counter()
         pose_result = supabase.table("pose_analysis")\
             .select("*")\
             .eq("session_id", session_id)\
-            .eq("person_id", 0)\
             .order("timestamp")\
             .execute()
         pose_load_elapsed_ms = (perf_counter() - pose_load_started) * 1000.0

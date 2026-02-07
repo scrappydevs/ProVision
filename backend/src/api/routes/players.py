@@ -213,30 +213,42 @@ def _build_player_insights_data(supabase, player_id: str, user_id: str) -> Dict[
     strengths = []
     weaknesses = []
 
-    if forehand_stats["avg_form_score"] > 75:
+    if forehand_stats["avg_form_score"] > 85:
         strengths.append({
             "title": "Forehand power",
-            "summary": f"Consistent forehand technique with {forehand_stats['avg_form_score']:.1f}% average form score",
-            "metric": f"Best: {forehand_stats['best_form_score']:.1f}%",
+            "summary": f"Excellent forehand technique across {forehand_stats['count']} strokes",
+            "metric": "Maintain form consistency under pressure",
+        })
+    elif forehand_stats["avg_form_score"] > 75:
+        strengths.append({
+            "title": "Forehand reliability",
+            "summary": f"Solid forehand mechanics with room to refine",
+            "metric": "Focus on contact point consistency",
         })
     elif forehand_stats["count"] > 0:
         weaknesses.append({
-            "title": "Forehand consistency",
-            "summary": f"Form score averaging {forehand_stats['avg_form_score']:.1f}% - room for improvement",
-            "metric": "Focus on hip rotation and follow-through",
+            "title": "Forehand development",
+            "summary": f"Forehand needs attention — {forehand_stats['count']} strokes tracked",
+            "metric": "Work on hip rotation and follow-through extension",
         })
 
-    if backhand_stats["avg_form_score"] > 75:
+    if backhand_stats["avg_form_score"] > 85:
         strengths.append({
             "title": "Backhand technique",
-            "summary": f"Strong backhand form with {backhand_stats['avg_form_score']:.1f}% average score",
-            "metric": f"Best: {backhand_stats['best_form_score']:.1f}%",
+            "summary": f"Strong backhand form across {backhand_stats['count']} strokes",
+            "metric": "Leverage this in rallies",
+        })
+    elif backhand_stats["avg_form_score"] > 75:
+        strengths.append({
+            "title": "Backhand competence",
+            "summary": f"Reliable backhand with opportunities to refine",
+            "metric": "Focus on weight transfer timing",
         })
     elif backhand_stats["count"] > 0:
         weaknesses.append({
             "title": "Backhand development",
-            "summary": f"Form score averaging {backhand_stats['avg_form_score']:.1f}% - focus area",
-            "metric": "Work on contact point and weight transfer",
+            "summary": f"Backhand needs work — {backhand_stats['count']} strokes tracked",
+            "metric": "Develop contact point control and body rotation",
         })
 
     total = forehand_stats["count"] + backhand_stats["count"]
@@ -299,12 +311,16 @@ def _generate_player_description_with_agent(
     }
 
     system = (
-        "You are a concise tennis coach assistant. "
-        "Output EXACTLY 1-2 sentences ONLY. NO paragraphs. NO additional text. "
-        "Format: One sentence about playing style and strength. One sentence about weakness or area for improvement."
+        "You are a concise table tennis coach assistant writing player scouting reports. "
+        "Output EXACTLY 1-2 sentences ONLY. NO paragraphs. NO fluff. "
+        "DO NOT mention specific percentages or form scores (like 76.7% or 72.4%). "
+        "Focus on: playing style, shot preferences (loves forehand/backhand), tactical tendencies, "
+        "mechanical patterns (e.g., 'favors topspin loops', 'struggles with low backhands'). "
+        "Be qualitative and natural, like a coach talking about their player."
     )
     user_msg = (
-        "Write ONLY 1-2 sentences describing this player. NO MORE.\n\n"
+        "Write ONLY 1-2 sentences describing this player's style and development areas. "
+        "DO NOT cite form score percentages. Focus on what shots they prefer and what needs work.\n\n"
         f"{json.dumps(context, ensure_ascii=True)}"
     )
 
@@ -537,17 +553,18 @@ async def analyze_player_matchup(
     }
 
     system = (
-        "You are a table tennis scouting analyst. "
+        "You are a table tennis scouting analyst preparing a matchup brief. "
         "Use only the provided data and be concise. "
         "Return ONLY valid JSON (no markdown, no prose). "
+        "CRITICAL: Avoid citing form score percentages (like 76.7% or 72.4%). "
+        "Instead describe playing patterns: shot preferences (loves forehand), tactical habits, "
+        "mechanical tendencies (aggressive loops, defensive blocks), and strategic matchup factors. "
         "Return JSON with keys: headline (string), "
-        "tactical_advantage (array of 2-3 strings), "
-        "key_edges (array of 3-4 strings — each edge must describe a MEANINGFUL, "
-        "actionable difference between the players. Ignore trivially small gaps. "
-        "Focus on style clashes, physical advantages, or strategic mismatches. "
-        "Do NOT just restate scores with decimal points.), "
-        "serve_receive_plan (array of 2-3 strings), "
-        "rally_length_bias (array of 2-3 strings), "
+        "tactical_advantage (array of 2-3 strings describing HOW to exploit style differences), "
+        "key_edges (array of 3-4 strings describing MEANINGFUL differences in technique, tactics, or patterns — "
+        "NOT just 'Player A has better form scores'. Focus on shot selection, consistency under pressure, rally strategies), "
+        "serve_receive_plan (array of 2-3 actionable strings for serves and returns), "
+        "rally_length_bias (array of 2-3 strings about rally tendencies and tempo preferences), "
         "scores (object with key 'axes' as an array of 5 objects: "
         "{axis: string, left: number, right: number}, "
         "where axis names are: Tactical Advantage, Key Edges, Serve/Receive, Rally Length, Experience/Form. "

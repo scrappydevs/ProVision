@@ -78,37 +78,71 @@ def _stroke_metrics(stroke_row: Dict[str, Any]) -> Dict[str, Any]:
     return metrics if isinstance(metrics, dict) else {}
 
 
+def _stroke_ai_insight_data(stroke_row: Dict[str, Any]) -> Dict[str, Any]:
+    payload = stroke_row.get("ai_insight_data")
+    return payload if isinstance(payload, dict) else {}
+
+
+def _stroke_owner_fields(stroke_row: Dict[str, Any]) -> Tuple[str, float, str, str]:
+    metrics = _stroke_metrics(stroke_row)
+    ai_data = _stroke_ai_insight_data(stroke_row)
+
+    hitter = str(ai_data.get("shot_owner") or metrics.get("event_hitter") or "").strip().lower()
+    if hitter not in {"player", "opponent"}:
+        hitter = "unknown"
+
+    confidence_raw = ai_data.get("shot_owner_confidence", metrics.get("event_hitter_confidence", 0.0))
+    try:
+        confidence = max(0.0, min(1.0, float(confidence_raw)))
+    except (TypeError, ValueError):
+        confidence = 0.0
+
+    method = str(ai_data.get("shot_owner_method") or metrics.get("event_hitter_method") or "").strip().lower()
+    reason = str(ai_data.get("shot_owner_reason") or metrics.get("event_hitter_reason") or "").strip().lower()
+    return hitter, confidence, method, reason
+
+
 def _stroke_hitter(stroke_row: Dict[str, Any]) -> str:
     """
     Returns one of: "player", "opponent", "unknown".
     """
-    metrics = _stroke_metrics(stroke_row)
-    hitter = str(metrics.get("event_hitter") or "").strip().lower()
-    if hitter in {"player", "opponent"}:
-        return hitter
-    return "unknown"
+    hitter, _, _, _ = _stroke_owner_fields(stroke_row)
+    return hitter
 
 
 def _stroke_hitter_confidence(stroke_row: Dict[str, Any]) -> float:
-    metrics = _stroke_metrics(stroke_row)
-    try:
-        return max(0.0, min(1.0, float(metrics.get("event_hitter_confidence", 0.0))))
-    except (TypeError, ValueError):
-        return 0.0
+    _, confidence, _, _ = _stroke_owner_fields(stroke_row)
+    return confidence
 
 
 def _is_reliable_opponent_stroke(stroke_row: Dict[str, Any]) -> bool:
-    if _stroke_hitter(stroke_row) != "opponent":
+    hitter, confidence, method, reason = _stroke_owner_fields(stroke_row)
+    if hitter != "opponent":
         return False
 
-    metrics = _stroke_metrics(stroke_row)
-    method = str(metrics.get("event_hitter_method") or "").strip().lower()
-    reason = str(metrics.get("event_hitter_reason") or "").strip().lower()
     if method == "proximity_10_percent" and reason.startswith("player_outside_"):
         # Legacy ownership rule was too aggressive; don't trust it.
         return False
 
-    return _stroke_hitter_confidence(stroke_row) >= 0.75
+    return confidence >= 0.75
+
+
+def _has_explicit_hitter_signal(stroke_row: Dict[str, Any]) -> bool:
+    metrics = _stroke_metrics(stroke_row)
+    ai_data = _stroke_ai_insight_data(stroke_row)
+    raw_owner = str(ai_data.get("shot_owner") or metrics.get("event_hitter") or "").strip().lower()
+    return raw_owner in {"player", "opponent", "unknown"}
+
+
+def _is_player_stroke_for_insights(stroke_row: Dict[str, Any]) -> bool:
+    hitter, confidence, _, _ = _stroke_owner_fields(stroke_row)
+    if hitter == "player":
+        # Player labels from hitter inference are meaningful even in single-player tracking runs.
+        return confidence >= 0.55
+    if hitter == "opponent":
+        return False
+    # Legacy rows may not include hitter metadata at all; keep them eligible.
+    return not _has_explicit_hitter_signal(stroke_row)
 
 
 def _is_player_stroke(stroke_row: Dict[str, Any]) -> bool:
@@ -149,7 +183,7 @@ def _generate_timeline_tips_from_insights(
     seen_messages: set[str] = set()
     
     for s in strokes:
-        if not _is_player_stroke(s):
+        if not _is_player_stroke_for_insights(s):
             continue
         ai_insight = str(s.get("ai_insight") or "").strip()
         if not ai_insight:
@@ -386,6 +420,8 @@ def generate_insight_for_stroke(
 
     prompt = (
         "You are analyzing a table tennis stroke from video frames to provide coaching insights.\n\n"
+        "Analyze ONLY the selected primary athlete (the user-selected player tracked as person_id=0).\n"
+        "If frames mainly show opponent contact, treat this as out-of-scope and avoid opponent coaching.\n\n"
         f"Current classification: {stroke_type} (from elbow-trend heuristic)\n"
         f"Player handedness: {handedness}\n"
         f"Camera facing: {camera_facing}\n"
@@ -597,15 +633,16 @@ def generate_insights_for_session(
 
             insight_start = perf_counter()
             try:
-                metrics = _stroke_metrics(stroke_row)
+                hitter = _stroke_hitter(stroke_row)
                 hitter_confidence = _stroke_hitter_confidence(stroke_row)
+                _, _, owner_method, owner_reason = _stroke_owner_fields(stroke_row)
 
                 if _is_reliable_opponent_stroke(stroke_row):
                     ai_insight_data = {
                         "shot_owner": "opponent",
                         "shot_owner_confidence": round(hitter_confidence, 3),
-                        "shot_owner_reason": str(metrics.get("event_hitter_reason") or ""),
-                        "shot_owner_method": str(metrics.get("event_hitter_method") or ""),
+                        "shot_owner_reason": owner_reason,
+                        "shot_owner_method": owner_method,
                         "model": "rule_based_hitter_inference",
                         "generated_at": datetime.now(timezone.utc).isoformat(),
                     }
@@ -618,6 +655,26 @@ def generate_insights_for_session(
                     completed += 1
                     elapsed = (perf_counter() - insight_start) * 1000
                     print(f"[StrokeInsight]   Marked as opponent stroke in {elapsed:.0f}ms")
+                    continue
+
+                if not _is_player_stroke_for_insights(stroke_row):
+                    ai_insight_data = {
+                        "shot_owner": hitter,
+                        "shot_owner_confidence": round(hitter_confidence, 3),
+                        "shot_owner_reason": owner_reason,
+                        "shot_owner_method": owner_method,
+                        "model": "rule_based_hitter_inference",
+                        "generated_at": datetime.now(timezone.utc).isoformat(),
+                    }
+                    supabase.table("stroke_analytics").update(
+                        {
+                            "ai_insight": "Unattributed contact event. Excluded from player-only insight timeline.",
+                            "ai_insight_data": ai_insight_data,
+                        }
+                    ).eq("id", stroke_id).execute()
+                    completed += 1
+                    elapsed = (perf_counter() - insight_start) * 1000
+                    print(f"[StrokeInsight]   Marked as non-player event in {elapsed:.0f}ms")
                     continue
 
                 result = generate_insight_for_stroke(
@@ -675,8 +732,8 @@ def generate_insights_for_session(
                     "reclassification_blocked_reason": reclassification_blocked_reason,
                     "shot_owner": "player",
                     "shot_owner_confidence": round(hitter_confidence, 3),
-                    "shot_owner_reason": str(metrics.get("event_hitter_reason") or ""),
-                    "shot_owner_method": str(metrics.get("event_hitter_method") or ""),
+                    "shot_owner_reason": owner_reason,
+                    "shot_owner_method": owner_method,
                     "model": model,
                     "generated_at": datetime.now(timezone.utc).isoformat(),
                 }

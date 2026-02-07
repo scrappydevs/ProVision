@@ -63,6 +63,8 @@ async def create_recording(
     video: Optional[UploadFile] = File(None),
     user_id: str = Depends(get_current_user_id),
 ):
+    print(f"[Recording] create_recording called: title={title}, player_id={player_id}, type={type}, has_video={video is not None}")
+    
     if type not in VALID_TYPES:
         raise HTTPException(status_code=400, detail=f"Invalid recording type. Must be one of: {', '.join(VALID_TYPES)}")
 
@@ -120,8 +122,13 @@ async def create_recording(
 
     try:
         result = supabase.table("recordings").insert(recording_data).execute()
+        if not result.data or len(result.data) == 0:
+            raise ValueError("Supabase insert returned empty data - possible RLS policy issue or constraint violation")
         return RecordingResponse(**result.data[0])
     except Exception as e:
+        import traceback
+        error_details = f"Failed to create recording: {str(e)}\n{traceback.format_exc()}"
+        print(f"[Recording] Error: {error_details}")
         raise HTTPException(status_code=500, detail=f"Failed to create recording: {str(e)}")
 
 

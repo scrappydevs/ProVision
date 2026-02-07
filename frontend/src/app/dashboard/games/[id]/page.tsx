@@ -343,15 +343,10 @@ export default function GameViewerPage() {
     };
   }, [strokePipelineDebugStats]);
 
-  // Strokes that have AI insights (for progressive rendering)
-  const aiInsightStrokes = useMemo(() => {
-    if (!strokeSummary?.strokes) return [];
-    return strokeSummary.strokes.filter((s) => s.ai_insight);
-  }, [strokeSummary?.strokes]);
-
   const playerOwnedStrokes = useMemo(() => {
     if (!strokeSummary?.strokes) return [];
-    return strokeSummary.strokes.filter((stroke) => getStrokeOwner(stroke) !== "opponent");
+    // Tips/insights should only follow confirmed player strokes.
+    return strokeSummary.strokes.filter((stroke) => getStrokeOwner(stroke) === "player");
   }, [strokeSummary?.strokes]);
 
   const opponentStrokeCount = useMemo(
@@ -364,9 +359,6 @@ export default function GameViewerPage() {
     if (!strokeSummary?.strokes?.length) return 0;
     return Math.max(...strokeSummary.strokes.map((s) => s.max_velocity));
   }, [strokeSummary?.strokes]);
-
-  // Whether any AI insights exist (to decide if we show AI vs rule-based tips)
-  const hasAiInsights = aiInsightStrokes.length > 0;
 
   // Pose processing: no pose_video_path yet AND status is processing
   const isPoseProcessing = session?.status === "processing" && !hasPose;
@@ -522,6 +514,7 @@ export default function GameViewerPage() {
   const videoTips = useMemo(() => {
     const serverTips = strokeSummary?.timeline_tips;
     if (Array.isArray(serverTips) && serverTips.length > 0) {
+      const strokeById = new Map((strokeSummary?.strokes ?? []).map((stroke) => [String(stroke.id), stroke] as const));
       const normalized = serverTips
         .map((tip, index) => ({
           id: String(tip.id || `timeline-${index}`),
@@ -533,6 +526,10 @@ export default function GameViewerPage() {
             ? Number(tip.seek_time)
             : (Number.isFinite(tip.timestamp) ? Number(tip.timestamp) : 0),
         }))
+        .filter((tip) => {
+          const stroke = strokeById.get(tip.id);
+          return !stroke || getStrokeOwner(stroke) === "player";
+        })
         .sort((a, b) => a.timestamp - b.timestamp);
 
       console.log("[VideoTips] Using server timeline tips", {
@@ -2327,89 +2324,6 @@ export default function GameViewerPage() {
                               </div>
                             )}
 
-                            {/* AI Insight Cards (replace rule-based tips when available) */}
-                            {hasAiInsights ? (
-                              <div className="flex flex-col min-h-0 flex-1">
-                                <div className="flex items-center justify-between mb-1.5 shrink-0">
-                                  <p className="text-[11px] text-[#6A6865] uppercase tracking-wider">
-                                    Insights ({aiInsightStrokes.length})
-                                  </p>
-                                  {isInsightGenerating && (
-                                    <button
-                                      onClick={() => cancelInsightsMutation.mutate()}
-                                      disabled={cancelInsightsMutation.isPending}
-                                      className="text-[#6A6865] hover:text-[#C45C5C] transition-colors disabled:opacity-50"
-                                      title="Cancel insight generation"
-                                    >
-                                      <X className="w-3 h-3" />
-                                    </button>
-                                  )}
-                                </div>
-                                <div className="space-y-1.5 overflow-y-auto pr-1 flex-1">
-                                  <AnimatePresence mode="popLayout">
-                                    {aiInsightStrokes.map((stroke, idx) => {
-                                      const wasReclassified = stroke.ai_insight_data?.corrected_stroke_type &&
-                                        stroke.ai_insight_data.corrected_stroke_type !== stroke.ai_insight_data.original_stroke_type;
-                                      const strokeOwner = getStrokeOwner(stroke);
-                                      const strokeColor = getStrokeColor(stroke);
-                                      const strokeTime = stroke.peak_frame / fps;
-                                      const isActive = activeStroke?.id === stroke.id;
-                                      return (
-                                        <motion.button
-                                          key={stroke.id}
-                                          initial={{ opacity: 0, y: 8 }}
-                                          animate={{ opacity: 1, y: 0 }}
-                                          exit={{ opacity: 0, y: -4 }}
-                                          transition={{ delay: idx * 0.05, duration: 0.2 }}
-                                          onClick={() => {
-                                            if (videoRef.current) {
-                                              videoRef.current.currentTime = stroke.start_frame / fps;
-                                              videoRef.current.pause();
-                                              setIsPlaying(false);
-                                            }
-                                          }}
-                                          className={cn(
-                                            "w-full text-left p-2.5 rounded-lg transition-all",
-                                            isActive
-                                              ? strokeOwner === "opponent"
-                                                ? "bg-[#C45C5C]/15 ring-1 ring-[#C45C5C]/40"
-                                                : "bg-[#9B7B5B]/15 ring-1 ring-[#9B7B5B]/40"
-                                              : "bg-[#2D2C2E]/30 hover:bg-[#2D2C2E]"
-                                          )}
-                                        >
-                                          <div className="flex items-center gap-2">
-                                            <span className="text-[11px] font-mono shrink-0 text-[#6A6865]">
-                                              {fmtTime(strokeTime)}
-                                            </span>
-                                            <span
-                                              className="text-[10px] font-medium px-1.5 py-0.5 rounded capitalize"
-                                              style={{ backgroundColor: `${strokeColor}20`, color: strokeColor }}
-                                            >
-                                              {stroke.stroke_type}
-                                            </span>
-                                            {strokeOwner === "opponent" && (
-                                              <span className="text-[9px] text-[#C45C5C] bg-[#C45C5C]/15 px-1 py-0.5 rounded">
-                                                Opponent
-                                              </span>
-                                            )}
-                                            {wasReclassified && (
-                                              <span className="text-[9px] text-[#C4A05C] bg-[#C4A05C]/15 px-1 py-0.5 rounded">
-                                                was {stroke.ai_insight_data?.original_stroke_type}
-                                              </span>
-                                            )}
-                                          </div>
-                                          {stroke.ai_insight && (
-                                            <p className="text-[11px] mt-1.5 line-clamp-3 leading-relaxed text-[#8A8885]">
-                                              {stroke.ai_insight}
-                                            </p>
-                                          )}
-                                        </motion.button>
-                                      );
-                                    })}
-                                  </AnimatePresence>
-                                </div>
-                              </div>
-                            ) : null}
                           </div>
                         ) : (
                           <div className="text-center py-3">

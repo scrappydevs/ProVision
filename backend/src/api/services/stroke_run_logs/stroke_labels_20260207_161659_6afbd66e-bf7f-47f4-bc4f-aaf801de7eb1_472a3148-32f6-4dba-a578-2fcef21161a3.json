@@ -1,0 +1,26 @@
+{
+  "run_id": "472a3148-32f6-4dba-a578-2fcef21161a3",
+  "session_id": "6afbd66e-bf7f-47f4-bc4f-aaf801de7eb1",
+  "started_at": "2026-02-07T16:16:24.332590+00:00",
+  "completed_at": "2026-02-07T16:16:59.098056+00:00",
+  "classifier_mode": "claude",
+  "settings": {
+    "handedness": "right",
+    "camera_facing": "auto",
+    "use_claude_classifier": true,
+    "velocity_threshold": 42.0,
+    "min_duration_frames": 4,
+    "max_duration_frames": 70,
+    "traj_min_confidence": 0.1,
+    "traj_min_delta_px": 3.0,
+    "traj_min_span_px": 12.0,
+    "traj_min_gap_frames": 5,
+    "hit_frame_offset": 0,
+    "traj_direction_window_frames": 30,
+    "elbow_lookback_frames": 10,
+    "elbow_lookahead_frames": 10,
+    "elbow_min_delta_deg": 5.0
+  },
+  "shot_count": 0,
+  "shots": []
+}

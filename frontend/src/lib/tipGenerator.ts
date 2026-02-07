@@ -16,6 +16,18 @@ function isReliableOpponentStroke(stroke: Stroke): boolean {
   return Number.isFinite(confidence) && confidence >= 0.75;
 }
 
+function isReliablePlayerStroke(stroke: Stroke): boolean {
+  const owner = String(stroke.ai_insight_data?.shot_owner ?? stroke.metrics?.event_hitter ?? "").toLowerCase();
+  if (owner === "opponent") return false;
+  if (owner === "player") {
+    const rawConfidence = stroke.ai_insight_data?.shot_owner_confidence ?? stroke.metrics?.event_hitter_confidence;
+    const confidence = typeof rawConfidence === "number" ? rawConfidence : Number(rawConfidence);
+    return !Number.isFinite(confidence) || confidence >= 0.55;
+  }
+  // Legacy rows may not have owner metadata yet; keep them eligible.
+  return owner.length === 0;
+}
+
 /**
  * Generate coaching tips from strokes — natural language, actionable feedback.
  * Tips are generated for strokes that are notably good, notably weak, or have
@@ -35,6 +47,7 @@ export function generateTipsFromStrokes(
 
   strokes.forEach((stroke) => {
     if (isReliableOpponentStroke(stroke)) return;
+    if (!isReliablePlayerStroke(stroke)) return;
 
     const contactTime = stroke.peak_frame / fps;
 
