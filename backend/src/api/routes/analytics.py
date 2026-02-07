@@ -107,9 +107,9 @@ async def get_session_analytics(
     except Exception as e:
         logger.warning(f"Analytics cache lookup failed: {e}")
     
-    # Fetch pose data
+    # Fetch pose data (include person_id for multi-player analytics)
     pose_result = supabase.table("pose_analysis") \
-        .select("frame_number, timestamp, keypoints, joint_angles, body_metrics") \
+        .select("frame_number, timestamp, keypoints, joint_angles, body_metrics, person_id") \
         .eq("session_id", session_id) \
         .order("frame_number") \
         .execute()

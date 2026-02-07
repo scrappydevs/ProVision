@@ -7,10 +7,22 @@ import { Button } from "@/components/ui/button";
 import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { Loader2, AlertCircle, Activity, TrendingUp, Zap, Target, ExternalLink, RefreshCw } from "lucide-react";
 import { LineChart, Line, BarChart, Bar, ScatterChart, Scatter, RadarChart, PolarGrid, PolarAngleAxis, PolarRadiusAxis, Radar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, Legend, Cell, Area, AreaChart } from "recharts";
-import { useEffect, useMemo, useRef } from "react";
+import { useCallback, useEffect, useMemo, useRef } from "react";
 
 interface AnalyticsDashboardProps {
   sessionId: string;
+  onSeekToTime?: (timeSec: number) => void;
+}
+
+interface ChartClickPayload {
+  payload?: {
+    timeSec?: number;
+  };
+}
+
+interface ChartClickState {
+  activePayload?: ChartClickPayload[];
+  activeLabel?: number | string;
 }
 
 function formatBytes(size?: number): string {
@@ -21,7 +33,7 @@ function formatBytes(size?: number): string {
   return `${(size / (1024 * 1024 * 1024)).toFixed(1)} GB`;
 }
 
-export function AnalyticsDashboard({ sessionId }: AnalyticsDashboardProps) {
+export function AnalyticsDashboard({ sessionId, onSeekToTime }: AnalyticsDashboardProps) {
   const queryClient = useQueryClient();
   const { data: analytics, isLoading, error } = useAnalytics(sessionId);
   const { data: poseData } = usePoseAnalysis(sessionId, 1000, 0);
@@ -37,8 +49,14 @@ export function AnalyticsDashboard({ sessionId }: AnalyticsDashboardProps) {
   });
 
   // Process joint angles over time
+  const fps = useMemo(() => {
+    if (analytics?.fps && Number.isFinite(analytics.fps) && analytics.fps > 0) return analytics.fps;
+    return 30;
+  }, [analytics?.fps]);
+
   const jointAngleData = useMemo<Array<{
     frame: number;
+    timeSec: number;
     leftElbow: number;
     rightElbow: number;
     leftKnee: number;
@@ -50,6 +68,7 @@ export function AnalyticsDashboard({ sessionId }: AnalyticsDashboardProps) {
 
     return poseData.frames.map((frame: { frame_number: number; joint_angles?: Record<string, number> }) => ({
       frame: frame.frame_number,
+      timeSec: frame.frame_number / fps,
       leftElbow: frame.joint_angles?.left_elbow || 0,
       rightElbow: frame.joint_angles?.right_elbow || 0,
       leftKnee: frame.joint_angles?.left_knee || 0,
@@ -57,7 +76,7 @@ export function AnalyticsDashboard({ sessionId }: AnalyticsDashboardProps) {
       leftShoulder: frame.joint_angles?.left_shoulder || 0,
       rightShoulder: frame.joint_angles?.right_shoulder || 0,
     }));
-  }, [poseData]);
+  }, [poseData, fps]);
 
   // Average joint angles for radar chart
   const avgJointAngles = useMemo(() => {
@@ -85,6 +104,22 @@ export function AnalyticsDashboard({ sessionId }: AnalyticsDashboardProps) {
       { joint: "R Shoulder", angle: sum.rightShoulder / count, fullMark: 180 },
     ];
   }, [jointAngleData]);
+
+  const handleTimelineClick = useCallback((state: unknown) => {
+    if (!onSeekToTime) return;
+    if (!state || typeof state !== "object") return;
+    const clickState = state as ChartClickState;
+    const payloadTime = clickState.activePayload?.[0]?.payload?.timeSec;
+    const labelTime = typeof clickState.activeLabel === "number"
+      ? clickState.activeLabel
+      : Number(clickState.activeLabel);
+    const clickedTime = typeof payloadTime === "number" ? payloadTime : labelTime;
+    if (Number.isFinite(clickedTime)) {
+      onSeekToTime(clickedTime);
+    }
+  }, [onSeekToTime]);
+
+  const formatSecondsTick = useCallback((value: number) => `${value.toFixed(1)}s`, []);
 
   const runpodDashboard = analytics?.runpod_dashboard;
   const runpodArtifacts = runpodDashboard?.artifacts || [];
@@ -141,6 +176,26 @@ export function AnalyticsDashboard({ sessionId }: AnalyticsDashboardProps) {
   const trajectory = analytics.ball_analytics.trajectory;
   const movement = analytics.pose_analytics.movement;
   const contact = analytics.pose_analytics.contact;
+  const ballSpeedTimeline = ballSpeed.timeline.map((point) => ({
+    ...point,
+    timeSec: Number.isFinite(point.timestamp) ? point.timestamp : point.frame / fps,
+  }));
+  const stanceWidthTimeline = movement.stance_width_timeline.map((point) => ({
+    ...point,
+    timeSec: point.frame / fps,
+  }));
+  const armExtensionTimeline = movement.arm_extension_timeline.map((point) => ({
+    ...point,
+    timeSec: point.frame / fps,
+  }));
+  const velocityTimeline = movement.velocity_timeline.map((point) => ({
+    ...point,
+    timeSec: point.frame / fps,
+  }));
+  const contactMomentsTimeline = contact.contact_moments.map((point) => ({
+    ...point,
+    timeSec: point.frame / fps,
+  }));
 
   return (
     <div className="p-4 space-y-4 h-full overflow-y-auto">
@@ -195,7 +250,7 @@ export function AnalyticsDashboard({ sessionId }: AnalyticsDashboardProps) {
       <div className="bg-[#282729]/40 backdrop-blur-xl rounded-xl p-4 border border-[#363436]/30">
         <h3 className="text-xs font-medium text-[#E8E6E3] mb-3">Ball Speed Timeline</h3>
         <ResponsiveContainer width="100%" height={200}>
-          <AreaChart data={ballSpeed.timeline}>
+          <AreaChart data={ballSpeedTimeline} onClick={handleTimelineClick}>
             <defs>
               <linearGradient id="speedGradient" x1="0" y1="0" x2="0" y2="1">
                 <stop offset="5%" stopColor="#9B7B5B" stopOpacity={0.3}/>
@@ -204,10 +259,11 @@ export function AnalyticsDashboard({ sessionId }: AnalyticsDashboardProps) {
             </defs>
             <CartesianGrid strokeDasharray="3 3" stroke="#363436" opacity={0.3} />
             <XAxis 
-              dataKey="frame" 
+              dataKey="timeSec" 
               stroke="#8A8885" 
               tick={{ fill: '#6A6865', fontSize: 10 }}
-              label={{ value: 'Frame', position: 'insideBottom', offset: -5, fill: '#8A8885', fontSize: 10 }}
+              tickFormatter={formatSecondsTick}
+              label={{ value: 'Time (s)', position: 'insideBottom', offset: -5, fill: '#8A8885', fontSize: 10 }}
             />
             <YAxis 
               stroke="#8A8885" 
@@ -241,12 +297,14 @@ export function AnalyticsDashboard({ sessionId }: AnalyticsDashboardProps) {
           <div className="bg-[#282729]/40 backdrop-blur-xl rounded-xl p-4 border border-[#363436]/30">
             <h3 className="text-xs font-medium text-[#E8E6E3] mb-3">Joint Angles Over Time</h3>
             <ResponsiveContainer width="100%" height={220}>
-              <LineChart data={jointAngleData}>
+              <LineChart data={jointAngleData} onClick={handleTimelineClick}>
                 <CartesianGrid strokeDasharray="3 3" stroke="#363436" opacity={0.2} />
                 <XAxis 
-                  dataKey="frame" 
+                  dataKey="timeSec" 
                   stroke="#8A8885" 
                   tick={{ fill: '#6A6865', fontSize: 9 }}
+                  tickFormatter={formatSecondsTick}
+                  label={{ value: 'Time (s)', position: 'insideBottom', offset: -5, fill: '#8A8885', fontSize: 9 }}
                 />
                 <YAxis 
                   stroke="#8A8885" 
@@ -311,12 +369,12 @@ export function AnalyticsDashboard({ sessionId }: AnalyticsDashboardProps) {
       )}
 
       {/* Stance Width & Arm Extension */}
-      {movement.stance_width_timeline.length > 0 && (
+      {stanceWidthTimeline.length > 0 && (
         <div className="grid grid-cols-2 gap-3">
           <div className="bg-[#282729]/40 backdrop-blur-xl rounded-xl p-4 border border-[#363436]/30">
             <h3 className="text-xs font-medium text-[#E8E6E3] mb-3">Stance Width</h3>
             <ResponsiveContainer width="100%" height={180}>
-              <AreaChart data={movement.stance_width_timeline}>
+              <AreaChart data={stanceWidthTimeline} onClick={handleTimelineClick}>
                 <defs>
                   <linearGradient id="stanceGradient" x1="0" y1="0" x2="0" y2="1">
                     <stop offset="5%" stopColor="#5B9B7B" stopOpacity={0.3}/>
@@ -324,7 +382,7 @@ export function AnalyticsDashboard({ sessionId }: AnalyticsDashboardProps) {
                   </linearGradient>
                 </defs>
                 <CartesianGrid strokeDasharray="3 3" stroke="#363436" opacity={0.2} />
-                <XAxis dataKey="frame" stroke="#8A8885" tick={{ fill: '#6A6865', fontSize: 9 }} />
+                <XAxis dataKey="timeSec" stroke="#8A8885" tick={{ fill: '#6A6865', fontSize: 9 }} tickFormatter={formatSecondsTick} label={{ value: 'Time (s)', position: 'insideBottom', offset: -5, fill: '#8A8885', fontSize: 9 }} />
                 <YAxis stroke="#8A8885" tick={{ fill: '#6A6865', fontSize: 9 }} />
                 <Tooltip 
                   contentStyle={{ 
@@ -348,9 +406,9 @@ export function AnalyticsDashboard({ sessionId }: AnalyticsDashboardProps) {
           <div className="bg-[#282729]/40 backdrop-blur-xl rounded-xl p-4 border border-[#363436]/30">
             <h3 className="text-xs font-medium text-[#E8E6E3] mb-3">Arm Extension</h3>
             <ResponsiveContainer width="100%" height={180}>
-              <LineChart data={movement.arm_extension_timeline}>
+              <LineChart data={armExtensionTimeline} onClick={handleTimelineClick}>
                 <CartesianGrid strokeDasharray="3 3" stroke="#363436" opacity={0.2} />
-                <XAxis dataKey="frame" stroke="#8A8885" tick={{ fill: '#6A6865', fontSize: 9 }} />
+                <XAxis dataKey="timeSec" stroke="#8A8885" tick={{ fill: '#6A6865', fontSize: 9 }} tickFormatter={formatSecondsTick} label={{ value: 'Time (s)', position: 'insideBottom', offset: -5, fill: '#8A8885', fontSize: 9 }} />
                 <YAxis stroke="#8A8885" tick={{ fill: '#6A6865', fontSize: 9 }} />
                 <Tooltip 
                   contentStyle={{ 
@@ -382,12 +440,16 @@ export function AnalyticsDashboard({ sessionId }: AnalyticsDashboardProps) {
             <XAxis dataKey="range" stroke="#8A8885" tick={{ fill: '#8A8885', fontSize: 10 }} />
             <YAxis stroke="#8A8885" tick={{ fill: '#6A6865', fontSize: 10 }} />
             <Tooltip 
+              cursor={false}
               contentStyle={{ 
                 backgroundColor: '#1E1D1F', 
                 border: '1px solid #363436',
                 borderRadius: '8px',
-                fontSize: '10px'
+                fontSize: '10px',
+                color: '#E8E6E3'
               }}
+              labelStyle={{ color: '#E8E6E3' }}
+              itemStyle={{ color: '#E8E6E3' }}
             />
             <Bar dataKey="count" radius={[6, 6, 0, 0]}>
               {[
@@ -463,13 +525,14 @@ export function AnalyticsDashboard({ sessionId }: AnalyticsDashboardProps) {
           
           {/* Contact moments timeline */}
           <ResponsiveContainer width="100%" height={140}>
-            <ScatterChart>
+            <ScatterChart onClick={handleTimelineClick}>
               <CartesianGrid strokeDasharray="3 3" stroke="#363436" opacity={0.2} />
               <XAxis 
-                dataKey="frame" 
-                name="Frame" 
+                dataKey="timeSec" 
+                name="Time" 
                 stroke="#8A8885" 
                 tick={{ fill: '#6A6865', fontSize: 9 }}
+                tickFormatter={formatSecondsTick}
               />
               <YAxis 
                 dataKey="height" 
@@ -487,7 +550,7 @@ export function AnalyticsDashboard({ sessionId }: AnalyticsDashboardProps) {
                 cursor={{ strokeDasharray: '3 3' }}
               />
               <Scatter 
-                data={contact.contact_moments} 
+                data={contactMomentsTimeline} 
                 fill="#9B7B5B" 
                 opacity={0.7}
               />
@@ -497,11 +560,11 @@ export function AnalyticsDashboard({ sessionId }: AnalyticsDashboardProps) {
       )}
 
       {/* Player Velocity */}
-      {movement.velocity_timeline.length > 0 && (
+      {velocityTimeline.length > 0 && (
         <div className="bg-[#282729]/40 backdrop-blur-xl rounded-xl p-4 border border-[#363436]/30">
           <h3 className="text-xs font-medium text-[#E8E6E3] mb-3">Player Velocity</h3>
           <ResponsiveContainer width="100%" height={180}>
-            <AreaChart data={movement.velocity_timeline}>
+            <AreaChart data={velocityTimeline} onClick={handleTimelineClick}>
               <defs>
                 <linearGradient id="velocityGradient" x1="0" y1="0" x2="0" y2="1">
                   <stop offset="5%" stopColor="#5B9B7B" stopOpacity={0.3}/>
@@ -509,7 +572,7 @@ export function AnalyticsDashboard({ sessionId }: AnalyticsDashboardProps) {
                 </linearGradient>
               </defs>
               <CartesianGrid strokeDasharray="3 3" stroke="#363436" opacity={0.2} />
-              <XAxis dataKey="frame" stroke="#8A8885" tick={{ fill: '#6A6865', fontSize: 9 }} />
+              <XAxis dataKey="timeSec" stroke="#8A8885" tick={{ fill: '#6A6865', fontSize: 9 }} tickFormatter={formatSecondsTick} label={{ value: 'Time (s)', position: 'insideBottom', offset: -5, fill: '#8A8885', fontSize: 9 }} />
               <YAxis stroke="#8A8885" tick={{ fill: '#6A6865', fontSize: 9 }} />
               <Tooltip 
                 contentStyle={{ 

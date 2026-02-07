@@ -373,7 +373,7 @@ export default function GameViewerPage() {
   const showCourt = activeTab === "court";
   const showAnalytics = activeTab === "analytics";
   const showSidePanel =
-    showTrack || showCourt || activeTab === "pose" || showAnalytics;
+    showCourt || activeTab === "pose" || showAnalytics;
 
   const updateVideoDisplayWidth = useCallback(() => {
     const viewport = videoViewportRef.current;
@@ -950,6 +950,15 @@ export default function GameViewerPage() {
   const handleSeek = useCallback((e: React.ChangeEvent<HTMLInputElement>) => { const t = parseFloat(e.target.value); if (videoRef.current) videoRef.current.currentTime = t; setCurrentTime(t); }, []);
   const skipFrames = useCallback((n: number) => { const t = Math.max(0, Math.min(duration, currentTime + n / fps)); if (videoRef.current) videoRef.current.currentTime = t; }, [duration, currentTime, fps]);
   const fmtTime = (t: number) => `${Math.floor(t / 60)}:${Math.floor(t % 60).toString().padStart(2, "0")}`;
+  const handleAnalyticsSeek = useCallback((targetTime: number) => {
+    const durationSafe = Number.isFinite(duration) && duration > 0 ? duration : targetTime;
+    const safeTime = Math.max(0, Math.min(durationSafe, targetTime));
+    if (videoRef.current) {
+      videoRef.current.currentTime = safeTime;
+    }
+    setCurrentTime(safeTime);
+    setCurrentFrame(frameFromTime(safeTime));
+  }, [duration, frameFromTime]);
   const handleTipSeek = useCallback((tip: VideoTip) => {
     if (!videoRef.current) return;
     const targetTime = tip.seekTime ?? tip.timestamp;
@@ -1071,6 +1080,109 @@ export default function GameViewerPage() {
                   tips={videoTips}
                   isPlaying={isPlaying}
                 />
+
+                {/* Tracking Statistics Overlay - Top Right */}
+                {(showPoseOverlay || showTrack || showCourt) && (
+                  <div 
+                    className="absolute top-4 right-4 z-30 flex flex-col gap-2 pointer-events-none"
+                    style={{
+                      maxWidth: videoDisplayWidth ? `${videoDisplayWidth - 32}px` : 'calc(100% - 32px)',
+                    }}
+                  >
+                    {/* Pose Track Status */}
+                    {showPoseOverlay && (
+                      <div className="glass-toolbar px-3 py-2 w-[160px]">
+                        <div className="glass-shimmer" />
+                        <div className="relative z-10">
+                          <div className="flex items-center gap-2 mb-1">
+                            <Activity className="w-3 h-3 text-[#9B7B5B]" />
+                            <span className="text-[10px] font-medium text-[#E8E6E3]">Pose Track</span>
+                          </div>
+                          <div className="text-[10px] text-[#8A8885]">
+                            {hasPose ? (
+                              <>
+                                <div className="flex items-center gap-1">
+                                  <div className="w-1.5 h-1.5 rounded-full bg-[#6B8E6B]" />
+                                  <span>{selectedPersonIds.length} player{selectedPersonIds.length !== 1 ? 's' : ''}</span>
+                                </div>
+                                {hasStrokes && (
+                                  <div className="mt-0.5">{strokeSummary?.total_strokes ?? 0} strokes</div>
+                                )}
+                              </>
+                            ) : isPoseProcessing ? (
+                              <div className="flex items-center gap-1">
+                                <Loader2 className="w-2.5 h-2.5 animate-spin" />
+                                <span>Processing...</span>
+                              </div>
+                            ) : (
+                              <span className="text-[#6A6865]">Not active</span>
+                            )}
+                          </div>
+                        </div>
+                      </div>
+                    )}
+
+                    {/* Ball Track Status */}
+                    {showTrack && (
+                      <div className="glass-toolbar px-3 py-2 w-[160px]">
+                        <div className="glass-shimmer" />
+                        <div className="relative z-10">
+                          <div className="flex items-center gap-2 mb-1">
+                            <Crosshair className="w-3 h-3 text-[#9B7B5B]" />
+                            <span className="text-[10px] font-medium text-[#E8E6E3]">Ball Track</span>
+                          </div>
+                          <div className="text-[10px] text-[#8A8885]">
+                            {hasTrajectory ? (
+                              <>
+                                <div className="flex items-center gap-1">
+                                  <div className="w-1.5 h-1.5 rounded-full bg-[#6B8E6B]" />
+                                  <span>{session.trajectory_data?.frames?.length} frames</span>
+                                </div>
+                                <div className="mt-0.5">
+                                  {session.trajectory_data?.velocity?.length ? (
+                                    `${(session.trajectory_data.velocity.reduce((a: number, b: number) => a + b, 0) / session.trajectory_data.velocity.length).toFixed(1)} px/f`
+                                  ) : (
+                                    "—"
+                                  )}
+                                </div>
+                              </>
+                            ) : isProcessing ? (
+                              <div className="flex items-center gap-1">
+                                <Loader2 className="w-2.5 h-2.5 animate-spin" />
+                                <span>Processing...</span>
+                              </div>
+                            ) : (
+                              <span className="text-[#6A6865]">Not active</span>
+                            )}
+                          </div>
+                        </div>
+                      </div>
+                    )}
+
+                    {/* Court Analytics Status */}
+                    {showCourt && (
+                      <div className="glass-toolbar px-3 py-2 w-[160px]">
+                        <div className="glass-shimmer" />
+                        <div className="relative z-10">
+                          <div className="flex items-center gap-2 mb-1">
+                            <LayoutGrid className="w-3 h-3 text-[#9B7B5B]" />
+                            <span className="text-[10px] font-medium text-[#E8E6E3]">Court View</span>
+                          </div>
+                          <div className="text-[10px] text-[#8A8885]">
+                            {hasTrajectory || hasPose ? (
+                              <div className="flex items-center gap-1">
+                                <div className="w-1.5 h-1.5 rounded-full bg-[#6B8E6B]" />
+                                <span>3D Active</span>
+                              </div>
+                            ) : (
+                              <span className="text-[#6A6865]">Not active</span>
+                            )}
+                          </div>
+                        </div>
+                      </div>
+                    )}
+                  </div>
+                )}
               </div>
 
               {/* Debug floating bar */}
@@ -1215,41 +1327,10 @@ export default function GameViewerPage() {
                   "mx-auto flex flex-col min-h-0 overflow-hidden",
                   aiChatOpen ? "w-full h-auto max-h-[50vh]" : "w-full h-full max-w-[calc(100%-8px)]"
                 )}>
-                  {/* 3D Ball Trajectory Visualization */}
-                  {activeTab === "track" && (
-                    <div className="flex-1 min-h-0 rounded-xl overflow-hidden flex flex-col">
-                  {hasTrajectory ? (
-                    <div className="space-y-3">
-                      <p className="text-[10px] text-[#6A6865] uppercase tracking-wider">Tracking Results</p>
-                      <div className="space-y-2">
-                        <div className="flex justify-between text-xs"><span className="text-[#8A8885]">Frames</span><span className="text-[#E8E6E3]">{session.trajectory_data?.frames?.length}</span></div>
-                        <div className="flex justify-between text-xs"><span className="text-[#8A8885]">Avg Speed</span><span className="text-[#E8E6E3]">{session.trajectory_data?.velocity?.length ? (session.trajectory_data.velocity.reduce((a: number, b: number) => a + b, 0) / session.trajectory_data.velocity.length).toFixed(1) : "—"} px/f</span></div>
-                        <div className="flex justify-between text-xs"><span className="text-[#8A8885]">Spin</span><span className="text-[#9B7B5B] capitalize">{session.trajectory_data?.spin_estimate ?? "—"}</span></div>
-                      </div>
-                    </div>
-                  ) : (
-                    <div className="text-center py-8">
-                      {isProcessing ? (
-                        <>
-                          <Loader2 className="w-6 h-6 text-[#9B7B5B] mx-auto mb-3 animate-spin" />
-                          <p className="text-sm text-[#E8E6E3] font-medium">Tracking ball...</p>
-                          <p className="text-[10px] text-[#8A8885] mt-1.5">Trajectory will appear when ready</p>
-                        </>
-                      ) : (
-                        <>
-                          <Crosshair className="w-7 h-7 text-[#9B7B5B] mx-auto mb-3" />
-                          <p className="text-sm text-[#E8E6E3] font-medium mb-1">Ready to track</p>
-                          <p className="text-xs text-[#8A8885]">Click Track in the toolbar to detect ball trajectory</p>
-                        </>
-                      )}
-                    </div>
-                  )}
-                </div>
-              )}
 
               {/* Pose analysis panel */}
               {activeTab === "pose" && showPoseOverlay && (
-                <div className="glass-context rounded-xl flex flex-col h-full overflow-hidden">
+                <div className="glass-context rounded-xl flex flex-col h-full min-h-0 flex-1 overflow-hidden">
                   <div className="px-3 py-2.5 border-b border-[#363436]/30 flex items-center justify-between">
                     <span className="text-xs font-medium text-[#E8E6E3]">Pose & Strokes</span>
                     {(isDetectingPose || isPoseProcessing) && <Loader2 className="w-3 h-3 text-[#9B7B5B] animate-spin" />}
@@ -1687,7 +1768,7 @@ export default function GameViewerPage() {
               {/* Analytics Dashboard — full-width panel */}
               {activeTab === "analytics" && (
                 <div className="bg-background/60 dark:bg-content1/60 rounded-xl overflow-y-auto h-full">
-                  <AnalyticsDashboard sessionId={gameId} />
+                  <AnalyticsDashboard sessionId={gameId} onSeekToTime={handleAnalyticsSeek} />
                 </div>
               )}
 
