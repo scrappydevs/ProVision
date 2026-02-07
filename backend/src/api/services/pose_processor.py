@@ -324,6 +324,9 @@ class PoseProcessor:
             player_center = None
             opponent_center = None
 
+        # Only track opponent if one was explicitly selected
+        opponent_selected = opponent_center is not None
+
         pose_frames = []
         frame_number = 0
 
@@ -383,8 +386,8 @@ class PoseProcessor:
                         if opp_idx is None and len(keypoints_data) > 1:
                             # Fallback disabled - don't track wrong person
                             pass
-                    elif len(keypoints_data) > 1:
-                        # No opponent selected - pick the other person
+                    elif len(keypoints_data) > 1 and opponent_selected:
+                        # Opponent was selected but no center to match — use the other person
                         opp_idx = 1 if player_idx == 0 else 0
 
                     # Process main player (person_id=0)
@@ -498,6 +501,9 @@ class PoseProcessor:
             player_center = None
             opponent_center = None
 
+        # Only track opponent if one was explicitly selected
+        opponent_selected = opponent_center is not None
+
         # Colors: player = green, opponent = orange (BGR format)
         PLAYER_COLOR = (91, 155, 107)     # Green
         OPPONENT_COLOR = (91, 123, 205)   # Orange
@@ -557,7 +563,7 @@ class PoseProcessor:
                                 if opp_idx is None and len(keypoints_data) > 1:
                                     # Don't use fallback - skip opponent tracking if not found
                                     pass
-                            elif len(keypoints_data) > 1:
+                            elif len(keypoints_data) > 1 and opponent_selected:
                                 opp_idx = 1 if player_idx == 0 else 0
 
                             # Update player tracking

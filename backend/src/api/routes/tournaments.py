@@ -276,6 +276,55 @@ async def backfill_tournament_videos(
         raise HTTPException(status_code=500, detail=f"Video backfill failed: {str(e)}")
 
 
+@router.post("/backfill-previews")
+async def backfill_tournament_previews(
+    user_id: str = Depends(get_current_user_id),
+):
+    """Backfill preview thumbnails for existing WTT tournaments"""
+    from ..services.wtt_tournament_seeder import REAL_TOURNAMENTS
+
+    supabase = get_supabase()
+    
+    preview_map = {
+        t["name"]: t.get("preview_thumbnail")
+        for t in REAL_TOURNAMENTS
+        if t.get("preview_thumbnail")
+    }
+    
+    updated = 0
+    for name, thumbnail_url in preview_map.items():
+        try:
+            # Find tournament by name
+            result = (
+                supabase.table("tournaments")
+                .select("id, metadata")
+                .eq("coach_id", user_id)
+                .eq("name", name)
+                .execute()
+            )
+            
+            if not result.data:
+                continue
+                
+            tournament = result.data[0]
+            metadata = tournament.get("metadata") or {}
+            metadata["thumbnail_url"] = thumbnail_url
+            metadata["preview_image_url"] = thumbnail_url
+            
+            # Update tournament
+            supabase.table("tournaments").update({
+                "metadata": metadata,
+            }).eq("id", tournament["id"]).execute()
+            
+            updated += 1
+            
+        except Exception as e:
+            logger.error(f"Failed to update preview for {name}: {e}")
+            continue
+    
+    return {"message": f"Updated {updated} tournaments with preview thumbnails", "updated": updated}
+
+
 @router.post("/import-ittf", response_model=List[TournamentResponse])
 async def import_ittf_tournaments(
     request: ITTFImportRequest,

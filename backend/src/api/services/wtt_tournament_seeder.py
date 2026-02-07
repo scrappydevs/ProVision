@@ -21,6 +21,8 @@ REAL_TOURNAMENTS = [
         "end_date": "2025-03-30",
         "level": "international",
         "status": "completed",
+        "preview_youtube": "https://www.youtube.com/watch?v=0z3ss81Z4tc",
+        "preview_thumbnail": "https://i.ytimg.com/vi/0z3ss81Z4tc/hqdefault.jpg",
         "matchups": [
             {"p1": "Lin Shidong", "p2": "Wang Chuqin", "round": "Final", "score": "9-11, 11-5, 11-8, 11-9, 6-11, 11-7", "winner": "p1"},
             {"p1": "Lin Shidong", "p2": "Liang Jingkun", "round": "Semifinal", "score": "11-8, 11-6, 9-11, 11-7, 11-9", "winner": "p1"},
@@ -38,6 +40,8 @@ REAL_TOURNAMENTS = [
         "end_date": "2025-03-09",
         "level": "world",
         "status": "completed",
+        "preview_youtube": "https://www.youtube.com/watch?v=mJMCcwrDZFw",
+        "preview_thumbnail": "https://i.ytimg.com/vi/mJMCcwrDZFw/hqdefault.jpg",
         "matchups": [
             {"p1": "Wang Chuqin", "p2": "Lin Shidong", "round": "Final", "score": "11-8, 7-11, 11-9, 11-6, 9-11, 11-7", "winner": "p1"},
             {"p1": "Wang Chuqin", "p2": "Hugo Calderano", "round": "Semifinal", "score": "11-8, 6-11, 11-9, 8-11, 11-7, 9-11, 11-8", "winner": "p1"},
@@ -59,6 +63,8 @@ REAL_TOURNAMENTS = [
         "end_date": "2025-05-25",
         "level": "world",
         "status": "completed",
+        "preview_youtube": "https://www.youtube.com/watch?v=D3S1zygTuGQ",
+        "preview_thumbnail": "https://i.ytimg.com/vi/D3S1zygTuGQ/hqdefault.jpg",
         "matchups": [
             {"p1": "Wang Chuqin", "p2": "Hugo Calderano", "round": "Final", "score": "12-10, 11-3, 4-11, 11-2, 11-7", "winner": "p1"},
             {"p1": "Hugo Calderano", "p2": "Liang Jingkun", "round": "Semifinal", "score": "15-13, 11-7, 8-11, 11-8, 3-11, 7-11, 11-9", "winner": "p1"},
@@ -80,6 +86,8 @@ REAL_TOURNAMENTS = [
         "end_date": "2026-01-11",
         "level": "international",
         "status": "completed",
+        "preview_youtube": "https://www.youtube.com/watch?v=9brEGcrn7bE",
+        "preview_thumbnail": "https://i.ytimg.com/vi/9brEGcrn7bE/hqdefault.jpg",
         "matchups": [
             {"p1": "Lin Shidong", "p2": "Tomokazu Harimoto", "round": "Semifinal", "score": "11-8, 11-5, 9-11, 11-7, 11-6", "winner": "p1"},
             {"p1": "Hugo Calderano", "p2": "Liang Jingkun", "round": "Semifinal", "score": "11-9, 8-11, 11-7, 11-8, 9-11, 11-9", "winner": "p1"},
@@ -96,6 +104,8 @@ REAL_TOURNAMENTS = [
         "end_date": "2026-01-18",
         "level": "international",
         "status": "completed",
+        "preview_youtube": "https://www.youtube.com/watch?v=9brEGcrn7bE",
+        "preview_thumbnail": "https://i.ytimg.com/vi/9brEGcrn7bE/hqdefault.jpg",
         "matchups": [
             {"p1": "Dimitrij Ovtcharov", "p2": "Lin Shidong", "round": "Semifinal", "score": "11-9, 8-11, 11-7, 9-11, 11-8, 11-6", "winner": "p1"},
             {"p1": "Felix Lebrun", "p2": "Truls Moregardh", "round": "Semifinal", "score": "11-8, 9-11, 11-9, 11-7, 8-11, 11-9", "winner": "p1"},
@@ -175,6 +185,14 @@ async def seed_real_wtt_tournaments(coach_id: str, supabase) -> list[dict]:
                 continue
 
             tournament_id = str(uuid.uuid4())
+            metadata = {"source": "wtt_sync", "synced_at": now}
+            if t.get("preview_thumbnail"):
+                metadata["thumbnail_url"] = t["preview_thumbnail"]
+                metadata["preview_image_url"] = t["preview_thumbnail"]
+            if t.get("preview_youtube"):
+                metadata["youtube_url"] = t["preview_youtube"]
+                metadata["hero_video_url"] = t["preview_youtube"]
+            
             supabase.table("tournaments").insert({
                 "id": tournament_id,
                 "coach_id": coach_id,
@@ -184,7 +202,7 @@ async def seed_real_wtt_tournaments(coach_id: str, supabase) -> list[dict]:
                 "end_date": t.get("end_date"),
                 "level": t.get("level", "international"),
                 "status": t.get("status", "upcoming"),
-                "metadata": {"source": "wtt_sync", "synced_at": now},
+                "metadata": metadata,
                 "created_at": now,
                 "updated_at": now,
             }).execute()
