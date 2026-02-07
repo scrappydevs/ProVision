@@ -14,7 +14,7 @@
 
 
 <p align="center">
-  <img src="assets/Match Analysis.gif" alt="Match Analysis" width="800"/>
+  ![herogif-ezgif com-video-to-gif-converter](https://github.com/user-attachments/assets/24e63900-6b65-4c1e-b9e9-ac7b8e574bee)
 </p>
 
 <p align="center">
