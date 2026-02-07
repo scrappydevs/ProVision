@@ -580,6 +580,11 @@ def detect_point_events(
     - Trajectory end shortly after a contact is treated as a point end.
     """
     if not trajectory_frames or not pose_data:
+        logger.info(
+            "Point detection skipped: trajectory_frames=%s pose_data=%s",
+            bool(trajectory_frames),
+            bool(pose_data),
+        )
         return []
     
     # Parse and order frames defensively
@@ -595,6 +600,7 @@ def detect_point_events(
     
     frames = sorted(parsed_frames, key=lambda f: f.get("frame", 0))
     if not frames:
+        logger.info("Point detection skipped: no parsed trajectory frames")
         return []
     
     # Build contact list (requires pose data)
@@ -602,10 +608,18 @@ def detect_point_events(
         contact_moments = detect_ball_contacts(frames, pose_data, velocity).contact_moments
     contact_frames = sorted({c.get("frame") for c in contact_moments if isinstance(c.get("frame"), int)})
     if not contact_frames:
+        logger.info("Point detection skipped: no contact frames found")
         return []
     
     bounce_frames, _ = detect_bounces(frames, velocity)
     frame_numbers = [f.get("frame", 0) for f in frames if isinstance(f.get("frame"), int)]
+    
+    logger.info(
+        "Point detection inputs: frames=%d contacts=%d bounces=%d",
+        len(frame_numbers),
+        len(contact_frames),
+        len(bounce_frames),
+    )
     
     events: List[Dict[str, Any]] = []
     
@@ -651,7 +665,16 @@ def detect_point_events(
         if last_contact:
             add_event(last_frame, "trajectory_end", last_contact=last_contact)
     
-    return sorted(events, key=lambda e: e["frame"])
+    events_sorted = sorted(events, key=lambda e: e["frame"])
+    if events_sorted:
+        logger.info(
+            "Point detection complete: events=%d last=%s",
+            len(events_sorted),
+            events_sorted[-1],
+        )
+    else:
+        logger.info("Point detection complete: no events detected")
+    return events_sorted
 
 
 def compute_correlations(

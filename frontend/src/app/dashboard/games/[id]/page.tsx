@@ -238,6 +238,26 @@ export default function GameViewerPage() {
     return past.length > 0 ? past[past.length - 1] : null;
   }, [pointEvents, currentFrame]);
 
+  useEffect(() => {
+    if (!analytics) return;
+    const pointCount = analytics.ball_analytics?.points?.count ?? 0;
+    const eventCount = analytics.ball_analytics?.points?.events?.length ?? 0;
+    console.log("[Points] analytics loaded", {
+      sessionId: gameId,
+      pointCount,
+      eventCount,
+    });
+  }, [analytics, gameId]);
+
+  useEffect(() => {
+    if (!analytics) return;
+    console.log("[Points] frame", {
+      frame: currentFrame,
+      active: activePointEvent?.frame ?? null,
+      last: lastPointEvent?.frame ?? null,
+    });
+  }, [analytics, currentFrame, activePointEvent, lastPointEvent]);
+
   const frameFromTime = useCallback(
     (time: number) => Math.max(0, Math.round(time * fps)),
     [fps]
