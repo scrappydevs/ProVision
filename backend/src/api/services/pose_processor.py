@@ -459,11 +459,18 @@ class PoseProcessor:
 
         print(f"[PoseProcessor] Video info: {total_frames} frames, {width}x{height}, {fps} fps")
 
-        if target_player:
+        # Support both new multi-player and legacy single player
+        if selected_players and len(selected_players) > 0:
+            print(f"[PoseProcessor] Tracking {len(selected_players)} selected players")
+            player_center = selected_players[0]["center"].copy()
+            opponent_center = selected_players[1]["center"].copy() if len(selected_players) > 1 else None
+        elif target_player:
             print(f"[PoseProcessor] Tracking selected player at center: {target_player['center']}")
-            last_center = target_player["center"].copy()
+            player_center = target_player["center"].copy()
+            opponent_center = None
         else:
-            last_center = None
+            player_center = None
+            opponent_center = None
 
         # Colors: player = green, opponent = orange (BGR format)
         PLAYER_COLOR = (91, 155, 107)     # Green
@@ -492,29 +499,54 @@ class PoseProcessor:
                     if len(results) > 0 and results[0].keypoints is not None:
                         keypoints_data = results[0].keypoints.data
                         if len(keypoints_data) > 0:
-                            if target_player and last_center and len(keypoints_data) > 1:
-                                player_idx = self._find_closest_player(results, last_center)
+                            # Match detections to selected players using proximity
+                            player_idx = None
+                            opp_idx = None
+                            
+                            if player_center:
+                                player_idx = self._find_closest_player(results, player_center)
                                 if player_idx is None:
                                     player_idx = 0
                             else:
                                 player_idx = 0
-
-                            last_player_kpts = keypoints_data[player_idx].cpu().numpy()
-
-                            if target_player:
-                                left_hip = last_player_kpts[11]
-                                right_hip = last_player_kpts[12]
-                                left_shoulder = last_player_kpts[5]
-                                right_shoulder = last_player_kpts[6]
-                                last_center = {
-                                    "x": float((left_hip[0] + right_hip[0] + left_shoulder[0] + right_shoulder[0]) / 4),
-                                    "y": float((left_hip[1] + right_hip[1] + left_shoulder[1] + right_shoulder[1]) / 4)
-                                }
-
-                            # Get opponent keypoints
-                            if len(keypoints_data) > 1:
+                            
+                            if opponent_center and len(keypoints_data) > 1:
+                                opp_idx = self._find_closest_player(results, opponent_center)
+                                # Make sure we don't track the same person twice
+                                if opp_idx == player_idx:
+                                    opp_idx = 1 if player_idx == 0 else 0
+                            elif len(keypoints_data) > 1:
                                 opp_idx = 1 if player_idx == 0 else 0
+
+                            # Update player tracking
+                            if player_idx is not None and player_idx < len(keypoints_data):
+                                last_player_kpts = keypoints_data[player_idx].cpu().numpy()
+                                
+                                # Update center for next frame
+                                if player_center:
+                                    left_hip = last_player_kpts[11]
+                                    right_hip = last_player_kpts[12]
+                                    left_shoulder = last_player_kpts[5]
+                                    right_shoulder = last_player_kpts[6]
+                                    player_center = {
+                                        "x": float((left_hip[0] + right_hip[0] + left_shoulder[0] + right_shoulder[0]) / 4),
+                                        "y": float((left_hip[1] + right_hip[1] + left_shoulder[1] + right_shoulder[1]) / 4)
+                                    }
+
+                            # Update opponent tracking
+                            if opp_idx is not None and opp_idx < len(keypoints_data):
                                 last_opponent_kpts = keypoints_data[opp_idx].cpu().numpy()
+                                
+                                # Update center for next frame
+                                if opponent_center:
+                                    left_hip = last_opponent_kpts[11]
+                                    right_hip = last_opponent_kpts[12]
+                                    left_shoulder = last_opponent_kpts[5]
+                                    right_shoulder = last_opponent_kpts[6]
+                                    opponent_center = {
+                                        "x": float((left_hip[0] + right_hip[0] + left_shoulder[0] + right_shoulder[0]) / 4),
+                                        "y": float((left_hip[1] + right_hip[1] + left_shoulder[1] + right_shoulder[1]) / 4)
+                                    }
                             else:
                                 last_opponent_kpts = None
 

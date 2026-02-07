@@ -934,4 +934,5 @@ export const createAndAnalyzeVideo = async (
   return { videoId: video.id, sessionId: analyzeResp.data.session_id };
 };
 
+export { api };
 export default api;

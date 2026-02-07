@@ -595,6 +595,13 @@ export default function GameViewerPage() {
     };
   }, [videoUrl, frameFromTime]);
 
+  // Jump threshold: points further than 12% of video diagonal are tracking noise
+  const jumpThreshold = useMemo(() => {
+    const vw = videoRef.current?.videoWidth || 1920;
+    const vh = videoRef.current?.videoHeight || 1080;
+    return Math.sqrt(vw * vw + vh * vh) * 0.12;
+  }, [session?.trajectory_data]);
+
   // Draw ball tracking overlay (mask/bbox)
   useEffect(() => {
     const canvas = canvasRef.current;
@@ -607,10 +614,15 @@ export default function GameViewerPage() {
     ctx.clearRect(0, 0, vw, vh);
     if (!hasTrajectory || visibleTrajectoryPoints.length === 0) return;
 
-    // Trail: fading green line connecting recent positions
+    // Trail: fading green line connecting recent positions, breaking on jumps
     if (visibleTrajectoryPoints.length >= 2) {
       const recent = visibleTrajectoryPoints.slice(-40);
       for (let i = 1; i < recent.length; i++) {
+        const dx = recent[i].x - recent[i-1].x;
+        const dy = recent[i].y - recent[i-1].y;
+        const dist = Math.sqrt(dx * dx + dy * dy);
+        // Skip drawing segment if it's a tracking jump (noise)
+        if (dist > jumpThreshold) continue;
         const alpha = (i / recent.length) * 0.4;
         ctx.beginPath();
         ctx.strokeStyle = `rgba(34, 197, 94, ${alpha})`;
@@ -622,7 +634,6 @@ export default function GameViewerPage() {
     }
 
     // Lookup current frame's trajectory point — find closest match if no exact hit
-    // Exact match first, then closest within window
     let cp = trajectoryFrameMap.get(currentFrame);
     if (!cp && trajectoryFrameMap.size > 0) {
       let minDiff = Infinity;
@@ -634,6 +645,21 @@ export default function GameViewerPage() {
         }
       }
     }
+
+    // Validate the current point isn't a wild jump from recent trajectory
+    if (cp && visibleTrajectoryPoints.length >= 2) {
+      const prev = visibleTrajectoryPoints[visibleTrajectoryPoints.length - 1];
+      // If current point is the prev point itself, it's fine
+      if (prev.frame !== cp.frame) {
+        const dx = cp.x - prev.x;
+        const dy = cp.y - prev.y;
+        const dist = Math.sqrt(dx * dx + dy * dy);
+        if (dist > jumpThreshold) {
+          cp = undefined; // Suppress the jump — don't render this detection
+        }
+      }
+    }
+
     if (cp) {
       const bbox = (cp as TrajectoryPoint & { bbox?: number[] }).bbox;
 
@@ -669,7 +695,7 @@ export default function GameViewerPage() {
         ctx.stroke();
       }
     }
-  }, [visibleTrajectoryPoints, trajectoryFrameMap, currentFrame, hasTrajectory]);
+  }, [visibleTrajectoryPoints, trajectoryFrameMap, currentFrame, hasTrajectory, jumpThreshold]);
 
   // Draw player markers on video
   useEffect(() => {
