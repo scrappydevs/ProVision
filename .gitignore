@@ -66,6 +66,9 @@ pnpm-debug.log*
 yt_cookies_key.txt
 *cookies*.txt
 
+# PO Token server (cloned during build)
+backend/pot-server/
+
 # Misc
 *.pid
 *.seed

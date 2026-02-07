@@ -45,7 +45,8 @@ _pot_process = None
 
 def _start_pot_server():
     global _pot_process
-    pot_server_dir = os.path.expanduser("~/bgutil-ytdlp-pot-provider/server")
+    # Look in the project directory (where build.sh cloned it)
+    pot_server_dir = os.path.join(SCRIPT_DIR, "pot-server", "server")
     pot_main = os.path.join(pot_server_dir, "build", "main.js")
 
     if not os.path.exists(pot_main):
