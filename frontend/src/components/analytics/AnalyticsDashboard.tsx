@@ -1,0 +1,546 @@
+"use client";
+
+import { useAnalytics } from "@/hooks/useAnalytics";
+import { usePoseAnalysis } from "@/hooks/usePoseData";
+import { Card } from "@/components/ui/card";
+import { Loader2, AlertCircle, Activity, TrendingUp, Zap, Target } from "lucide-react";
+import { LineChart, Line, BarChart, Bar, ScatterChart, Scatter, RadarChart, PolarGrid, PolarAngleAxis, PolarRadiusAxis, Radar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, Legend, Cell, Area, AreaChart } from "recharts";
+import { useMemo } from "react";
+
+interface AnalyticsDashboardProps {
+  sessionId: string;
+}
+
+export function AnalyticsDashboard({ sessionId }: AnalyticsDashboardProps) {
+  const { data: analytics, isLoading, error } = useAnalytics(sessionId);
+  const { data: poseData } = usePoseAnalysis(sessionId, 1000, 0);
+
+  // Process joint angles over time
+  const jointAngleData = useMemo(() => {
+    if (!poseData?.data || poseData.data.length === 0) return [];
+    
+    return poseData.data.map((frame) => ({
+      frame: frame.frame_number,
+      leftElbow: frame.joint_angles?.left_elbow || 0,
+      rightElbow: frame.joint_angles?.right_elbow || 0,
+      leftKnee: frame.joint_angles?.left_knee || 0,
+      rightKnee: frame.joint_angles?.right_knee || 0,
+      leftShoulder: frame.joint_angles?.left_shoulder || 0,
+      rightShoulder: frame.joint_angles?.right_shoulder || 0,
+    }));
+  }, [poseData]);
+
+  // Average joint angles for radar chart
+  const avgJointAngles = useMemo(() => {
+    if (jointAngleData.length === 0) return [];
+    
+    const sum = jointAngleData.reduce((acc, frame) => ({
+      leftElbow: acc.leftElbow + frame.leftElbow,
+      rightElbow: acc.rightElbow + frame.rightElbow,
+      leftKnee: acc.leftKnee + frame.leftKnee,
+      rightKnee: acc.rightKnee + frame.rightKnee,
+      leftShoulder: acc.leftShoulder + frame.leftShoulder,
+      rightShoulder: acc.rightShoulder + frame.rightShoulder,
+    }), { leftElbow: 0, rightElbow: 0, leftKnee: 0, rightKnee: 0, leftShoulder: 0, rightShoulder: 0 });
+    
+    const count = jointAngleData.length;
+    return [
+      { joint: "L Elbow", angle: sum.leftElbow / count, fullMark: 180 },
+      { joint: "R Elbow", angle: sum.rightElbow / count, fullMark: 180 },
+      { joint: "L Knee", angle: sum.leftKnee / count, fullMark: 180 },
+      { joint: "R Knee", angle: sum.rightKnee / count, fullMark: 180 },
+      { joint: "L Shoulder", angle: sum.leftShoulder / count, fullMark: 180 },
+      { joint: "R Shoulder", angle: sum.rightShoulder / count, fullMark: 180 },
+    ];
+  }, [jointAngleData]);
+
+  if (isLoading) {
+    return (
+      <div className="flex flex-col items-center justify-center h-[600px] gap-3">
+        <Loader2 className="w-8 h-8 animate-spin text-[#9B7B5B]" />
+        <p className="text-xs text-[#8A8885]">Computing analytics...</p>
+      </div>
+    );
+  }
+
+  if (error) {
+    return (
+      <div className="flex flex-col items-center justify-center h-[600px] gap-3">
+        <AlertCircle className="w-8 h-8 text-[#C45C5C]" />
+        <p className="text-sm font-medium text-[#E8E6E3]">Failed to load analytics</p>
+        <p className="text-xs text-[#8A8885] max-w-md text-center">
+          {error instanceof Error ? error.message : "Unknown error"}
+        </p>
+        <p className="text-[10px] text-[#6A6865]">
+          Make sure ball tracking and pose analysis are completed.
+        </p>
+      </div>
+    );
+  }
+
+  if (!analytics) {
+    return (
+      <div className="flex flex-col items-center justify-center h-[600px] gap-3">
+        <AlertCircle className="w-8 h-8 text-[#8A8885]" />
+        <p className="text-sm font-medium text-[#E8E6E3]">No analytics available</p>
+        <p className="text-xs text-[#8A8885]">
+          Complete ball tracking and pose analysis first.
+        </p>
+      </div>
+    );
+  }
+
+  const ballSpeed = analytics.ball_analytics.speed;
+  const trajectory = analytics.ball_analytics.trajectory;
+  const movement = analytics.pose_analytics.movement;
+  const contact = analytics.pose_analytics.contact;
+
+  return (
+    <div className="p-4 space-y-4 h-full overflow-y-auto">
+      {/* Header Stats */}
+      <div className="grid grid-cols-4 gap-3">
+        <div className="bg-[#282729]/60 backdrop-blur-xl rounded-xl p-3 border border-[#363436]/30">
+          <div className="flex items-center gap-2 mb-1">
+            <Zap className="w-3.5 h-3.5 text-[#9B7B5B]" />
+            <span className="text-[10px] text-[#8A8885]">Max Speed</span>
+          </div>
+          <div className="text-xl font-bold text-[#E8E6E3]">
+            {ballSpeed.max.toFixed(1)}
+          </div>
+          <div className="text-[9px] text-[#6A6865]">px/frame</div>
+        </div>
+
+        <div className="bg-[#282729]/60 backdrop-blur-xl rounded-xl p-3 border border-[#363436]/30">
+          <div className="flex items-center gap-2 mb-1">
+            <Target className="w-3.5 h-3.5 text-[#5B9B7B]" />
+            <span className="text-[10px] text-[#8A8885]">Avg Speed</span>
+          </div>
+          <div className="text-xl font-bold text-[#E8E6E3]">
+            {ballSpeed.avg.toFixed(1)}
+          </div>
+          <div className="text-[9px] text-[#6A6865]">px/frame</div>
+        </div>
+
+        <div className="bg-[#282729]/60 backdrop-blur-xl rounded-xl p-3 border border-[#363436]/30">
+          <div className="flex items-center gap-2 mb-1">
+            <Activity className="w-3.5 h-3.5 text-[#9B7B5B]" />
+            <span className="text-[10px] text-[#8A8885]">Bounces</span>
+          </div>
+          <div className="text-xl font-bold text-[#E8E6E3]">
+            {trajectory.bounce_count}
+          </div>
+          <div className="text-[9px] text-[#6A6865]">detected</div>
+        </div>
+
+        <div className="bg-[#282729]/60 backdrop-blur-xl rounded-xl p-3 border border-[#363436]/30">
+          <div className="flex items-center gap-2 mb-1">
+            <TrendingUp className="w-3.5 h-3.5 text-[#5B9B7B]" />
+            <span className="text-[10px] text-[#8A8885]">Distance</span>
+          </div>
+          <div className="text-xl font-bold text-[#E8E6E3]">
+            {(trajectory.total_distance / 100).toFixed(1)}
+          </div>
+          <div className="text-[9px] text-[#6A6865]">meters</div>
+        </div>
+      </div>
+
+      {/* Ball Speed Over Time */}
+      <div className="bg-[#282729]/40 backdrop-blur-xl rounded-xl p-4 border border-[#363436]/30">
+        <h3 className="text-xs font-medium text-[#E8E6E3] mb-3">Ball Speed Timeline</h3>
+        <ResponsiveContainer width="100%" height={200}>
+          <AreaChart data={ballSpeed.timeline}>
+            <defs>
+              <linearGradient id="speedGradient" x1="0" y1="0" x2="0" y2="1">
+                <stop offset="5%" stopColor="#9B7B5B" stopOpacity={0.3}/>
+                <stop offset="95%" stopColor="#9B7B5B" stopOpacity={0}/>
+              </linearGradient>
+            </defs>
+            <CartesianGrid strokeDasharray="3 3" stroke="#363436" opacity={0.3} />
+            <XAxis 
+              dataKey="frame" 
+              stroke="#8A8885" 
+              tick={{ fill: '#6A6865', fontSize: 10 }}
+              label={{ value: 'Frame', position: 'insideBottom', offset: -5, fill: '#8A8885', fontSize: 10 }}
+            />
+            <YAxis 
+              stroke="#8A8885" 
+              tick={{ fill: '#6A6865', fontSize: 10 }}
+              label={{ value: 'Speed (px/frame)', angle: -90, position: 'insideLeft', fill: '#8A8885', fontSize: 10 }}
+            />
+            <Tooltip 
+              contentStyle={{ 
+                backgroundColor: '#1E1D1F', 
+                border: '1px solid #363436',
+                borderRadius: '8px',
+                fontSize: '11px',
+                color: '#E8E6E3'
+              }}
+            />
+            <Area 
+              type="monotone" 
+              dataKey="speed" 
+              stroke="#9B7B5B" 
+              strokeWidth={2}
+              fill="url(#speedGradient)" 
+            />
+          </AreaChart>
+        </ResponsiveContainer>
+      </div>
+
+      {/* Joint Angles Over Time */}
+      {jointAngleData.length > 0 && (
+        <div className="grid grid-cols-2 gap-3">
+          {/* Joint Angles Timeline */}
+          <div className="bg-[#282729]/40 backdrop-blur-xl rounded-xl p-4 border border-[#363436]/30">
+            <h3 className="text-xs font-medium text-[#E8E6E3] mb-3">Joint Angles Over Time</h3>
+            <ResponsiveContainer width="100%" height={220}>
+              <LineChart data={jointAngleData}>
+                <CartesianGrid strokeDasharray="3 3" stroke="#363436" opacity={0.2} />
+                <XAxis 
+                  dataKey="frame" 
+                  stroke="#8A8885" 
+                  tick={{ fill: '#6A6865', fontSize: 9 }}
+                />
+                <YAxis 
+                  stroke="#8A8885" 
+                  tick={{ fill: '#6A6865', fontSize: 9 }}
+                  domain={[0, 180]}
+                />
+                <Tooltip 
+                  contentStyle={{ 
+                    backgroundColor: '#1E1D1F', 
+                    border: '1px solid #363436',
+                    borderRadius: '8px',
+                    fontSize: '10px'
+                  }}
+                />
+                <Legend 
+                  wrapperStyle={{ fontSize: '9px' }}
+                  iconSize={8}
+                />
+                <Line type="monotone" dataKey="leftElbow" stroke="#9B7B5B" strokeWidth={1.5} dot={false} name="L Elbow" />
+                <Line type="monotone" dataKey="rightElbow" stroke="#B8956D" strokeWidth={1.5} dot={false} name="R Elbow" />
+                <Line type="monotone" dataKey="leftKnee" stroke="#5B9B7B" strokeWidth={1.5} dot={false} name="L Knee" />
+                <Line type="monotone" dataKey="rightKnee" stroke="#6DAB8B" strokeWidth={1.5} dot={false} name="R Knee" />
+              </LineChart>
+            </ResponsiveContainer>
+          </div>
+
+          {/* Average Joint Angles Radar */}
+          <div className="bg-[#282729]/40 backdrop-blur-xl rounded-xl p-4 border border-[#363436]/30">
+            <h3 className="text-xs font-medium text-[#E8E6E3] mb-3">Average Joint Angles</h3>
+            <ResponsiveContainer width="100%" height={220}>
+              <RadarChart data={avgJointAngles}>
+                <PolarGrid stroke="#363436" />
+                <PolarAngleAxis 
+                  dataKey="joint" 
+                  tick={{ fill: '#8A8885', fontSize: 9 }}
+                />
+                <PolarRadiusAxis 
+                  angle={90} 
+                  domain={[0, 180]}
+                  tick={{ fill: '#6A6865', fontSize: 9 }}
+                />
+                <Radar 
+                  name="Angle (degrees)" 
+                  dataKey="angle" 
+                  stroke="#9B7B5B" 
+                  fill="#9B7B5B" 
+                  fillOpacity={0.3}
+                  strokeWidth={2}
+                />
+                <Tooltip 
+                  contentStyle={{ 
+                    backgroundColor: '#1E1D1F', 
+                    border: '1px solid #363436',
+                    borderRadius: '8px',
+                    fontSize: '10px'
+                  }}
+                />
+              </RadarChart>
+            </ResponsiveContainer>
+          </div>
+        </div>
+      )}
+
+      {/* Stance Width & Arm Extension */}
+      {movement.stance_width_timeline.length > 0 && (
+        <div className="grid grid-cols-2 gap-3">
+          <div className="bg-[#282729]/40 backdrop-blur-xl rounded-xl p-4 border border-[#363436]/30">
+            <h3 className="text-xs font-medium text-[#E8E6E3] mb-3">Stance Width</h3>
+            <ResponsiveContainer width="100%" height={180}>
+              <AreaChart data={movement.stance_width_timeline}>
+                <defs>
+                  <linearGradient id="stanceGradient" x1="0" y1="0" x2="0" y2="1">
+                    <stop offset="5%" stopColor="#5B9B7B" stopOpacity={0.3}/>
+                    <stop offset="95%" stopColor="#5B9B7B" stopOpacity={0}/>
+                  </linearGradient>
+                </defs>
+                <CartesianGrid strokeDasharray="3 3" stroke="#363436" opacity={0.2} />
+                <XAxis dataKey="frame" stroke="#8A8885" tick={{ fill: '#6A6865', fontSize: 9 }} />
+                <YAxis stroke="#8A8885" tick={{ fill: '#6A6865', fontSize: 9 }} />
+                <Tooltip 
+                  contentStyle={{ 
+                    backgroundColor: '#1E1D1F', 
+                    border: '1px solid #363436',
+                    borderRadius: '8px',
+                    fontSize: '10px'
+                  }}
+                />
+                <Area 
+                  type="monotone" 
+                  dataKey="width" 
+                  stroke="#5B9B7B" 
+                  strokeWidth={2}
+                  fill="url(#stanceGradient)" 
+                />
+              </AreaChart>
+            </ResponsiveContainer>
+          </div>
+
+          <div className="bg-[#282729]/40 backdrop-blur-xl rounded-xl p-4 border border-[#363436]/30">
+            <h3 className="text-xs font-medium text-[#E8E6E3] mb-3">Arm Extension</h3>
+            <ResponsiveContainer width="100%" height={180}>
+              <LineChart data={movement.arm_extension_timeline}>
+                <CartesianGrid strokeDasharray="3 3" stroke="#363436" opacity={0.2} />
+                <XAxis dataKey="frame" stroke="#8A8885" tick={{ fill: '#6A6865', fontSize: 9 }} />
+                <YAxis stroke="#8A8885" tick={{ fill: '#6A6865', fontSize: 9 }} />
+                <Tooltip 
+                  contentStyle={{ 
+                    backgroundColor: '#1E1D1F', 
+                    border: '1px solid #363436',
+                    borderRadius: '8px',
+                    fontSize: '10px'
+                  }}
+                />
+                <Line type="monotone" dataKey="left" stroke="#9B7B5B" strokeWidth={1.5} dot={false} name="Left" />
+                <Line type="monotone" dataKey="right" stroke="#5B9B7B" strokeWidth={1.5} dot={false} name="Right" />
+                <Legend wrapperStyle={{ fontSize: '9px' }} iconSize={8} />
+              </LineChart>
+            </ResponsiveContainer>
+          </div>
+        </div>
+      )}
+
+      {/* Speed Distribution */}
+      <div className="bg-[#282729]/40 backdrop-blur-xl rounded-xl p-4 border border-[#363436]/30">
+        <h3 className="text-xs font-medium text-[#E8E6E3] mb-3">Speed Distribution</h3>
+        <ResponsiveContainer width="100%" height={200}>
+          <BarChart data={[
+            { range: 'Slow', count: ballSpeed.distribution.slow, fill: '#5B9B7B' },
+            { range: 'Medium', count: ballSpeed.distribution.medium, fill: '#9B7B5B' },
+            { range: 'Fast', count: ballSpeed.distribution.fast, fill: '#C45C5C' },
+          ]}>
+            <CartesianGrid strokeDasharray="3 3" stroke="#363436" opacity={0.2} />
+            <XAxis dataKey="range" stroke="#8A8885" tick={{ fill: '#8A8885', fontSize: 10 }} />
+            <YAxis stroke="#8A8885" tick={{ fill: '#6A6865', fontSize: 10 }} />
+            <Tooltip 
+              contentStyle={{ 
+                backgroundColor: '#1E1D1F', 
+                border: '1px solid #363436',
+                borderRadius: '8px',
+                fontSize: '10px'
+              }}
+            />
+            <Bar dataKey="count" radius={[6, 6, 0, 0]}>
+              {[
+                { range: 'Slow', count: ballSpeed.distribution.slow, fill: '#5B9B7B' },
+                { range: 'Medium', count: ballSpeed.distribution.medium, fill: '#9B7B5B' },
+                { range: 'Fast', count: ballSpeed.distribution.fast, fill: '#C45C5C' },
+              ].map((entry, index) => (
+                <Cell key={`cell-${index}`} fill={entry.fill} />
+              ))}
+            </Bar>
+          </BarChart>
+        </ResponsiveContainer>
+      </div>
+
+      {/* Rally Analysis */}
+      {trajectory.rallies.length > 0 && (
+        <div className="bg-[#282729]/40 backdrop-blur-xl rounded-xl p-4 border border-[#363436]/30">
+          <h3 className="text-xs font-medium text-[#E8E6E3] mb-3">Rally Breakdown</h3>
+          <div className="space-y-2">
+            {trajectory.rallies.map((rally, idx) => (
+              <div key={idx} className="flex items-center gap-3 p-2 rounded-lg bg-[#1E1D1F]/40">
+                <div className="text-[10px] text-[#9B7B5B] font-medium w-16">
+                  Rally {idx + 1}
+                </div>
+                <div className="flex-1">
+                  <div className="h-1.5 bg-[#363436] rounded-full overflow-hidden">
+                    <div 
+                      className="h-full bg-[#9B7B5B] transition-all"
+                      style={{ width: `${(rally.length / Math.max(...trajectory.rallies.map(r => r.length))) * 100}%` }}
+                    />
+                  </div>
+                </div>
+                <div className="text-[10px] text-[#8A8885]">
+                  {rally.length} frames
+                </div>
+                <div className="text-[10px] text-[#9B7B5B] font-medium">
+                  {rally.avg_speed.toFixed(1)} px/f
+                </div>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
+
+      {/* Ball Contact Moments */}
+      {contact.contact_moments.length > 0 && (
+        <div className="bg-[#282729]/40 backdrop-blur-xl rounded-xl p-4 border border-[#363436]/30">
+          <h3 className="text-xs font-medium text-[#E8E6E3] mb-3">Ball Contact Analysis</h3>
+          <div className="grid grid-cols-3 gap-4 mb-3">
+            <div>
+              <div className="text-[10px] text-[#8A8885]">Total Contacts</div>
+              <div className="text-2xl font-bold text-[#9B7B5B]">{contact.contact_moments.length}</div>
+            </div>
+            <div>
+              <div className="text-[10px] text-[#8A8885]">Avg Height</div>
+              <div className="text-2xl font-bold text-[#E8E6E3]">
+                {contact.avg_contact_height.toFixed(0)}
+              </div>
+              <div className="text-[9px] text-[#6A6865]">px</div>
+            </div>
+            <div>
+              <div className="text-[10px] text-[#8A8885]">Height Distribution</div>
+              <div className="mt-1 space-y-0.5">
+                {contact.height_distribution.map((dist) => (
+                  <div key={dist.range} className="flex justify-between text-[10px]">
+                    <span className="text-[#8A8885] capitalize">{dist.range}:</span>
+                    <span className="text-[#E8E6E3] font-medium">{dist.count}</span>
+                  </div>
+                ))}
+              </div>
+            </div>
+          </div>
+          
+          {/* Contact moments timeline */}
+          <ResponsiveContainer width="100%" height={140}>
+            <ScatterChart>
+              <CartesianGrid strokeDasharray="3 3" stroke="#363436" opacity={0.2} />
+              <XAxis 
+                dataKey="frame" 
+                name="Frame" 
+                stroke="#8A8885" 
+                tick={{ fill: '#6A6865', fontSize: 9 }}
+              />
+              <YAxis 
+                dataKey="height" 
+                name="Height" 
+                stroke="#8A8885" 
+                tick={{ fill: '#6A6865', fontSize: 9 }}
+              />
+              <Tooltip 
+                contentStyle={{ 
+                  backgroundColor: '#1E1D1F', 
+                  border: '1px solid #363436',
+                  borderRadius: '8px',
+                  fontSize: '10px'
+                }}
+                cursor={{ strokeDasharray: '3 3' }}
+              />
+              <Scatter 
+                data={contact.contact_moments} 
+                fill="#9B7B5B" 
+                opacity={0.7}
+              />
+            </ScatterChart>
+          </ResponsiveContainer>
+        </div>
+      )}
+
+      {/* Player Velocity */}
+      {movement.velocity_timeline.length > 0 && (
+        <div className="bg-[#282729]/40 backdrop-blur-xl rounded-xl p-4 border border-[#363436]/30">
+          <h3 className="text-xs font-medium text-[#E8E6E3] mb-3">Player Velocity</h3>
+          <ResponsiveContainer width="100%" height={180}>
+            <AreaChart data={movement.velocity_timeline}>
+              <defs>
+                <linearGradient id="velocityGradient" x1="0" y1="0" x2="0" y2="1">
+                  <stop offset="5%" stopColor="#5B9B7B" stopOpacity={0.3}/>
+                  <stop offset="95%" stopColor="#5B9B7B" stopOpacity={0}/>
+                </linearGradient>
+              </defs>
+              <CartesianGrid strokeDasharray="3 3" stroke="#363436" opacity={0.2} />
+              <XAxis dataKey="frame" stroke="#8A8885" tick={{ fill: '#6A6865', fontSize: 9 }} />
+              <YAxis stroke="#8A8885" tick={{ fill: '#6A6865', fontSize: 9 }} />
+              <Tooltip 
+                contentStyle={{ 
+                  backgroundColor: '#1E1D1F', 
+                  border: '1px solid #363436',
+                  borderRadius: '8px',
+                  fontSize: '10px'
+                }}
+              />
+              <Area 
+                type="monotone" 
+                dataKey="velocity" 
+                stroke="#5B9B7B" 
+                strokeWidth={2}
+                fill="url(#velocityGradient)" 
+              />
+            </AreaChart>
+          </ResponsiveContainer>
+        </div>
+      )}
+
+      {/* Key Metrics Summary */}
+      <div className="grid grid-cols-2 gap-3">
+        <div className="bg-[#282729]/40 backdrop-blur-xl rounded-xl p-4 border border-[#363436]/30">
+          <h3 className="text-xs font-medium text-[#E8E6E3] mb-3">Ball Metrics</h3>
+          <div className="space-y-2">
+            <div className="flex justify-between text-[10px]">
+              <span className="text-[#8A8885]">Median Speed</span>
+              <span className="text-[#E8E6E3] font-medium">{ballSpeed.median.toFixed(1)} px/f</span>
+            </div>
+            <div className="flex justify-between text-[10px]">
+              <span className="text-[#8A8885]">Std Deviation</span>
+              <span className="text-[#E8E6E3] font-medium">{ballSpeed.stddev.toFixed(1)}</span>
+            </div>
+            <div className="flex justify-between text-[10px]">
+              <span className="text-[#8A8885]">Direction Changes</span>
+              <span className="text-[#E8E6E3] font-medium">{trajectory.direction_changes}</span>
+            </div>
+            <div className="flex justify-between text-[10px]">
+              <span className="text-[#8A8885]">Total Distance</span>
+              <span className="text-[#E8E6E3] font-medium">{(trajectory.total_distance / 100).toFixed(1)}m</span>
+            </div>
+          </div>
+        </div>
+
+        <div className="bg-[#282729]/40 backdrop-blur-xl rounded-xl p-4 border border-[#363436]/30">
+          <h3 className="text-xs font-medium text-[#E8E6E3] mb-3">Player Metrics</h3>
+          <div className="space-y-2">
+            <div className="flex justify-between text-[10px]">
+              <span className="text-[#8A8885]">Avg Stance Width</span>
+              <span className="text-[#E8E6E3] font-medium">{movement.avg_stance_width.toFixed(0)} px</span>
+            </div>
+            <div className="flex justify-between text-[10px]">
+              <span className="text-[#8A8885]">Avg Velocity</span>
+              <span className="text-[#E8E6E3] font-medium">{movement.avg_velocity.toFixed(2)} px/f</span>
+            </div>
+            <div className="flex justify-between text-[10px]">
+              <span className="text-[#8A8885]">Pose Frames</span>
+              <span className="text-[#E8E6E3] font-medium">{analytics.pose_frame_count}</span>
+            </div>
+            <div className="flex justify-between text-[10px]">
+              <span className="text-[#8A8885]">Video FPS</span>
+              <span className="text-[#E8E6E3] font-medium">{analytics.fps.toFixed(0)}</span>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      {/* Spin Estimate */}
+      {ballSpeed.spin_estimate && (
+        <div className="bg-[#282729]/40 backdrop-blur-xl rounded-xl p-3 border border-[#363436]/30">
+          <div className="flex items-center gap-2">
+            <Zap className="w-3.5 h-3.5 text-[#9B7B5B]" />
+            <span className="text-[10px] text-[#8A8885]">Estimated Spin:</span>
+            <span className="text-xs font-medium text-[#E8E6E3]">{analytics.ball_analytics.spin.estimate}</span>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
