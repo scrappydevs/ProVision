@@ -2,24 +2,53 @@
 
 import { useAnalytics } from "@/hooks/useAnalytics";
 import { usePoseAnalysis } from "@/hooks/usePoseData";
-import { Card } from "@/components/ui/card";
-import { Loader2, AlertCircle, Activity, TrendingUp, Zap, Target } from "lucide-react";
+import { runRunpodDashboard } from "@/lib/api";
+import { Button } from "@/components/ui/button";
+import { useMutation, useQueryClient } from "@tanstack/react-query";
+import { Loader2, AlertCircle, Activity, TrendingUp, Zap, Target, ExternalLink, RefreshCw } from "lucide-react";
 import { LineChart, Line, BarChart, Bar, ScatterChart, Scatter, RadarChart, PolarGrid, PolarAngleAxis, PolarRadiusAxis, Radar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, Legend, Cell, Area, AreaChart } from "recharts";
-import { useMemo } from "react";
+import { useEffect, useMemo, useRef } from "react";
 
 interface AnalyticsDashboardProps {
   sessionId: string;
 }
 
+function formatBytes(size?: number): string {
+  if (size === undefined || size === null || Number.isNaN(size)) return "Unknown size";
+  if (size < 1024) return `${size} B`;
+  if (size < 1024 * 1024) return `${(size / 1024).toFixed(1)} KB`;
+  if (size < 1024 * 1024 * 1024) return `${(size / (1024 * 1024)).toFixed(1)} MB`;
+  return `${(size / (1024 * 1024 * 1024)).toFixed(1)} GB`;
+}
+
 export function AnalyticsDashboard({ sessionId }: AnalyticsDashboardProps) {
+  const queryClient = useQueryClient();
   const { data: analytics, isLoading, error } = useAnalytics(sessionId);
   const { data: poseData } = usePoseAnalysis(sessionId, 1000, 0);
+  const autoRunRef = useRef(false);
+  const runpodMutation = useMutation({
+    mutationFn: async (force: boolean = false) => {
+      const response = await runRunpodDashboard(sessionId, force);
+      return response.data;
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["analytics", sessionId] });
+    },
+  });
 
   // Process joint angles over time
-  const jointAngleData = useMemo(() => {
-    if (!poseData?.data || poseData.data.length === 0) return [];
-    
-    return poseData.data.map((frame) => ({
+  const jointAngleData = useMemo<Array<{
+    frame: number;
+    leftElbow: number;
+    rightElbow: number;
+    leftKnee: number;
+    rightKnee: number;
+    leftShoulder: number;
+    rightShoulder: number;
+  }>>(() => {
+    if (!poseData?.frames || poseData.frames.length === 0) return [];
+
+    return poseData.frames.map((frame) => ({
       frame: frame.frame_number,
       leftElbow: frame.joint_angles?.left_elbow || 0,
       rightElbow: frame.joint_angles?.right_elbow || 0,
@@ -34,14 +63,17 @@ export function AnalyticsDashboard({ sessionId }: AnalyticsDashboardProps) {
   const avgJointAngles = useMemo(() => {
     if (jointAngleData.length === 0) return [];
     
-    const sum = jointAngleData.reduce((acc, frame) => ({
-      leftElbow: acc.leftElbow + frame.leftElbow,
-      rightElbow: acc.rightElbow + frame.rightElbow,
-      leftKnee: acc.leftKnee + frame.leftKnee,
-      rightKnee: acc.rightKnee + frame.rightKnee,
-      leftShoulder: acc.leftShoulder + frame.leftShoulder,
-      rightShoulder: acc.rightShoulder + frame.rightShoulder,
-    }), { leftElbow: 0, rightElbow: 0, leftKnee: 0, rightKnee: 0, leftShoulder: 0, rightShoulder: 0 });
+    const sum = jointAngleData.reduce(
+      (acc, frame) => ({
+        leftElbow: acc.leftElbow + frame.leftElbow,
+        rightElbow: acc.rightElbow + frame.rightElbow,
+        leftKnee: acc.leftKnee + frame.leftKnee,
+        rightKnee: acc.rightKnee + frame.rightKnee,
+        leftShoulder: acc.leftShoulder + frame.leftShoulder,
+        rightShoulder: acc.rightShoulder + frame.rightShoulder,
+      }),
+      { leftElbow: 0, rightElbow: 0, leftKnee: 0, rightKnee: 0, leftShoulder: 0, rightShoulder: 0 }
+    );
     
     const count = jointAngleData.length;
     return [
@@ -53,6 +85,21 @@ export function AnalyticsDashboard({ sessionId }: AnalyticsDashboardProps) {
       { joint: "R Shoulder", angle: sum.rightShoulder / count, fullMark: 180 },
     ];
   }, [jointAngleData]);
+
+  const runpodDashboard = analytics?.runpod_dashboard;
+  const runpodArtifacts = runpodDashboard?.artifacts || [];
+
+  useEffect(() => {
+    autoRunRef.current = false;
+  }, [sessionId]);
+
+  useEffect(() => {
+    if (!analytics) return;
+    if (autoRunRef.current) return;
+    if (runpodArtifacts.length > 0) return;
+    autoRunRef.current = true;
+    runpodMutation.mutate(false);
+  }, [analytics, runpodArtifacts.length, runpodMutation]);
 
   if (isLoading) {
     return (
@@ -532,7 +579,7 @@ export function AnalyticsDashboard({ sessionId }: AnalyticsDashboardProps) {
       </div>
 
       {/* Spin Estimate */}
-      {ballSpeed.spin_estimate && (
+      {analytics.ball_analytics.spin?.estimate && (
         <div className="bg-[#282729]/40 backdrop-blur-xl rounded-xl p-3 border border-[#363436]/30">
           <div className="flex items-center gap-2">
             <Zap className="w-3.5 h-3.5 text-[#9B7B5B]" />
@@ -541,6 +588,90 @@ export function AnalyticsDashboard({ sessionId }: AnalyticsDashboardProps) {
           </div>
         </div>
       )}
+
+      {/* RunPod Dashboard Outputs */}
+      <div className="bg-[#282729]/40 backdrop-blur-xl rounded-xl p-4 border border-[#363436]/30">
+        <div className="flex items-start justify-between gap-3 mb-3">
+          <div>
+            <h3 className="text-xs font-medium text-[#E8E6E3]">RunPod Dashboard Outputs</h3>
+            <p className="text-[10px] text-[#8A8885] mt-1">
+              {runpodMutation.isPending
+                ? "Processing dashboard game video on RunPod..."
+                : runpodArtifacts.length > 0
+                ? `${runpodArtifacts.length} artifact(s) synced from ${runpodDashboard?.folder ?? "runpod-dashboard"}`
+                : "No synced outputs yet. Triggering run automatically."}
+            </p>
+          </div>
+          <Button
+            variant="outline"
+            size="sm"
+            className="h-7 text-[10px] border-[#4A4846] bg-[#1E1D1F]/60 hover:bg-[#1E1D1F]"
+            onClick={() => runpodMutation.mutate(true)}
+            disabled={runpodMutation.isPending}
+          >
+            {runpodMutation.isPending ? (
+              <Loader2 className="w-3 h-3 mr-1 animate-spin" />
+            ) : (
+              <RefreshCw className="w-3 h-3 mr-1" />
+            )}
+            Re-run
+          </Button>
+        </div>
+
+        {runpodDashboard?.error && (
+          <p className="text-[10px] text-[#C45C5C] mb-2">
+            {runpodDashboard.error}
+          </p>
+        )}
+
+        {runpodArtifacts.length === 0 ? (
+          <div className="rounded-lg border border-dashed border-[#4A4846] p-3 text-[10px] text-[#8A8885]">
+            Waiting for uploaded outputs from `/workspace/UpliftingTableTennis/file`.
+          </div>
+        ) : (
+          <div className="space-y-3">
+            {runpodArtifacts.map((artifact) => (
+              <div key={artifact.path} className="rounded-lg bg-[#1E1D1F]/40 border border-[#363436]/40 p-3">
+                <div className="flex items-start justify-between gap-2 mb-2">
+                  <div className="min-w-0">
+                    <p className="text-[11px] text-[#E8E6E3] truncate">{artifact.name}</p>
+                    <p className="text-[10px] text-[#8A8885]">
+                      {artifact.kind.toUpperCase()} • {formatBytes(artifact.size)}
+                    </p>
+                  </div>
+                  {artifact.url && (
+                    <a
+                      href={artifact.url}
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      className="inline-flex items-center gap-1 text-[10px] text-[#9B7B5B] hover:text-[#C3A07B]"
+                    >
+                      <ExternalLink className="w-3 h-3" />
+                      Open
+                    </a>
+                  )}
+                </div>
+
+                {artifact.kind === "video" && artifact.url && (
+                  <video
+                    controls
+                    src={artifact.url}
+                    className="w-full max-h-72 rounded-md bg-black/40"
+                  />
+                )}
+
+                {artifact.kind === "image" && artifact.url && (
+                  <img
+                    src={artifact.url}
+                    alt={artifact.name}
+                    className="w-full max-h-72 object-contain rounded-md bg-black/40"
+                  />
+                )}
+              </div>
+            ))}
+          </div>
+        )}
+      </div>
     </div>
   );
 }

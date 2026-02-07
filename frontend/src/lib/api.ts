@@ -728,6 +728,26 @@ export const getTournamentStats = () =>
 // Analytics
 // ============================================================================
 
+export interface RunpodDashboardArtifact {
+  name: string;
+  path: string;
+  url: string;
+  mime_type: string;
+  kind: "video" | "image" | "json" | "file";
+  size?: number;
+  updated_at?: string;
+  created_at?: string;
+}
+
+export interface RunpodDashboardData {
+  status: "ready" | "empty" | "error" | "completed" | "already_exists";
+  folder: string;
+  artifacts: RunpodDashboardArtifact[];
+  skipped?: boolean;
+  error?: string;
+  remote?: Record<string, unknown>;
+}
+
 export interface AnalyticsData {
   session_id: string;
   session_name: string;
@@ -785,10 +805,18 @@ export interface AnalyticsData {
     speed_vs_stance: Array<{ speed: number; stance: number; frame: number }>;
     speed_vs_extension: Array<{ speed: number; extension: number; frame: number }>;
   };
+  runpod_dashboard?: RunpodDashboardData;
 }
 
 export const getSessionAnalytics = (sessionId: string) =>
   api.get<AnalyticsData>(`/api/analytics/${sessionId}`);
+
+export const runRunpodDashboard = (sessionId: string, force: boolean = false) =>
+  api.post<RunpodDashboardData>(
+    `/api/analytics/${sessionId}/runpod-dashboard`,
+    null,
+    { params: force ? { force: true } : undefined }
+  );
 
 export const backfillTournamentVideos = () =>
   api.post<{ message: string; searched: number; found: number; skipped: number }>("/api/tournaments/backfill-videos");

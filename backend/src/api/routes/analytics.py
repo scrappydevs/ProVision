@@ -7,13 +7,37 @@ from fastapi import APIRouter, HTTPException, Depends
 from typing import Dict, Any
 import logging
 
-from ..database.supabase import get_supabase
+from ..database.supabase import get_supabase, get_current_user_id
 from ..services.analytics_service import compute_session_analytics
-from ..routes.sessions import get_current_user_id
+from ..services.runpod_dashboard_service import runpod_dashboard_service
 
 logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/api/analytics", tags=["analytics"])
+
+
+def _with_runpod_dashboard(
+    analytics: Dict[str, Any],
+    *,
+    user_id: str,
+    session_id: str,
+) -> Dict[str, Any]:
+    """Attach dynamic RunPod artifact metadata to analytics payload."""
+    payload = dict(analytics)
+    try:
+        payload["runpod_dashboard"] = runpod_dashboard_service.get_dashboard_payload(
+            user_id=user_id,
+            session_id=session_id,
+        )
+    except Exception as exc:
+        logger.warning(f"Failed to load RunPod artifacts for {session_id}: {exc}")
+        payload["runpod_dashboard"] = {
+            "status": "error",
+            "folder": runpod_dashboard_service.artifact_prefix(user_id, session_id),
+            "artifacts": [],
+            "error": str(exc),
+        }
+    return payload
 
 
 @router.get("/{session_id}")
@@ -75,7 +99,11 @@ async def get_session_analytics(
                 else None
             )
             if cache_row.get("analytics") and session_updated_at_norm and cache_updated_norm == session_updated_at_norm:
-                return cache_row["analytics"]
+                return _with_runpod_dashboard(
+                    cache_row["analytics"],
+                    user_id=user_id,
+                    session_id=session_id,
+                )
     except Exception as e:
         logger.warning(f"Analytics cache lookup failed: {e}")
     
@@ -117,5 +145,44 @@ async def get_session_analytics(
         }, on_conflict="session_id").execute()
     except Exception as e:
         logger.warning(f"Analytics cache write failed: {e}")
-    
-    return analytics
+
+    return _with_runpod_dashboard(
+        analytics,
+        user_id=user_id,
+        session_id=session_id,
+    )
+
+
+@router.post("/{session_id}/runpod-dashboard")
+async def run_session_dashboard_pipeline(
+    session_id: str,
+    force: bool = False,
+    user_id: str = Depends(get_current_user_id),
+) -> Dict[str, Any]:
+    """Run dashboard analysis file on RunPod for this session's game video."""
+    supabase = get_supabase()
+    session_result = (
+        supabase.table("sessions")
+        .select("id, video_path")
+        .eq("id", session_id)
+        .eq("user_id", user_id)
+        .single()
+        .execute()
+    )
+
+    if not session_result.data:
+        raise HTTPException(status_code=404, detail="Session not found")
+
+    video_url = session_result.data.get("video_path")
+    if not video_url:
+        raise HTTPException(status_code=400, detail="Session has no video")
+
+    try:
+        return runpod_dashboard_service.run_dashboard_analysis(
+            session_id=session_id,
+            user_id=user_id,
+            video_url=video_url,
+            force=force,
+        )
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=f"RunPod dashboard run failed: {exc}")

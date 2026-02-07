@@ -11,11 +11,12 @@ import { Button } from "@/components/ui/button";
 import {
   ArrowLeft, Crosshair, Loader2, ChevronRight, Play, Pause,
   SkipBack, SkipForward, Volume2, VolumeX, Activity, Sparkles, LayoutGrid,
-  X, Send, Users, BarChart3, Bug, Copy, Check, RefreshCw,
+  X, Send, Users, BarChart3, Copy, Check, RefreshCw,
 } from "lucide-react";
 import Link from "next/link";
 import dynamic from "next/dynamic";
 import { cn } from "@/lib/utils";
+import { appSettingKeys, readStrokeDebugModeSetting } from "@/lib/appSettings";
 import {
   TrajectoryPoint,
   aiChat,
@@ -121,6 +122,16 @@ export default function GameViewerPage() {
   const [debugLoading, setDebugLoading] = useState(false);
   const [debugFlash, setDebugFlash] = useState<string | null>(null);
   const [debugCopied, setDebugCopied] = useState(false);
+
+  useEffect(() => {
+    setDebugMode(readStrokeDebugModeSetting());
+    const syncDebugSetting = (event: StorageEvent) => {
+      if (event.key && event.key !== appSettingKeys.strokeDebugMode) return;
+      setDebugMode(readStrokeDebugModeSetting());
+    };
+    window.addEventListener("storage", syncDebugSetting);
+    return () => window.removeEventListener("storage", syncDebugSetting);
+  }, []);
 
   const { data: session, isLoading } = useSession(gameId);
   const { data: poseData } = usePoseAnalysis(gameId);
@@ -392,12 +403,6 @@ export default function GameViewerPage() {
     const handler = (e: KeyboardEvent) => {
       // Ignore if typing in an input/textarea
       if (e.target instanceof HTMLInputElement || e.target instanceof HTMLTextAreaElement) return;
-
-      if (e.key === "d" || e.key === "D") {
-        e.preventDefault();
-        setDebugMode(prev => !prev);
-        return;
-      }
 
       if (!debugMode) return;
 
@@ -897,10 +902,11 @@ export default function GameViewerPage() {
 
   // Auto-widen panel for court view and analytics
   useEffect(() => {
-    if (showCourt) setPanelWidth(480);
+    if (aiOpen) setPanelWidth(560); // Wider AI panel, expanding toward the video
+    else if (showCourt) setPanelWidth(480);
     else if (showAnalytics) setPanelWidth(800); // Wide panel for analytics
     else setPanelWidth(320);
-  }, [showCourt, showAnalytics]);
+  }, [aiOpen, showCourt, showAnalytics]);
 
   const handleResizeStart = useCallback((e: React.MouseEvent) => {
     e.preventDefault();
@@ -923,29 +929,34 @@ export default function GameViewerPage() {
 
   const firstPlayer = session.players?.[0];
   const detection = detectionResult;
+  const isAnalyticsView = activeTab === "analytics" && !aiOpen;
 
   return (
     <>
       <div className="h-[calc(100vh-7rem)] flex flex-col overflow-hidden">
-        {/* Breadcrumbs */}
-        <nav className="flex items-center gap-1.5 text-xs text-[#6A6865] mb-2 shrink-0">
-          <Link href="/dashboard" className="hover:text-[#E8E6E3] transition-colors">Players</Link>
-          <ChevronRight className="w-3 h-3" />
-          {firstPlayer && (<><Link href={`/dashboard/players/${firstPlayer.id}`} className="hover:text-[#E8E6E3] transition-colors">{firstPlayer.name}</Link><ChevronRight className="w-3 h-3" /></>)}
-          <span className="text-[#E8E6E3]">{session.name}</span>
-        </nav>
+        {!isAnalyticsView && (
+          <>
+            {/* Breadcrumbs */}
+            <nav className="flex items-center gap-1.5 text-xs text-[#6A6865] mb-2 shrink-0">
+              <Link href="/dashboard" className="hover:text-[#E8E6E3] transition-colors">Players</Link>
+              <ChevronRight className="w-3 h-3" />
+              {firstPlayer && (<><Link href={`/dashboard/players/${firstPlayer.id}`} className="hover:text-[#E8E6E3] transition-colors">{firstPlayer.name}</Link><ChevronRight className="w-3 h-3" /></>)}
+              <span className="text-[#E8E6E3]">{session.name}</span>
+            </nav>
 
-        {/* Header */}
-        <div className="flex items-center gap-3 mb-3 shrink-0">
-          <button onClick={() => router.back()} className="text-[#6A6865] hover:text-[#E8E6E3] transition-colors"><ArrowLeft className="w-5 h-5" /></button>
-          <div>
-            <h1 className="text-lg font-light text-[#E8E6E3]">{session.name}</h1>
-            <p className="text-xs text-[#6A6865]">{new Date(session.created_at).toLocaleDateString()}</p>
-          </div>
-        </div>
+            {/* Header */}
+            <div className="flex items-center gap-3 mb-3 shrink-0">
+              <button onClick={() => router.back()} className="text-[#6A6865] hover:text-[#E8E6E3] transition-colors"><ArrowLeft className="w-5 h-5" /></button>
+              <div>
+                <h1 className="text-lg font-light text-[#E8E6E3]">{session.name}</h1>
+                <p className="text-xs text-[#6A6865]">{new Date(session.created_at).toLocaleDateString()}</p>
+              </div>
+            </div>
+          </>
+        )}
 
         {/* Main area */}
-        <div className="flex gap-3 flex-1 min-h-0">
+        <div className={cn("flex flex-1 min-h-0", aiOpen ? "gap-6" : "gap-3")}>
           {/* Left: Video or Court (full area) */}
           <div className={cn("flex flex-col min-h-0", showSidePanel ? "flex-1 min-w-0" : "w-full")}>
             {/* Video / Court swap */}
@@ -977,24 +988,8 @@ export default function GameViewerPage() {
                 />
               </div>
 
-              {/* Debug mode toggle button — top-right of video */}
-              {hasPose && (
-                <button
-                  onClick={() => setDebugMode(prev => !prev)}
-                  className={cn(
-                    "absolute top-2 right-2 z-30 p-1.5 rounded-lg transition-all",
-                    debugMode
-                      ? "bg-[#C45C5C]/20 text-[#C45C5C] ring-1 ring-[#C45C5C]/40"
-                      : "bg-black/30 text-[#6A6865] hover:text-[#E8E6E3] hover:bg-black/50"
-                  )}
-                  title="Toggle stroke debug mode (D)"
-                >
-                  <Bug className="w-3.5 h-3.5" />
-                </button>
-              )}
-
               {/* Debug floating bar */}
-              {debugMode && (
+              {hasPose && debugMode && (
                 <div className="absolute bottom-14 left-1/2 -translate-x-1/2 z-30">
                   <div className="flex items-center gap-1.5 px-3 py-2 rounded-xl bg-black/80 backdrop-blur-sm border border-[#C45C5C]/30">
                     {debugFlash && (
@@ -1118,10 +1113,12 @@ export default function GameViewerPage() {
           {showSidePanel && (
             <div className="shrink-0 flex min-h-0 overflow-hidden" style={{ width: panelWidth }}>
               {/* Resize handle */}
-              <div
-                onMouseDown={handleResizeStart}
-                className="w-1.5 shrink-0 cursor-col-resize hover:bg-[#9B7B5B]/30 active:bg-[#9B7B5B]/50 transition-colors rounded-full self-stretch"
-              />
+              {!aiOpen && (
+                <div
+                  onMouseDown={handleResizeStart}
+                  className="w-1.5 shrink-0 cursor-col-resize hover:bg-[#9B7B5B]/30 active:bg-[#9B7B5B]/50 transition-colors rounded-full self-stretch"
+                />
+              )}
               <div className="flex-1 flex min-h-0 overflow-hidden">
                 <div className="w-full h-full max-w-[calc(100%-8px)] mx-auto flex flex-col min-h-0 overflow-hidden">
                   {/* 3D Ball Trajectory Visualization */}
@@ -1578,7 +1575,7 @@ export default function GameViewerPage() {
 
               {/* AI Chat — inline right panel */}
               {aiOpen && (
-                <div className="h-full p-1">
+                <div className="h-full">
                   <div className="relative h-full rounded-2xl border border-foreground/5 shadow-[0_4px_16px_rgba(0,0,0,0.12)] flex flex-col overflow-hidden">
                     <div className="absolute inset-0 pointer-events-none">
                       <div className="absolute inset-0 bg-[url('/background.jpeg')] bg-cover bg-center opacity-20" />

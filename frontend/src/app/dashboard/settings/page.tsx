@@ -1,14 +1,20 @@
 "use client";
 
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { useAuth } from "@/hooks/useAuth";
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
-import { User, Bell, Shield, Palette, LogOut } from "lucide-react";
+import { User, Bell, Shield, Palette, LogOut, Bug } from "lucide-react";
+import { readStrokeDebugModeSetting, writeStrokeDebugModeSetting } from "@/lib/appSettings";
 
 export default function SettingsPage() {
   const { user, signOut } = useAuth();
   const [notifications, setNotifications] = useState(true);
+  const [strokeDebugMode, setStrokeDebugMode] = useState(false);
+
+  useEffect(() => {
+    setStrokeDebugMode(readStrokeDebugModeSetting());
+  }, []);
 
   return (
     <div className="w-full max-w-2xl mx-auto">
@@ -107,6 +113,46 @@ export default function SettingsPage() {
               </div>
             </div>
             <p className="text-xs text-muted-foreground mt-2">Light theme coming soon</p>
+          </CardContent>
+        </Card>
+
+        {/* Developer Section */}
+        <Card>
+          <CardHeader>
+            <div className="flex items-center gap-3">
+              <div className="w-10 h-10 rounded-full bg-muted flex items-center justify-center">
+                <Bug className="w-5 h-5 text-[#9B7B5B]" />
+              </div>
+              <div>
+                <CardTitle className="text-base">Developer</CardTitle>
+                <CardDescription>Debug controls for game analysis</CardDescription>
+              </div>
+            </div>
+          </CardHeader>
+          <CardContent>
+            <div className="flex items-center justify-between">
+              <div>
+                <p className="text-sm text-foreground">Stroke debug mode</p>
+                <p className="text-xs text-muted-foreground">Show debug annotation controls in game viewer</p>
+              </div>
+              <button
+                onClick={() => {
+                  const next = !strokeDebugMode;
+                  setStrokeDebugMode(next);
+                  writeStrokeDebugModeSetting(next);
+                }}
+                className={`w-11 h-6 rounded-full transition-colors ${
+                  strokeDebugMode ? "bg-[#9B7B5B]" : "bg-border"
+                }`}
+                aria-label="Toggle stroke debug mode"
+              >
+                <div
+                  className={`w-5 h-5 rounded-full bg-white transition-transform ${
+                    strokeDebugMode ? "translate-x-5" : "translate-x-0.5"
+                  }`}
+                />
+              </button>
+            </div>
           </CardContent>
         </Card>
 
