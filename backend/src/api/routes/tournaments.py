@@ -150,7 +150,8 @@ async def list_tournaments(
     supabase = get_supabase()
 
     try:
-        query = supabase.table("tournaments").select("*").eq("coach_id", user_id).order("start_date", desc=True)
+        # Global: show all tournaments to any authenticated user
+        query = supabase.table("tournaments").select("*").order("start_date", desc=True)
         if status:
             query = query.eq("status", status)
         result = query.execute()
@@ -175,10 +176,10 @@ async def list_upcoming_tournaments(
     supabase = get_supabase()
 
     try:
+        # Global: show all upcoming/ongoing tournaments
         result = (
             supabase.table("tournaments")
             .select("*")
-            .eq("coach_id", user_id)
             .in_("status", ["upcoming", "ongoing"])
             .order("start_date", desc=False)
             .execute()
@@ -204,10 +205,10 @@ async def list_past_tournaments(
     supabase = get_supabase()
 
     try:
+        # Global: show all past tournaments
         result = (
             supabase.table("tournaments")
             .select("*")
-            .eq("coach_id", user_id)
             .in_("status", ["completed", "cancelled"])
             .order("start_date", desc=True)
             .execute()
@@ -322,11 +323,11 @@ async def get_tournament(
     supabase = get_supabase()
 
     try:
+        # Global: any authenticated user can view any tournament
         result = (
             supabase.table("tournaments")
             .select("*")
             .eq("id", tournament_id)
-            .eq("coach_id", user_id)
             .single()
             .execute()
         )
@@ -472,7 +473,8 @@ async def list_matchups(
     supabase = get_supabase()
 
     try:
-        existing = supabase.table("tournaments").select("id").eq("id", tournament_id).eq("coach_id", user_id).single().execute()
+        # Global: verify tournament exists (no owner check)
+        existing = supabase.table("tournaments").select("id").eq("id", tournament_id).single().execute()
         if not existing.data:
             raise HTTPException(status_code=404, detail="Tournament not found")
     except HTTPException:
@@ -571,8 +573,9 @@ async def get_tournament_stats(
     supabase = get_supabase()
 
     try:
-        tournaments = supabase.table("tournaments").select("id, status").eq("coach_id", user_id).execute()
-        matchups = supabase.table("tournament_matchups").select("result").eq("coach_id", user_id).execute()
+        # Global: aggregate stats across all tournaments
+        tournaments = supabase.table("tournaments").select("id, status").execute()
+        matchups = supabase.table("tournament_matchups").select("result").execute()
 
         total_tournaments = len(tournaments.data)
         upcoming = sum(1 for t in tournaments.data if t["status"] in ("upcoming", "ongoing"))

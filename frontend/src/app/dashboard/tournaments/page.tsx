@@ -20,6 +20,7 @@ import {
   useTournamentStats,
   useCreateTournament,
 } from "@/hooks/useTournaments";
+import { useAuth } from "@/hooks/useAuth";
 import { TournamentForm } from "@/components/tournaments/TournamentForm";
 import { TournamentDetail } from "@/components/tournaments/TournamentDetail";
 
@@ -55,6 +56,7 @@ export default function TournamentsPage() {
   const [selectedTournament, setSelectedTournament] = useState<Tournament | null>(null);
   const [search, setSearch] = useState("");
 
+  const { user } = useAuth();
   const { data: tournaments, isLoading } = useTournaments();
   const { data: stats } = useTournamentStats();
   const createMutation = useCreateTournament();
@@ -93,6 +95,7 @@ export default function TournamentsPage() {
       <TournamentDetail
         tournament={selectedTournament}
         onBack={() => setSelectedTournament(null)}
+        currentUserId={user?.id}
       />
     );
   }

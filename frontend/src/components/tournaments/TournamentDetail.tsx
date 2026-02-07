@@ -39,6 +39,7 @@ import { TournamentForm } from "./TournamentForm";
 interface TournamentDetailProps {
   tournament: Tournament;
   onBack: () => void;
+  currentUserId?: string;
 }
 
 const resultColors: Record<string, string> = {
@@ -110,6 +111,12 @@ function parseNotesPlayers(notes?: string): { p1: string; p2: string; summary: s
   return { p1: vs[0].trim(), p2: vs[1].trim(), summary, winner };
 }
 
+/** Check if the current user owns the tournament. */
+function isOwnedByUser(tournament: Tournament, userId?: string): boolean {
+  if (!userId) return false;
+  return tournament.coach_id === userId;
+}
+
 /** Check if a tournament was created by WTT sync (read-only reference data). */
 function isWTTSynced(tournament: Tournament): boolean {
   return tournament.metadata?.source === "wtt_sync";
@@ -117,7 +124,7 @@ function isWTTSynced(tournament: Tournament): boolean {
 
 const CLIP_THRESHOLD_SECONDS = 45;
 
-export function TournamentDetail({ tournament, onBack }: TournamentDetailProps) {
+export function TournamentDetail({ tournament, onBack, currentUserId }: TournamentDetailProps) {
   const router = useRouter();
   const [matchupFormOpen, setMatchupFormOpen] = useState(false);
   const [editFormOpen, setEditFormOpen] = useState(false);
@@ -166,7 +173,7 @@ export function TournamentDetail({ tournament, onBack }: TournamentDetailProps) 
   const deleteTournament = useDeleteTournament();
   const backfillVideos = useBackfillVideos();
 
-  const readOnly = isWTTSynced(tournament);
+  const readOnly = isWTTSynced(tournament) || !isOwnedByUser(tournament, currentUserId);
 
   const groupedMatchups = useMemo(() => {
     if (!matchups) return {};
