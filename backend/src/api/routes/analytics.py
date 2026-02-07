@@ -43,10 +43,19 @@ async def get_session_analytics(
     
     trajectory_data = session_result.data.get("trajectory_data")
     if not trajectory_data or not trajectory_data.get("frames"):
-        raise HTTPException(
-            status_code=400,
-            detail="No trajectory data available. Ball tracking must be completed first."
-        )
+        # Return empty analytics instead of 400 error
+        logger.info(f"No trajectory data for session {session_id}, returning empty analytics")
+        return {
+            "session_id": session_id,
+            "session_name": session_result.data.get("name", "Unnamed"),
+            "ball_analytics": None,
+            "pose_analytics": None,
+            "correlation": None,
+            "fps": 30.0,
+            "video_info": {},
+            "pose_frame_count": 0,
+            "message": "Ball tracking not completed yet. Click 'Track' to analyze ball trajectory.",
+        }
 
     session_updated_at = session_result.data.get("updated_at")
     session_updated_at_norm = (
@@ -81,13 +90,14 @@ async def get_session_analytics(
         except Exception as e:
             logger.warning(f"Analytics cache lookup failed: {e}")
     
-    # Fetch pose data
+    # Fetch pose data (player only, person_id=0)
     pose_result = supabase.table("pose_analysis") \
         .select("frame_number, timestamp, keypoints, joint_angles, body_metrics") \
         .eq("session_id", session_id) \
+        .eq("person_id", 0) \
         .order("frame_number") \
         .execute()
-    
+
     pose_data = pose_result.data or []
     
     # Get FPS from trajectory video_info
