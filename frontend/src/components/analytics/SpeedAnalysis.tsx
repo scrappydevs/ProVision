@@ -86,7 +86,7 @@ export function SpeedAnalysis({ data }: SpeedAnalysisProps) {
                 borderRadius: '8px',
                 color: '#E8E6E3'
               }}
-              formatter={(value: number) => [`${value} km/h`, 'Speed']}
+              formatter={(value: number | undefined) => value !== undefined ? [`${value} km/h`, 'Speed'] : ['N/A', 'Speed']}
               labelFormatter={(label) => `Time: ${label}s`}
             />
             <Area 
@@ -123,7 +123,7 @@ export function SpeedAnalysis({ data }: SpeedAnalysisProps) {
                 borderRadius: '8px',
                 color: '#E8E6E3'
               }}
-              formatter={(value: number) => [`${value} frames`, 'Count']}
+              formatter={(value: number | undefined) => value !== undefined ? [`${value} frames`, 'Count'] : ['N/A', 'Count']}
             />
             <Bar dataKey="count" fill="#9B7B5B" radius={[8, 8, 0, 0]} />
           </BarChart>

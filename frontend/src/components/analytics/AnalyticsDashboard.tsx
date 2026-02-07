@@ -17,9 +17,9 @@ export function AnalyticsDashboard({ sessionId }: AnalyticsDashboardProps) {
 
   // Process joint angles over time
   const jointAngleData = useMemo(() => {
-    if (!poseData?.data || poseData.data.length === 0) return [];
+    if (!poseData?.frames || poseData.frames.length === 0) return [];
     
-    return poseData.data.map((frame) => ({
+    return poseData.frames.map((frame: { frame_number: number; joint_angles?: Record<string, number> }) => ({
       frame: frame.frame_number,
       leftElbow: frame.joint_angles?.left_elbow || 0,
       rightElbow: frame.joint_angles?.right_elbow || 0,
@@ -34,7 +34,7 @@ export function AnalyticsDashboard({ sessionId }: AnalyticsDashboardProps) {
   const avgJointAngles = useMemo(() => {
     if (jointAngleData.length === 0) return [];
     
-    const sum = jointAngleData.reduce((acc, frame) => ({
+    const sum = jointAngleData.reduce((acc: { leftElbow: number; rightElbow: number; leftKnee: number; rightKnee: number; leftShoulder: number; rightShoulder: number }, frame: { leftElbow: number; rightElbow: number; leftKnee: number; rightKnee: number; leftShoulder: number; rightShoulder: number }) => ({
       leftElbow: acc.leftElbow + frame.leftElbow,
       rightElbow: acc.rightElbow + frame.rightElbow,
       leftKnee: acc.leftKnee + frame.leftKnee,
@@ -532,7 +532,7 @@ export function AnalyticsDashboard({ sessionId }: AnalyticsDashboardProps) {
       </div>
 
       {/* Spin Estimate */}
-      {ballSpeed.spin_estimate && (
+      {analytics.ball_analytics.spin.estimate && (
         <div className="bg-[#282729]/40 backdrop-blur-xl rounded-xl p-3 border border-[#363436]/30">
           <div className="flex items-center gap-2">
             <Zap className="w-3.5 h-3.5 text-[#9B7B5B]" />

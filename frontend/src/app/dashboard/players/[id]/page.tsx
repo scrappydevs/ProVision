@@ -79,8 +79,6 @@ export default function PlayerProfilePage() {
   const [recordingType, setRecordingType] = useState<RecordingType>("match");
   const [recordingDescription, setRecordingDescription] = useState("");
   const [analyzingRecordingId, setAnalyzingRecordingId] = useState<string | null>(null);
-  const [activeInsightId, setActiveInsightId] = useState<string | null>(null);
-
   const { data: player, isLoading: playerLoading } = usePlayer(playerId);
   const { data: games, isLoading: gamesLoading } = usePlayerGames(playerId, {
     search: searchQuery || undefined,
@@ -378,7 +376,7 @@ export default function PlayerProfilePage() {
         </div>
 
         {/* Center: large name overlay */}
-        <div className="flex-1 flex items-start pt-20 px-10">
+        <div className="flex-1 flex items-start pt-20 px-10 pb-48">
           <div>
             <p className="text-xs uppercase tracking-[0.3em] text-foreground/50 mb-3">{player.position || "Player"}</p>
             <h1 className="text-5xl md:text-6xl font-light text-foreground tracking-tight leading-[1.1]">
@@ -438,215 +436,146 @@ export default function PlayerProfilePage() {
         </div>
 
         {/* Left: tips summary */}
-        <div className="absolute left-10 bottom-32 w-[640px] flex flex-col gap-3.5">
-          {/* Header */}
-          <div className="flex items-center justify-between px-4 py-2.5 bg-content1/30 backdrop-blur-xl rounded-2xl">
-            <div className="flex items-center gap-2.5">
-              <Film className="w-3.5 h-3.5 text-primary" />
-              <span className="text-xs uppercase tracking-[0.2em] text-foreground/75 font-medium">Tips</span>
-            </div>
-            <span className="text-[9px] uppercase tracking-[0.2em] text-foreground/45">
-              {recordings?.length ? "Based on recent clips" : "Add clips to refine"}
-            </span>
-          </div>
-
+        <div className="absolute left-10 bottom-24 w-[480px] flex flex-col gap-2">
           {recordingsLoading ? (
-            <div className="flex items-center justify-center h-28 bg-content1/30 backdrop-blur-xl rounded-2xl">
-              <Loader2 className="w-4 h-4 text-primary animate-spin" />
+            <div className="flex items-center justify-center h-20 bg-content1/30 backdrop-blur-xl rounded-xl">
+              <Loader2 className="w-3 h-3 text-primary animate-spin" />
             </div>
           ) : (
-            <div className="flex flex-col gap-3">
+            <div className="flex flex-col gap-2">
               {/* Strengths Section */}
               <div className="space-y-2">
-                <div className="flex items-center gap-2 px-1.5">
+                <div className="flex items-center gap-2 px-1">
                   <div className="w-1.5 h-1.5 rounded-full bg-[#6B8E6B]" />
                   <span className="text-[10px] uppercase tracking-wider text-[#6B8E6B] font-semibold">Strengths</span>
                 </div>
-                <div className="grid grid-cols-2 gap-2.5">
-                  {insights.filter(i => i.kind === "strength").map((insight) => {
-                    const isActive = activeInsightId === insight.id;
-
-                    return (
-                      <div key={insight.id} className="relative group">
-                        <div className="text-left p-3 rounded-xl transition-all bg-content1/30 backdrop-blur-xl hover:bg-content1/40">
-                          <div className="flex items-start gap-2.5 mb-2">
-                            <div className="flex-1 min-w-0">
-                              <h4 className="text-xs font-semibold text-foreground/95 mb-1 leading-tight">
-                                {insight.title}
-                              </h4>
-                              <p className="text-[10px] text-foreground/55 line-clamp-2 leading-relaxed">
-                                {insight.summary}
-                              </p>
-                            </div>
-                          </div>
-                          {insight.metric && (
-                            <button
-                              onClick={(e) => {
-                                e.stopPropagation();
-                                setActiveInsightId(isActive ? null : insight.id);
-                              }}
-                              className="relative text-[9px] font-semibold uppercase tracking-wide text-[#6B8E6B] bg-[#6B8E6B]/15 px-2 py-1 rounded-md inline-flex items-center gap-1.5 hover:bg-[#6B8E6B]/25 transition-all"
-                            >
+                <div className="grid grid-cols-2 gap-2">
+                  {insights.filter(i => i.kind === "strength").map((insight) => (
+                    <div key={insight.id} className="relative group">
+                      <div className="text-left p-2.5 rounded-lg bg-content1/30 backdrop-blur-xl hover:bg-content1/40 transition-all">
+                        <h4 className="text-xs font-semibold text-foreground/95 mb-0.5 leading-tight">
+                          {insight.title}
+                        </h4>
+                        <p className="text-[10px] text-foreground/60 line-clamp-2 leading-snug mb-1.5">
+                          {insight.summary}
+                        </p>
+                        {insight.metric && (
+                          <div className="flex items-center gap-1">
+                            <p className="text-[9px] text-[#6B8E6B] font-medium flex-1">
                               {insight.metric}
-                              {insight.clips.length > 0 && (
-                                <>
-                                  <span className="text-[8px] opacity-70">•</span>
-                                  <span className="text-[8px] font-bold opacity-90">{insight.clips.length}</span>
-                                </>
-                              )}
-                              <ChevronRight className={`w-3 h-3 transition-transform ${isActive ? "rotate-90" : ""}`} />
-                            </button>
-                          )}
-                        </div>
-
-                        {/* Dropdown for clips */}
-                        <AnimatePresence>
-                          {isActive && insight.clips.length > 0 && (
-                            <motion.div
-                              initial={{ opacity: 0, x: -10 }}
-                              animate={{ opacity: 1, x: 0 }}
-                              exit={{ opacity: 0, x: -10 }}
-                              transition={{ duration: 0.2 }}
-                              className="absolute left-full top-0 ml-2 z-50 w-72 rounded-xl bg-content1/95 backdrop-blur-xl shadow-2xl overflow-hidden"
-                            >
-                              <div className="p-2.5 space-y-1.5">
-                                <div className="px-2.5 py-1.5 text-[9px] uppercase tracking-wider text-foreground/60 font-semibold">
-                                  Source clips ({insight.clips.length})
-                                </div>
-                                {insight.clips.map((clip) => (
-                                  <button
-                                    key={clip.id}
-                                    onClick={() => {
-                                      handleClipOpen(clip, insight.tipMatch);
-                                      setActiveInsightId(null);
-                                    }}
-                                    className="w-full flex items-center gap-3 rounded-lg bg-content1/40 p-2 text-left hover:bg-content1/60 transition-colors"
-                                  >
-                                    {clip.videoUrl && (
-                                      <div className="relative w-16 h-12 rounded-md overflow-hidden shrink-0 bg-background">
-                                        <video
-                                          src={clip.videoUrl}
-                                          className="w-full h-full object-cover"
-                                          muted
-                                        />
-                                        <div className="absolute inset-0 flex items-center justify-center bg-black/20">
-                                          <Play className="w-4 h-4 text-white/80" />
-                                        </div>
-                                      </div>
-                                    )}
-                                    <div className="flex-1 min-w-0">
-                                      <p className="text-[11px] text-foreground/90 truncate font-medium">{clip.label}</p>
-                                      {clip.timestamp && (
-                                        <p className="text-[9px] text-foreground/50 mt-0.5">{clip.timestamp}</p>
-                                      )}
-                                    </div>
-                                    <ChevronRight className="w-3.5 h-3.5 text-foreground/40 shrink-0" />
-                                  </button>
-                                ))}
-                              </div>
-                            </motion.div>
-                          )}
-                        </AnimatePresence>
+                            </p>
+                            {insight.clips.length > 0 && (
+                              <span className="text-[8px] text-foreground/40">
+                                {insight.clips.length} clip{insight.clips.length > 1 ? 's' : ''}
+                              </span>
+                            )}
+                          </div>
+                        )}
                       </div>
-                    );
-                  })}
+
+                      {/* Hover panel for clips */}
+                      {insight.clips.length > 0 && (
+                        <div className="absolute left-full top-0 ml-2 z-50 w-56 rounded-lg bg-content1/95 backdrop-blur-xl shadow-2xl overflow-hidden opacity-0 invisible group-hover:opacity-100 group-hover:visible transition-all duration-200">
+                          <div className="p-2 space-y-1">
+                            <div className="px-2 py-1 text-[9px] uppercase tracking-wider text-foreground/60 font-semibold">
+                              Source clips
+                            </div>
+                            {insight.clips.map((clip) => (
+                              <button
+                                key={clip.id}
+                                onClick={() => handleClipOpen(clip, insight.tipMatch)}
+                                className="w-full flex items-center gap-2 rounded-md bg-content1/40 p-1.5 text-left hover:bg-content1/60 transition-colors"
+                              >
+                                {clip.videoUrl && (
+                                  <div className="relative w-12 h-9 rounded overflow-hidden shrink-0 bg-background">
+                                    <video src={clip.videoUrl} className="w-full h-full object-cover" muted />
+                                    <div className="absolute inset-0 flex items-center justify-center bg-black/20">
+                                      <Play className="w-3 h-3 text-white/80" />
+                                    </div>
+                                  </div>
+                                )}
+                                <div className="flex-1 min-w-0">
+                                  <p className="text-[10px] text-foreground/90 truncate font-medium">{clip.label}</p>
+                                  {clip.timestamp && (
+                                    <p className="text-[8px] text-foreground/50">{clip.timestamp}</p>
+                                  )}
+                                </div>
+                                <ChevronRight className="w-3 h-3 text-foreground/40 shrink-0" />
+                              </button>
+                            ))}
+                          </div>
+                        </div>
+                      )}
+                    </div>
+                  ))}
                 </div>
               </div>
 
               {/* Weaknesses Section */}
               <div className="space-y-2">
-                <div className="flex items-center gap-2 px-1.5">
+                <div className="flex items-center gap-2 px-1">
                   <div className="w-1.5 h-1.5 rounded-full bg-[#C45C5C]" />
                   <span className="text-[10px] uppercase tracking-wider text-[#C45C5C] font-semibold">Areas to improve</span>
                 </div>
-                <div className="grid grid-cols-2 gap-2.5">
-                  {insights.filter(i => i.kind === "weakness").map((insight) => {
-                    const isActive = activeInsightId === insight.id;
-
-                    return (
-                      <div key={insight.id} className="relative group">
-                        <div className="text-left p-3 rounded-xl transition-all bg-content1/30 backdrop-blur-xl hover:bg-content1/40">
-                          <div className="flex items-start gap-2.5 mb-2">
-                            <div className="flex-1 min-w-0">
-                              <h4 className="text-xs font-semibold text-foreground/95 mb-1 leading-tight">
-                                {insight.title}
-                              </h4>
-                              <p className="text-[10px] text-foreground/55 line-clamp-2 leading-relaxed">
-                                {insight.summary}
-                              </p>
-                            </div>
-                          </div>
-                          {insight.metric && (
-                            <button
-                              onClick={(e) => {
-                                e.stopPropagation();
-                                setActiveInsightId(isActive ? null : insight.id);
-                              }}
-                              className="relative text-[9px] font-semibold uppercase tracking-wide text-[#C45C5C] bg-[#C45C5C]/15 px-2 py-1 rounded-md inline-flex items-center gap-1.5 hover:bg-[#C45C5C]/25 transition-all"
-                            >
+                <div className="grid grid-cols-2 gap-2">
+                  {insights.filter(i => i.kind === "weakness").map((insight) => (
+                    <div key={insight.id} className="relative group">
+                      <div className="text-left p-2.5 rounded-lg bg-content1/30 backdrop-blur-xl hover:bg-content1/40 transition-all">
+                        <h4 className="text-xs font-semibold text-foreground/95 mb-0.5 leading-tight">
+                          {insight.title}
+                        </h4>
+                        <p className="text-[10px] text-foreground/60 line-clamp-2 leading-snug mb-1.5">
+                          {insight.summary}
+                        </p>
+                        {insight.metric && (
+                          <div className="flex items-center gap-1">
+                            <p className="text-[9px] text-[#C45C5C] font-medium flex-1">
                               {insight.metric}
-                              {insight.clips.length > 0 && (
-                                <>
-                                  <span className="text-[8px] opacity-70">•</span>
-                                  <span className="text-[8px] font-bold opacity-90">{insight.clips.length}</span>
-                                </>
-                              )}
-                              <ChevronRight className={`w-3 h-3 transition-transform ${isActive ? "rotate-90" : ""}`} />
-                            </button>
-                          )}
-                        </div>
-
-                        {/* Dropdown for clips */}
-                        <AnimatePresence>
-                          {isActive && insight.clips.length > 0 && (
-                            <motion.div
-                              initial={{ opacity: 0, x: -10 }}
-                              animate={{ opacity: 1, x: 0 }}
-                              exit={{ opacity: 0, x: -10 }}
-                              transition={{ duration: 0.2 }}
-                              className="absolute left-full top-0 ml-2 z-50 w-72 rounded-xl bg-content1/95 backdrop-blur-xl shadow-2xl overflow-hidden"
-                            >
-                              <div className="p-2.5 space-y-1.5">
-                                <div className="px-2.5 py-1.5 text-[9px] uppercase tracking-wider text-foreground/60 font-semibold">
-                                  Source clips ({insight.clips.length})
-                                </div>
-                                {insight.clips.map((clip) => (
-                                  <button
-                                    key={clip.id}
-                                    onClick={() => {
-                                      handleClipOpen(clip, insight.tipMatch);
-                                      setActiveInsightId(null);
-                                    }}
-                                    className="w-full flex items-center gap-3 rounded-lg bg-content1/40 p-2 text-left hover:bg-content1/60 transition-colors"
-                                  >
-                                    {clip.videoUrl && (
-                                      <div className="relative w-16 h-12 rounded-md overflow-hidden shrink-0 bg-background">
-                                        <video
-                                          src={clip.videoUrl}
-                                          className="w-full h-full object-cover"
-                                          muted
-                                        />
-                                        <div className="absolute inset-0 flex items-center justify-center bg-black/20">
-                                          <Play className="w-4 h-4 text-white/80" />
-                                        </div>
-                                      </div>
-                                    )}
-                                    <div className="flex-1 min-w-0">
-                                      <p className="text-[11px] text-foreground/90 truncate font-medium">{clip.label}</p>
-                                      {clip.timestamp && (
-                                        <p className="text-[9px] text-foreground/50 mt-0.5">{clip.timestamp}</p>
-                                      )}
-                                    </div>
-                                    <ChevronRight className="w-3.5 h-3.5 text-foreground/40 shrink-0" />
-                                  </button>
-                                ))}
-                              </div>
-                            </motion.div>
-                          )}
-                        </AnimatePresence>
+                            </p>
+                            {insight.clips.length > 0 && (
+                              <span className="text-[8px] text-foreground/40">
+                                {insight.clips.length} clip{insight.clips.length > 1 ? 's' : ''}
+                              </span>
+                            )}
+                          </div>
+                        )}
                       </div>
-                    );
-                  })}
+
+                      {/* Hover panel for clips */}
+                      {insight.clips.length > 0 && (
+                        <div className="absolute left-full top-0 ml-2 z-50 w-56 rounded-lg bg-content1/95 backdrop-blur-xl shadow-2xl overflow-hidden opacity-0 invisible group-hover:opacity-100 group-hover:visible transition-all duration-200">
+                          <div className="p-2 space-y-1">
+                            <div className="px-2 py-1 text-[9px] uppercase tracking-wider text-foreground/60 font-semibold">
+                              Source clips
+                            </div>
+                            {insight.clips.map((clip) => (
+                              <button
+                                key={clip.id}
+                                onClick={() => handleClipOpen(clip, insight.tipMatch)}
+                                className="w-full flex items-center gap-2 rounded-md bg-content1/40 p-1.5 text-left hover:bg-content1/60 transition-colors"
+                              >
+                                {clip.videoUrl && (
+                                  <div className="relative w-12 h-9 rounded overflow-hidden shrink-0 bg-background">
+                                    <video src={clip.videoUrl} className="w-full h-full object-cover" muted />
+                                    <div className="absolute inset-0 flex items-center justify-center bg-black/20">
+                                      <Play className="w-3 h-3 text-white/80" />
+                                    </div>
+                                  </div>
+                                )}
+                                <div className="flex-1 min-w-0">
+                                  <p className="text-[10px] text-foreground/90 truncate font-medium">{clip.label}</p>
+                                  {clip.timestamp && (
+                                    <p className="text-[8px] text-foreground/50">{clip.timestamp}</p>
+                                  )}
+                                </div>
+                                <ChevronRight className="w-3 h-3 text-foreground/40 shrink-0" />
+                              </button>
+                            ))}
+                          </div>
+                        </div>
+                      )}
+                    </div>
+                  ))}
                 </div>
               </div>
             </div>

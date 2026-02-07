@@ -28,7 +28,7 @@ import {
   getDebugFrame,
 } from "@/lib/api";
 import { generateTipsFromStrokes } from "@/lib/tipGenerator";
-import { PlayerSelection } from "@/components/viewer/PlayerSelection";
+import { PlayerSelection, PlayerSelectionOverlays } from "@/components/viewer/PlayerSelection";
 import { VideoTips, type VideoTip } from "@/components/viewer/VideoTips";
 
 const BirdEyeView = dynamic(
@@ -57,8 +57,8 @@ const tabs: { id: TabId; label: string; icon: React.ComponentType<{ className?: 
 ];
 
 const PLAYER_COLORS = [
-  { name: "Player 1", color: "#9B7B5B", rgb: "155, 123, 91" },
-  { name: "Player 2", color: "#5B9B7B", rgb: "91, 155, 123" },
+  { name: "Player", color: "#9B7B5B", rgb: "155, 123, 91" },
+  { name: "Opponent", color: "#5B9B7B", rgb: "91, 155, 123" },
 ];
 
 interface ChatMessage { role: "user" | "assistant" | "tool"; content: string; toolName?: string; }
@@ -74,7 +74,7 @@ export default function GameViewerPage() {
   const [trackingMode, setTrackingMode] = useState(false);
   const [isDetecting, setIsDetecting] = useState(false);
   const [detectedPersons, setDetectedPersons] = useState<PersonPose[]>([]);
-  const [selectedPersonId, setSelectedPersonId] = useState<number | null>(null);
+  const [selectedPersonIds, setSelectedPersonIds] = useState<number[]>([]);
   const [isDetectingPose, setIsDetectingPose] = useState(false);
   const lastPoseFrame = useRef(-1);
   const [detectionResult, setDetectionResult] = useState<{ detections: BallDetection[]; preview_image: string; frame: number } | null>(null);
@@ -231,17 +231,78 @@ export default function GameViewerPage() {
     [fps]
   );
 
-  // Generate video tips from stroke data
-  // Generate video tips from stroke data (or test tips if no strokes)
+  // Video dimensions for denormalizing stored pose keypoints
+  const videoW = session?.trajectory_data?.video_info?.width ?? 1280;
+  const videoH = session?.trajectory_data?.video_info?.height ?? 828;
+
+  // Generate video tips from stroke data with opponent context
   const videoTips = useMemo(() => {
-    const tips = generateTipsFromStrokes(strokeSummary?.strokes || [], fps);
+    // Build opponent context if we have multiple selected players and stored pose data
+    let opponentContext: { playerPoses: PersonPose[]; opponentPoses: PersonPose[] } | undefined;
+    if (selectedPersonIds.length >= 2 && poseData?.frames?.length) {
+      const playerId = selectedPersonIds[0];
+      const opponentId = selectedPersonIds[1];
+
+      // Helper to convert frame data to PersonPose for a specific person at a specific frame
+      const getPoseForFrame = (frameNumber: number, personId: number): PersonPose | null => {
+        const frameRow = poseData.frames.find(
+          (f) => f.frame_number === frameNumber && (f.person_id ?? 1) === personId
+        );
+        if (!frameRow || !frameRow.keypoints) return null;
+
+        // Build PersonPose from keypoints object
+        const keypoints = Object.entries(frameRow.keypoints).map(([name, kp]) => ({
+          x: kp.x * videoW,
+          y: kp.y * videoH,
+          conf: kp.visibility ?? 0.5,
+          name,
+        }));
+
+        // Compute bbox from keypoints
+        const xs = keypoints.map((kp) => kp.x);
+        const ys = keypoints.map((kp) => kp.y);
+        const bbox: [number, number, number, number] = [
+          Math.min(...xs),
+          Math.min(...ys),
+          Math.max(...xs),
+          Math.max(...ys),
+        ];
+
+        return {
+          id: personId,
+          bbox,
+          confidence: keypoints.reduce((sum, kp) => sum + kp.conf, 0) / keypoints.length,
+          keypoints,
+        };
+      };
+
+      // Get poses for both players across frames relevant to strokes
+      const playerPoses: PersonPose[] = [];
+      const opponentPoses: PersonPose[] = [];
+
+      // Collect poses at key stroke frames
+      if (strokeSummary?.strokes) {
+        for (const stroke of strokeSummary.strokes) {
+          const playerPose = getPoseForFrame(stroke.peak_frame, playerId);
+          const opponentPose = getPoseForFrame(stroke.peak_frame, opponentId);
+          if (playerPose) playerPoses.push(playerPose);
+          if (opponentPose) opponentPoses.push(opponentPose);
+        }
+      }
+
+      opponentContext = { playerPoses, opponentPoses };
+    }
+
+    const tips = generateTipsFromStrokes(strokeSummary?.strokes || [], fps, opponentContext);
     console.log('[VideoTips] Generated tips:', {
       strokeCount: strokeSummary?.strokes?.length || 0,
       tipCount: tips.length,
+      hasOpponentContext: !!opponentContext,
+      selectedPlayers: selectedPersonIds,
       tips: tips.map(t => ({ id: t.id, timestamp: t.timestamp, title: t.title }))
     });
     return tips;
-  }, [strokeSummary?.strokes, fps]);
+  }, [strokeSummary?.strokes, fps, selectedPersonIds, poseData?.frames, videoW, videoH, session?.trajectory_data]);
 
   const tipSeekTime = useMemo(() => {
     if (!tipParam || videoTips.length === 0) return null;
@@ -647,9 +708,6 @@ export default function GameViewerPage() {
   }, [trackingMode, playerSelectMode, trackMutation, currentFrame, queryClient, gameId, segmentedPlayers.length]);
 
   // Primary: full-video tracking (no click needed)
-  // Video dimensions for denormalizing stored pose keypoints
-  const videoW = session?.trajectory_data?.video_info?.width ?? 1280;
-  const videoH = session?.trajectory_data?.video_info?.height ?? 828;
   const hasStoredPose = !!(poseData?.frames?.length);
 
   // Convert stored pose data to PersonPose[] for the current frame
@@ -703,11 +761,15 @@ export default function GameViewerPage() {
   useEffect(() => {
     if (showPoseOverlay && storedPersonsForFrame.length > 0) {
       setDetectedPersons(storedPersonsForFrame);
-      if (selectedPersonId === null && storedPersonsForFrame.length > 0) {
-        setSelectedPersonId(storedPersonsForFrame[0].id);
+      if (selectedPersonIds.length === 0 && storedPersonsForFrame.length > 0) {
+        // Auto-select up to 2 players for comparative analysis
+        const toSelect = storedPersonsForFrame
+          .slice(0, Math.min(2, storedPersonsForFrame.length))
+          .map(p => p.id);
+        setSelectedPersonIds(toSelect);
       }
     }
-  }, [showPoseOverlay, storedPersonsForFrame, selectedPersonId]);
+  }, [showPoseOverlay, storedPersonsForFrame, selectedPersonIds.length]);
 
   // Fallback: live GPU detection when no stored data
   const handleDetectPose = useCallback((frame?: number) => {
@@ -719,13 +781,17 @@ export default function GameViewerPage() {
     detectPoses(gameId, f)
       .then((res) => {
         setDetectedPersons(res.data.persons);
-        if (res.data.persons.length > 0 && selectedPersonId === null) {
-          setSelectedPersonId(res.data.persons[0].id);
+        if (res.data.persons.length > 0 && selectedPersonIds.length === 0) {
+          // Auto-select up to 2 players for comparative analysis
+          const toSelect = res.data.persons
+            .slice(0, Math.min(2, res.data.persons.length))
+            .map(p => p.id);
+          setSelectedPersonIds(toSelect);
         }
       })
       .catch((err) => console.error("Pose detection failed:", err))
       .finally(() => setIsDetectingPose(false));
-  }, [gameId, currentFrame, isDetectingPose, selectedPersonId, hasStoredPose]);
+  }, [gameId, currentFrame, isDetectingPose, selectedPersonIds.length, hasStoredPose]);
 
   // Auto-refresh: use stored data (instant) or live GPU (fallback, every 5 frames)
   useEffect(() => {
@@ -758,7 +824,7 @@ export default function GameViewerPage() {
 
     for (const person of detectedPersons) {
       const color = PERSON_COLORS[(person.id - 1) % PERSON_COLORS.length];
-      const isSelected = person.id === selectedPersonId;
+      const isSelected = selectedPersonIds.includes(person.id);
       const alpha = isSelected ? 1.0 : 0.4;
 
       // Bbox
@@ -775,7 +841,9 @@ export default function GameViewerPage() {
       ctx.globalAlpha = alpha;
       ctx.font = "bold 14px sans-serif";
       ctx.fillStyle = color;
-      ctx.fillText(`P${person.id}`, x1 + 4, y1 - 6);
+      const selectionIndex = selectedPersonIds.indexOf(person.id);
+      const label = selectionIndex === 0 ? "Player" : selectionIndex === 1 ? "Opponent" : `P${person.id}`;
+      ctx.fillText(label, x1 + 4, y1 - 6);
 
       // Skeleton connections
       const kps = person.keypoints;
@@ -803,7 +871,7 @@ export default function GameViewerPage() {
       }
     }
     ctx.globalAlpha = 1.0;
-  }, [detectedPersons, showPoseOverlay, selectedPersonId, SKELETON_CONNECTIONS, PERSON_COLORS]);
+  }, [detectedPersons, showPoseOverlay, selectedPersonIds, SKELETON_CONNECTIONS, PERSON_COLORS]);
 
   const handleTrackNetTrack = useCallback(() => {
     setIsTracking(true);
@@ -968,6 +1036,15 @@ export default function GameViewerPage() {
                 {videoUrl && <video ref={videoRef} src={videoUrl} className="w-full h-full object-contain" muted={isMuted} playsInline />}
                 <canvas ref={canvasRef} className="absolute inset-0 w-full h-full pointer-events-none" style={{ zIndex: 10 }} />
                 <canvas ref={playerCanvasRef} className="absolute inset-0 w-full h-full pointer-events-none" style={{ zIndex: 20 }} />
+                
+                {/* Player Selection Overlays - rendered separately in video container */}
+                {showPlayerSelection && (
+                  <PlayerSelectionOverlays
+                    videoRef={videoRef}
+                    videoViewportRef={videoViewportRef}
+                    sessionId={gameId}
+                  />
+                )}
                 
                 {/* Video Tips - PlayVision AI style overlays */}
                 <VideoTips
@@ -1165,14 +1242,18 @@ export default function GameViewerPage() {
                   </div>
                   <div className="flex-1 overflow-y-auto p-2 space-y-2">
                     {showPlayerSelection && (
-                      <PlayerSelection
-                        sessionId={gameId}
-                        variant="inline"
-                        onClose={() => setShowPlayerSelection(false)}
-                        onAnalysisStarted={() => {
-                          queryClient.invalidateQueries({ queryKey: sessionKeys.detail(gameId) });
-                        }}
-                      />
+                      <>
+                        <PlayerSelection
+                          sessionId={gameId}
+                          variant="inline"
+                          videoRef={videoRef}
+                          videoViewportRef={videoViewportRef}
+                          onClose={() => setShowPlayerSelection(false)}
+                          onAnalysisStarted={() => {
+                            queryClient.invalidateQueries({ queryKey: sessionKeys.detail(gameId) });
+                          }}
+                        />
+                      </>
                     )}
 
                     {/* ── Live Stroke Indicator (synced to video frame) ── */}
@@ -1462,12 +1543,32 @@ export default function GameViewerPage() {
 
                     {/* ── Per-person pose metrics ── */}
                     {!isPoseProcessing && detectedPersons.map((person) => {
-                      const isSelected = person.id === selectedPersonId;
+                      const isSelected = selectedPersonIds.includes(person.id);
+                      const selectionIndex = selectedPersonIds.indexOf(person.id);
+                      const isPrimary = selectionIndex === 0;
+                      const isOpponent = selectionIndex === 1;
                       const color = ["#9B7B5B", "#5B9B7B", "#7B5B9B", "#C8B464"][(person.id - 1) % 4];
+
+                      const handleToggleSelection = () => {
+                        if (isSelected) {
+                          // Deselect
+                          setSelectedPersonIds(prev => prev.filter(id => id !== person.id));
+                        } else {
+                          // Select (max 2)
+                          setSelectedPersonIds(prev => {
+                            if (prev.length >= 2) {
+                              // Replace the oldest selection
+                              return [...prev.slice(1), person.id];
+                            }
+                            return [...prev, person.id];
+                          });
+                        }
+                      };
+
                       return (
                         <button
                           key={person.id}
-                          onClick={() => setSelectedPersonId(isSelected ? null : person.id)}
+                          onClick={handleToggleSelection}
                           className={`w-full p-2.5 rounded-lg text-left transition-colors ${
                             isSelected ? "bg-[#363436]/60 ring-1" : "bg-[#1E1D1F] hover:bg-[#363436]/30"
                           }`}
@@ -1475,7 +1576,11 @@ export default function GameViewerPage() {
                         >
                           <div className="flex items-center gap-2 mb-2">
                             <div className="w-3 h-3 rounded-full" style={{ backgroundColor: color }} />
-                            <span className="text-xs font-medium text-[#E8E6E3]">Player {person.id}</span>
+                            <span className="text-xs font-medium text-[#E8E6E3]">
+                              Player {person.id}
+                              {isPrimary && <span className="text-[10px] text-[#8A8885] ml-1.5">(P)</span>}
+                              {isOpponent && <span className="text-[10px] text-[#8A8885] ml-1.5">(O)</span>}
+                            </span>
                             <span className="text-[10px] text-[#6A6865] ml-auto">{(person.confidence * 100).toFixed(0)}%</span>
                           </div>
                           {isSelected && (

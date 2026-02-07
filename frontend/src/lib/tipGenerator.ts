@@ -1,10 +1,20 @@
 import { VideoTip } from "@/components/viewer/VideoTips";
-import { Stroke } from "@/lib/api";
+import { Stroke, PersonPose } from "@/lib/api";
+
+export interface OpponentContext {
+  playerPoses: PersonPose[];
+  opponentPoses: PersonPose[];
+}
 
 /**
  * Generate focused coaching tips - one tip per stroke showing the most important feedback
+ * Now includes opponent positioning context for more comprehensive analysis
  */
-export function generateTipsFromStrokes(strokes: Stroke[], fps: number = 30): VideoTip[] {
+export function generateTipsFromStrokes(
+  strokes: Stroke[],
+  fps: number = 30,
+  opponentContext?: OpponentContext
+): VideoTip[] {
   const tips: VideoTip[] = [];
 
   if (!strokes || strokes.length === 0) {
@@ -16,8 +26,8 @@ export function generateTipsFromStrokes(strokes: Stroke[], fps: number = 30): Vi
     const strokeDuration = (stroke.end_frame - stroke.start_frame) / fps;
     const contactTime = stroke.peak_frame / fps;
 
-    // Main contact tip (primary technique feedback)
-    const contactTip = generateStrokeTip(stroke);
+    // Main contact tip (primary technique feedback with opponent context)
+    const contactTip = generateStrokeTip(stroke, index, opponentContext);
     if (contactTip) {
       tips.push({
         id: `stroke-${stroke.id}-contact`,
@@ -87,17 +97,66 @@ function shouldShowFollowThroughTip(stroke: Stroke): boolean {
 }
 
 /**
- * Generate contact phase tip (main technique feedback)
+ * Get opponent position context for a given stroke
  */
-function generateStrokeTip(stroke: Stroke): { title: string; message: string } | null {
+function getOpponentPositionContext(
+  strokeIndex: number,
+  opponentContext?: OpponentContext
+): { hasOpponent: boolean; opponentPosition?: string; distanceContext?: string } {
+  if (!opponentContext || opponentContext.opponentPoses.length === 0) {
+    return { hasOpponent: false };
+  }
+
+  // Get the opponent pose for this stroke (strokeIndex maps to pose arrays)
+  const opponentPose = opponentContext.opponentPoses[strokeIndex];
+  if (!opponentPose) {
+    return { hasOpponent: false };
+  }
+
+  // Analyze opponent bbox to determine position
+  const [x1, y1, x2, y2] = opponentPose.bbox;
+  const centerX = (x1 + x2) / 2;
+  const frameWidth = 1920; // Typical video width
+
+  let position = "center";
+  if (centerX < frameWidth * 0.33) {
+    position = "left side";
+  } else if (centerX > frameWidth * 0.67) {
+    position = "right side";
+  }
+
+  return {
+    hasOpponent: true,
+    opponentPosition: position,
+    distanceContext: "within rally distance",
+  };
+}
+
+/**
+ * Generate contact phase tip (main technique feedback)
+ * Now includes opponent positioning context for tactical insights
+ */
+function generateStrokeTip(
+  stroke: Stroke,
+  strokeIndex: number,
+  opponentContext?: OpponentContext
+): { title: string; message: string } | null {
   const { stroke_type, form_score, metrics } = stroke;
   const strokeName = stroke_type.charAt(0).toUpperCase() + stroke_type.slice(1);
 
-  // Priority 1: If form is excellent, give positive reinforcement
+  // Get opponent context for this stroke
+  const oppContext = getOpponentPositionContext(strokeIndex, opponentContext);
+
+  // Priority 1: If form is excellent, give positive reinforcement with opponent context
   if (form_score > 85) {
+    const baseMessage = `Great kinetic chain coordination - you're efficiently transferring energy from legs through core to racket`;
+    const contextualMessage = oppContext.hasOpponent
+      ? `${baseMessage}. Opponent positioned at ${oppContext.opponentPosition} - good shot placement`
+      : baseMessage;
+
     return {
       title: `Excellent ${strokeName}`,
-      message: `Great kinetic chain coordination - you're efficiently transferring energy from legs through core to racket`,
+      message: contextualMessage,
     };
   }
 
@@ -161,22 +220,30 @@ function generateStrokeTip(stroke: Stroke): { title: string; message: string } |
 
   // Priority 3: Good form - show encouraging feedback with one area to refine
   if (form_score > 70) {
+    const oppSuffix = oppContext.hasOpponent
+      ? ` Your opponent is at ${oppContext.opponentPosition} - consider shot direction`
+      : "";
+
     // Find one thing to improve
     if (hipRotRange < 25 && hipRotRange >= 10) {
       return {
         title: `Good ${strokeName}`,
-        message: `Solid form - increasing hip rotation further will add more power without sacrificing control`,
+        message: `Solid form - increasing hip rotation further will add more power without sacrificing control.${oppSuffix}`,
       };
     }
     if (shoulderRotRange < 30 && shoulderRotRange >= 15) {
       return {
         title: `Good ${strokeName}`,
-        message: `Strong technique - extend shoulder turn through finish to maximize spin potential`,
+        message: `Strong technique - extend shoulder turn through finish to maximize spin potential.${oppSuffix}`,
       };
     }
+
+    const baseMessage = `Well-coordinated stroke - your body segments are working together efficiently`;
     return {
       title: `Good ${strokeName}`,
-      message: `Well-coordinated stroke - your body segments are working together efficiently`,
+      message: oppContext.hasOpponent
+        ? `${baseMessage}. Opponent at ${oppContext.opponentPosition} - good tactical awareness`
+        : baseMessage,
     };
   }
 

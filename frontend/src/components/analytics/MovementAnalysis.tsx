@@ -57,7 +57,7 @@ export function MovementAnalysis({ data }: MovementAnalysisProps) {
                   borderRadius: '8px',
                   color: '#E8E6E3'
                 }}
-                formatter={(value: number) => [value.toFixed(3), 'Width']}
+                formatter={(value: number | undefined) => value !== undefined ? [value.toFixed(3), 'Width'] : ['N/A', 'Width']}
               />
               <Line 
                 type="monotone" 
@@ -96,7 +96,10 @@ export function MovementAnalysis({ data }: MovementAnalysisProps) {
                   borderRadius: '8px',
                   color: '#E8E6E3'
                 }}
-                formatter={(value: number | null) => value !== null ? [value.toFixed(3), ''] : ['N/A', '']}
+                formatter={(value: unknown) => {
+                  if (typeof value === 'number' && value !== null) return [value.toFixed(3), ''];
+                  return ['N/A', ''];
+                }}
               />
               <Legend 
                 wrapperStyle={{ color: '#E8E6E3' }}
@@ -150,7 +153,7 @@ export function MovementAnalysis({ data }: MovementAnalysisProps) {
                   borderRadius: '8px',
                   color: '#E8E6E3'
                 }}
-                formatter={(value: number) => [`${value.toFixed(1)} px/s`, 'Velocity']}
+                formatter={(value: number | undefined) => value !== undefined ? [`${value.toFixed(1)} px/s`, 'Velocity'] : ['N/A', 'Velocity']}
               />
               <Line 
                 type="monotone" 

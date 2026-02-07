@@ -77,10 +77,11 @@ export function TrajectoryAnalysis({ data }: TrajectoryAnalysisProps) {
                   borderRadius: '8px',
                   color: '#E8E6E3'
                 }}
-                formatter={(value: number, name: string) => {
+                formatter={(value: number | undefined, name?: string) => {
+                  if (value === undefined) return ['N/A', name ?? ''];
                   if (name === 'length') return [`${value} frames`, 'Length'];
                   if (name === 'speed') return [`${value} km/h`, 'Avg Speed'];
-                  return [value, name];
+                  return [value, name ?? ''];
                 }}
                 labelFormatter={(label) => label}
               />

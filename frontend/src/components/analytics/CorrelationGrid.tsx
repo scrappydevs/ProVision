@@ -91,10 +91,11 @@ export function CorrelationGrid({ speedVsStance, speedVsExtension }: Correlation
                     color: '#E8E6E3',
                     fontSize: 12
                   }}
-                  formatter={(value: number, name: string) => {
+                  formatter={(value: number | undefined, name?: string) => {
+                    if (value === undefined) return ['N/A', name ?? ''];
                     if (name === 'x') return [value.toFixed(3), 'Stance'];
                     if (name === 'y') return [`${value.toFixed(1)} km/h`, 'Speed'];
-                    return [value, name];
+                    return [value, name ?? ''];
                   }}
                   labelFormatter={(_, payload) => {
                     if (payload && payload[0]) {
@@ -157,10 +158,11 @@ export function CorrelationGrid({ speedVsStance, speedVsExtension }: Correlation
                     color: '#E8E6E3',
                     fontSize: 12
                   }}
-                  formatter={(value: number, name: string) => {
+                  formatter={(value: number | undefined, name?: string) => {
+                    if (value === undefined) return ['N/A', name ?? ''];
                     if (name === 'x') return [value.toFixed(3), 'Extension'];
                     if (name === 'y') return [`${value.toFixed(1)} km/h`, 'Speed'];
-                    return [value, name];
+                    return [value, name ?? ''];
                   }}
                   labelFormatter={(_, payload) => {
                     if (payload && payload[0]) {
