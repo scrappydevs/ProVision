@@ -4,6 +4,7 @@ from pydantic import BaseModel
 import traceback
 import json
 import uuid
+from pathlib import Path
 from datetime import datetime, timezone, timedelta
 from time import perf_counter
 
@@ -78,6 +79,15 @@ class StrokeResponse(BaseModel):
     ai_insight_data: Optional[dict] = None
 
 
+class TimelineTipResponse(BaseModel):
+    id: str
+    timestamp: float
+    duration: float
+    title: str
+    message: str
+    seek_time: Optional[float] = None
+
+
 class StrokeSummaryResponse(BaseModel):
     session_id: str
     average_form_score: float
@@ -87,6 +97,7 @@ class StrokeSummaryResponse(BaseModel):
     forehand_count: int
     backhand_count: int
     strokes: List[StrokeResponse]
+    timeline_tips: List[TimelineTipResponse] = []
 
 
 def _get_player_settings_for_session(supabase, session_id: str, session_data: dict = None) -> dict:
@@ -173,6 +184,111 @@ def _insert_or_update_debug_run(
     except Exception as exc:
         print(f"[StrokeDetection] Debug run DB write skipped: {exc}")
         return False
+
+
+def _write_local_shot_label_log(
+    *,
+    session_id: str,
+    run_id: str,
+    started_at: str,
+    completed_at: str,
+    use_claude_classifier: bool,
+    hybrid_debug_payload: Dict[str, Any],
+    debug_strokes: List[Dict[str, Any]],
+) -> Optional[str]:
+    """
+    Persist one local JSON file per stroke-detection run with per-shot labeling details.
+
+    File location:
+    backend/src/api/services/stroke_run_logs/stroke_labels_<timestamp>_<session>_<run>.json
+    """
+    try:
+        logs_dir = Path(__file__).resolve().parents[1] / "services" / "stroke_run_logs"
+        logs_dir.mkdir(parents=True, exist_ok=True)
+        timestamp = datetime.now(timezone.utc).strftime("%Y%m%d_%H%M%S")
+        output_path = logs_dir / f"stroke_labels_{timestamp}_{session_id}_{run_id}.json"
+
+        event_logs = hybrid_debug_payload.get("events", []) if isinstance(hybrid_debug_payload, dict) else []
+        events_by_frame: Dict[int, List[Dict[str, Any]]] = {}
+        for event in event_logs:
+            if not isinstance(event, dict):
+                continue
+            frame = event.get("frame")
+            if not isinstance(frame, int):
+                continue
+            events_by_frame.setdefault(frame, []).append(event)
+
+        shots: List[Dict[str, Any]] = []
+        shot_index = 0
+        for stroke in debug_strokes:
+            if not isinstance(stroke, dict):
+                continue
+            label = str(stroke.get("stroke_type") or "").strip().lower()
+            if label not in {"forehand", "backhand"}:
+                continue
+
+            metrics = stroke.get("metrics") or {}
+            event_frame = metrics.get("event_frame", stroke.get("peak_frame", 0))
+            try:
+                event_frame = int(event_frame)
+            except Exception:
+                event_frame = int(stroke.get("peak_frame", 0) or 0)
+
+            matching_events = events_by_frame.get(event_frame, [])
+            matched_event = None
+            for candidate in matching_events:
+                cls = candidate.get("classification") if isinstance(candidate, dict) else None
+                cls_label = str((cls or {}).get("label") or "").strip().lower()
+                if cls_label == label:
+                    matched_event = candidate
+                    break
+            if matched_event is None and matching_events:
+                matched_event = matching_events[0]
+
+            classification = (
+                matched_event.get("classification")
+                if isinstance(matched_event, dict) and isinstance(matched_event.get("classification"), dict)
+                else {}
+            )
+            elbow_debug = classification.get("elbow_debug") if isinstance(classification.get("elbow_debug"), dict) else None
+
+            shots.append(
+                {
+                    "shot_index": shot_index,
+                    "label": label,
+                    "start_frame": int(stroke.get("start_frame", 0) or 0),
+                    "peak_frame": int(stroke.get("peak_frame", 0) or 0),
+                    "end_frame": int(stroke.get("end_frame", 0) or 0),
+                    "event_frame": event_frame,
+                    "event_sources": metrics.get("event_sources"),
+                    "classifier_source": metrics.get("classifier_source"),
+                    "classifier_confidence": metrics.get("classifier_confidence", classification.get("confidence")),
+                    "classifier_reason": metrics.get("classifier_reason", classification.get("reason")),
+                    "classification_frame_numbers": classification.get("frame_numbers"),
+                    "elbow_stats": elbow_debug,
+                }
+            )
+            shot_index += 1
+
+        payload = {
+            "run_id": run_id,
+            "session_id": session_id,
+            "started_at": started_at,
+            "completed_at": completed_at,
+            "classifier_mode": "claude" if use_claude_classifier else "elbow_trend",
+            "settings": hybrid_debug_payload.get("settings") if isinstance(hybrid_debug_payload, dict) else {},
+            "shot_count": len(shots),
+            "shots": shots,
+        }
+
+        output_path.write_text(
+            json.dumps(payload, ensure_ascii=True, default=str, indent=2),
+            encoding="utf-8",
+        )
+        return str(output_path)
+    except Exception as exc:
+        print(f"[StrokeDetection] Failed to write local shot label log: {exc}")
+        return None
 
 
 def process_stroke_detection(
@@ -631,6 +747,17 @@ def process_stroke_detection(
 
         debug_strokes = [_serialize_stroke_for_debug(s) for s in strokes]
         run_completed_at = datetime.now(timezone.utc).isoformat()
+        local_shot_log_path = _write_local_shot_label_log(
+            session_id=session_id,
+            run_id=run_id,
+            started_at=run_started_at,
+            completed_at=run_completed_at,
+            use_claude_classifier=bool(use_claude_classifier),
+            hybrid_debug_payload=hybrid_debug_payload if isinstance(hybrid_debug_payload, dict) else {},
+            debug_strokes=debug_strokes,
+        )
+        if local_shot_log_path:
+            print(f"[StrokeDetection] Local shot label log written: {local_shot_log_path}")
         merged_debug_stats = dict(debug_stats or {})
         merged_debug_stats.update(
             {
@@ -642,6 +769,7 @@ def process_stroke_detection(
                 "stage_timings_ms": dict(stage_timings_ms),
                 "pipeline_elapsed_ms": round(sum(stage_timings_ms.values()), 1),
                 "use_claude_classifier": bool(use_claude_classifier),
+                "local_shot_label_log_path": local_shot_log_path,
             }
         )
         _set_in_memory_progress("completed", merged_debug_stats, completed_at=run_completed_at)
@@ -888,17 +1016,40 @@ async def get_stroke_summary(
             total_strokes=0,
             forehand_count=0,
             backhand_count=0,
-            strokes=[]
+            strokes=[],
+            timeline_tips=[],
         )
 
     # Get summary from session
     stroke_summary = session.get("stroke_summary", {})
 
+    def _is_player_stroke(row: Dict[str, Any]) -> bool:
+        metrics = row.get("metrics")
+        if not isinstance(metrics, dict):
+            return True
+
+        hitter = str(metrics.get("event_hitter") or "").strip().lower()
+        if hitter != "opponent":
+            return True
+
+        method = str(metrics.get("event_hitter_method") or "").strip().lower()
+        reason = str(metrics.get("event_hitter_reason") or "").strip().lower()
+        if method == "proximity_10_percent" and reason.startswith("player_outside_"):
+            return True
+
+        confidence_raw = metrics.get("event_hitter_confidence")
+        try:
+            confidence = float(confidence_raw)
+        except (TypeError, ValueError):
+            confidence = 0.0
+        return confidence < 0.75
+
     if not stroke_summary:
-        total = len(strokes_result.data)
-        forehand = sum(1 for s in strokes_result.data if s.get("stroke_type") == "forehand")
-        backhand = sum(1 for s in strokes_result.data if s.get("stroke_type") == "backhand")
-        scores = [s.get("form_score") for s in strokes_result.data if isinstance(s.get("form_score"), (int, float))]
+        player_rows = [s for s in strokes_result.data if _is_player_stroke(s)]
+        total = len(player_rows)
+        forehand = sum(1 for s in player_rows if s.get("stroke_type") == "forehand")
+        backhand = sum(1 for s in player_rows if s.get("stroke_type") == "backhand")
+        scores = [s.get("form_score") for s in player_rows if isinstance(s.get("form_score"), (int, float))]
         avg_score = sum(scores) / len(scores) if scores else 0
         best_score = max(scores) if scores else 0
         stroke_summary = {
@@ -929,15 +1080,47 @@ async def get_stroke_summary(
         for s in strokes_result.data
     ]
 
+    timeline_tips_raw = stroke_summary.get("timeline_tips", []) if isinstance(stroke_summary, dict) else []
+    timeline_tips: List[TimelineTipResponse] = []
+    if isinstance(timeline_tips_raw, list):
+        for idx, raw_tip in enumerate(timeline_tips_raw):
+            if not isinstance(raw_tip, dict):
+                continue
+            try:
+                timeline_tips.append(
+                    TimelineTipResponse(
+                        id=str(raw_tip.get("id") or f"timeline-{idx}"),
+                        timestamp=float(raw_tip.get("timestamp", 0.0) or 0.0),
+                        duration=float(raw_tip.get("duration", 2.0) or 2.0),
+                        title=str(raw_tip.get("title") or "Rally Snapshot")[:64],
+                        message=str(raw_tip.get("message") or "")[:220],
+                        seek_time=(
+                            float(raw_tip.get("seek_time"))
+                            if raw_tip.get("seek_time") is not None
+                            else None
+                        ),
+                    )
+                )
+            except (TypeError, ValueError):
+                continue
+
+    player_rows = [s for s in strokes_result.data if _is_player_stroke(s)]
+    player_scores = [s.get("form_score") for s in player_rows if isinstance(s.get("form_score"), (int, float))]
+    computed_average_form = (sum(player_scores) / len(player_scores)) if player_scores else 0
+    computed_best_form = max(player_scores) if player_scores else 0
+    computed_forehand = sum(1 for s in player_rows if s.get("stroke_type") == "forehand")
+    computed_backhand = sum(1 for s in player_rows if s.get("stroke_type") == "backhand")
+
     return StrokeSummaryResponse(
         session_id=session_id,
-        average_form_score=stroke_summary.get("average_form_score", 0),
-        best_form_score=stroke_summary.get("best_form_score", 0),
+        average_form_score=computed_average_form,
+        best_form_score=computed_best_form,
         consistency_score=stroke_summary.get("consistency_score", 0),
-        total_strokes=stroke_summary.get("total_strokes", 0),
-        forehand_count=stroke_summary.get("forehand_count", 0),
-        backhand_count=stroke_summary.get("backhand_count", 0),
-        strokes=strokes
+        total_strokes=len(player_rows),
+        forehand_count=computed_forehand,
+        backhand_count=computed_backhand,
+        strokes=strokes,
+        timeline_tips=timeline_tips,
     )
 
 

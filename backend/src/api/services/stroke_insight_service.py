@@ -11,6 +11,7 @@ Insights are written to stroke_analytics rows one-by-one for progressive display
 from __future__ import annotations
 
 import json
+import math
 import os
 from datetime import datetime, timezone
 from time import perf_counter
@@ -35,6 +36,200 @@ def _read_env_float(name: str, default: float) -> float:
         return float(raw.strip())
     except (TypeError, ValueError):
         return default
+
+
+def _estimate_session_duration_seconds(
+    trajectory_data: Optional[Dict[str, Any]],
+    strokes: List[Dict[str, Any]],
+) -> float:
+    duration = 0.0
+    fps = 30.0
+
+    if isinstance(trajectory_data, dict):
+        video_info = trajectory_data.get("video_info", {})
+        if isinstance(video_info, dict):
+            try:
+                duration = float(video_info.get("duration", 0.0) or 0.0)
+            except (TypeError, ValueError):
+                duration = 0.0
+            try:
+                fps = float(video_info.get("fps", fps) or fps)
+            except (TypeError, ValueError):
+                fps = 30.0
+            if duration <= 0:
+                try:
+                    total_frames = int(video_info.get("total_frames", 0) or 0)
+                except (TypeError, ValueError):
+                    total_frames = 0
+                if total_frames > 0 and fps > 0:
+                    duration = total_frames / fps
+
+    if duration <= 0 and strokes:
+        max_frame = max(int(s.get("end_frame", 0) or 0) for s in strokes)
+        duration = max_frame / max(1.0, fps)
+
+    return max(0.1, duration)
+
+
+def _stroke_metrics(stroke_row: Dict[str, Any]) -> Dict[str, Any]:
+    metrics = stroke_row.get("metrics")
+    return metrics if isinstance(metrics, dict) else {}
+
+
+def _stroke_hitter(stroke_row: Dict[str, Any]) -> str:
+    """
+    Returns one of: "player", "opponent", "unknown".
+    """
+    metrics = _stroke_metrics(stroke_row)
+    hitter = str(metrics.get("event_hitter") or "").strip().lower()
+    if hitter in {"player", "opponent"}:
+        return hitter
+    return "unknown"
+
+
+def _stroke_hitter_confidence(stroke_row: Dict[str, Any]) -> float:
+    metrics = _stroke_metrics(stroke_row)
+    try:
+        return max(0.0, min(1.0, float(metrics.get("event_hitter_confidence", 0.0))))
+    except (TypeError, ValueError):
+        return 0.0
+
+
+def _is_reliable_opponent_stroke(stroke_row: Dict[str, Any]) -> bool:
+    if _stroke_hitter(stroke_row) != "opponent":
+        return False
+
+    metrics = _stroke_metrics(stroke_row)
+    method = str(metrics.get("event_hitter_method") or "").strip().lower()
+    reason = str(metrics.get("event_hitter_reason") or "").strip().lower()
+    if method == "proximity_10_percent" and reason.startswith("player_outside_"):
+        # Legacy ownership rule was too aggressive; don't trust it.
+        return False
+
+    return _stroke_hitter_confidence(stroke_row) >= 0.75
+
+
+def _is_player_stroke(stroke_row: Dict[str, Any]) -> bool:
+    # Backward compatibility: unknown/missing ownership stays player-owned.
+    return not _is_reliable_opponent_stroke(stroke_row)
+
+
+def _generate_timeline_tips_from_insights(
+    *,
+    client: Any,
+    model: str,
+    session_id: str,
+    strokes: List[Dict[str, Any]],
+    trajectory_data: Optional[Dict[str, Any]],
+) -> List[Dict[str, Any]]:
+    """
+    Build one Claude summary recommendation for each 2-second video bucket.
+    """
+    bucket_sec = 2.0
+    duration_sec = _estimate_session_duration_seconds(trajectory_data, strokes)
+    bucket_count = max(1, int(math.ceil(duration_sec / bucket_sec)))
+
+    compact_strokes: List[Dict[str, Any]] = []
+    for s in strokes:
+        if not _is_player_stroke(s):
+            continue
+        ai_insight = str(s.get("ai_insight") or "").strip()
+        if not ai_insight:
+            continue
+        compact_strokes.append(
+            {
+                "id": s.get("id"),
+                "start_frame": int(s.get("start_frame", 0) or 0),
+                "peak_frame": int(s.get("peak_frame", 0) or 0),
+                "end_frame": int(s.get("end_frame", 0) or 0),
+                "stroke_type": s.get("stroke_type"),
+                "form_score": s.get("form_score"),
+                "insight": ai_insight[:320],
+            }
+        )
+
+    # We still emit buckets even if only a few stroke insights exist.
+    prompt_payload = {
+        "session_id": session_id,
+        "duration_sec": round(duration_sec, 3),
+        "bucket_size_sec": bucket_sec,
+        "bucket_count": bucket_count,
+        "stroke_insights": compact_strokes,
+    }
+
+    prompt = (
+        "You are creating timeline coaching overlays for a table tennis video.\n"
+        "Given per-stroke AI insights, generate EXACTLY one concise recommendation/observation "
+        "for each 2-second bucket across the full video.\n\n"
+        "Rules:\n"
+        "1. Return EXACTLY one tip per bucket_index from 0 to bucket_count-1.\n"
+        "2. Keep each title 2-6 words and each message 1 sentence (max 18 words).\n"
+        "3. Mention what was noticed and the most actionable adjustment.\n"
+        "4. If a bucket has little signal, provide a neutral rally habit tip.\n"
+        "5. Return ONLY valid JSON.\n\n"
+        "JSON schema:\n"
+        "{\n"
+        '  "tips": [\n'
+        '    {"bucket_index": 0, "title": "short title", "message": "one-sentence recommendation"}\n'
+        "  ]\n"
+        "}\n\n"
+        f"Data:\n{json.dumps(prompt_payload, ensure_ascii=True)}"
+    )
+
+    response = client.messages.create(
+        model=model,
+        max_tokens=min(4096, 600 + bucket_count * 70),
+        temperature=0,
+        messages=[{"role": "user", "content": [{"type": "text", "text": prompt}]}],
+    )
+    raw_text = _extract_text_from_anthropic_response(response)
+    parsed = _extract_first_json_object(raw_text) or {}
+    tips_raw = parsed.get("tips") if isinstance(parsed, dict) else None
+    tips_list = tips_raw if isinstance(tips_raw, list) else []
+
+    tip_by_bucket: Dict[int, Dict[str, Any]] = {}
+    for raw in tips_list:
+        if not isinstance(raw, dict):
+            continue
+        try:
+            bucket_index = int(raw.get("bucket_index"))
+        except (TypeError, ValueError):
+            continue
+        if bucket_index < 0 or bucket_index >= bucket_count:
+            continue
+        title = str(raw.get("title") or "").strip()
+        message = str(raw.get("message") or "").strip()
+        if not title:
+            title = "Rally Snapshot"
+        if not message:
+            message = "Recover balance early and prepare your next contact point."
+        tip_by_bucket[bucket_index] = {
+            "id": f"timeline-{bucket_index}",
+            "timestamp": round(bucket_index * bucket_sec, 3),
+            "duration": bucket_sec,
+            "seek_time": round(bucket_index * bucket_sec, 3),
+            "title": title[:64],
+            "message": message[:220],
+        }
+
+    # Guarantee one tip per bucket.
+    out: List[Dict[str, Any]] = []
+    for bucket_index in range(bucket_count):
+        if bucket_index in tip_by_bucket:
+            out.append(tip_by_bucket[bucket_index])
+            continue
+        out.append(
+            {
+                "id": f"timeline-{bucket_index}",
+                "timestamp": round(bucket_index * bucket_sec, 3),
+                "duration": bucket_sec,
+                "seek_time": round(bucket_index * bucket_sec, 3),
+                "title": "Rally Snapshot",
+                "message": "Recover to neutral quickly and set up your next swing path early.",
+            }
+        )
+
+    return out
 
 
 def _extract_frames_for_insight(
@@ -300,6 +495,7 @@ def generate_insights_for_session(
     cap = None
     completed = 0
     classifications_changed = False
+    timeline_tips_count = 0
     min_conf_fh_to_bh = _read_env_float("STROKE_INSIGHT_MIN_CONFIDENCE_FH_TO_BH", 0.75)
 
     try:
@@ -351,6 +547,29 @@ def generate_insights_for_session(
 
             insight_start = perf_counter()
             try:
+                metrics = _stroke_metrics(stroke_row)
+                hitter_confidence = _stroke_hitter_confidence(stroke_row)
+
+                if _is_reliable_opponent_stroke(stroke_row):
+                    ai_insight_data = {
+                        "shot_owner": "opponent",
+                        "shot_owner_confidence": round(hitter_confidence, 3),
+                        "shot_owner_reason": str(metrics.get("event_hitter_reason") or ""),
+                        "shot_owner_method": str(metrics.get("event_hitter_method") or ""),
+                        "model": "rule_based_hitter_inference",
+                        "generated_at": datetime.now(timezone.utc).isoformat(),
+                    }
+                    supabase.table("stroke_analytics").update(
+                        {
+                            "ai_insight": "Opponent stroke detected. Excluded from your forehand/backhand breakdown.",
+                            "ai_insight_data": ai_insight_data,
+                        }
+                    ).eq("id", stroke_id).execute()
+                    completed += 1
+                    elapsed = (perf_counter() - insight_start) * 1000
+                    print(f"[StrokeInsight]   Marked as opponent stroke in {elapsed:.0f}ms")
+                    continue
+
                 result = generate_insight_for_stroke(
                     client=client,
                     model=model,
@@ -404,6 +623,10 @@ def generate_insights_for_session(
                     "suggested_corrected_stroke_type": suggested_corrected_type,
                     "reclassification_applied": apply_reclassification,
                     "reclassification_blocked_reason": reclassification_blocked_reason,
+                    "shot_owner": "player",
+                    "shot_owner_confidence": round(hitter_confidence, 3),
+                    "shot_owner_reason": str(metrics.get("event_hitter_reason") or ""),
+                    "shot_owner_method": str(metrics.get("event_hitter_method") or ""),
                     "model": model,
                     "generated_at": datetime.now(timezone.utc).isoformat(),
                 }
@@ -440,15 +663,16 @@ def generate_insights_for_session(
             try:
                 updated_strokes = (
                     supabase.table("stroke_analytics")
-                    .select("stroke_type, form_score")
+                    .select("stroke_type, form_score, metrics")
                     .eq("session_id", session_id)
                     .execute()
                 )
                 rows = updated_strokes.data or []
-                forehand_count = sum(1 for r in rows if r.get("stroke_type") == "forehand")
-                backhand_count = sum(1 for r in rows if r.get("stroke_type") == "backhand")
-                scores = [r.get("form_score", 0) for r in rows if isinstance(r.get("form_score"), (int, float))]
-                total_strokes = len(rows)
+                player_rows = [r for r in rows if _is_player_stroke(r)]
+                forehand_count = sum(1 for r in player_rows if r.get("stroke_type") == "forehand")
+                backhand_count = sum(1 for r in player_rows if r.get("stroke_type") == "backhand")
+                scores = [r.get("form_score", 0) for r in player_rows if isinstance(r.get("form_score"), (int, float))]
+                total_strokes = len(player_rows)
                 avg_score = sum(scores) / len(scores) if scores else 0
                 best_score = max(scores) if scores else 0
 
@@ -466,6 +690,46 @@ def generate_insights_for_session(
             except Exception as exc:
                 print(f"[StrokeInsight] Failed to update stroke summary: {exc}")
 
+        # Build timeline-level tips from all stroke insights (one per 2 seconds),
+        # then store them on session.stroke_summary for the top video overlay card.
+        try:
+            refreshed = (
+                supabase.table("stroke_analytics")
+                .select("id,start_frame,peak_frame,end_frame,stroke_type,form_score,ai_insight,ai_insight_data")
+                .eq("session_id", session_id)
+                .order("start_frame")
+                .execute()
+            )
+            refreshed_strokes = refreshed.data or []
+            timeline_tips = _generate_timeline_tips_from_insights(
+                client=client,
+                model=model,
+                session_id=session_id,
+                strokes=refreshed_strokes,
+                trajectory_data=trajectory_data,
+            )
+            timeline_tips_count = len(timeline_tips)
+
+            session_row = (
+                supabase.table("sessions")
+                .select("stroke_summary")
+                .eq("id", session_id)
+                .single()
+                .execute()
+            )
+            summary = session_row.data.get("stroke_summary") if session_row.data and isinstance(session_row.data.get("stroke_summary"), dict) else {}
+            summary.update(
+                {
+                    "timeline_tips": timeline_tips,
+                    "timeline_tip_interval_sec": 2.0,
+                    "timeline_tips_generated_at": datetime.now(timezone.utc).isoformat(),
+                }
+            )
+            supabase.table("sessions").update({"stroke_summary": summary}).eq("id", session_id).execute()
+            print(f"[StrokeInsight] Generated {timeline_tips_count} timeline tips (2s buckets)")
+        except Exception as exc:
+            print(f"[StrokeInsight] Timeline tips generation failed: {exc}")
+
     except Exception as exc:
         print(f"[StrokeInsight] Pipeline error: {exc}")
         return {
@@ -474,6 +738,7 @@ def generate_insights_for_session(
             "completed": completed,
             "total": total,
             "classifications_changed": classifications_changed,
+            "timeline_tips_count": timeline_tips_count,
         }
     finally:
         try:
@@ -490,4 +755,5 @@ def generate_insights_for_session(
         "completed": completed,
         "total": total,
         "classifications_changed": classifications_changed,
+        "timeline_tips_count": timeline_tips_count,
     }

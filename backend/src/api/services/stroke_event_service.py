@@ -555,58 +555,112 @@ def _infer_hitter_for_event(
     player_centers: Dict[int, float],
     opponent_centers: Dict[int, float],
     video_width: int,
-    proximity_threshold: float = 0.10,
+    proximity_threshold: float = 0.14,
+    separation_margin: float = 0.035,
 ) -> Dict[str, Any]:
     """
-    Determine if the hit is by player or opponent based on 10% frame proximity.
+    Infer hitter ownership from ball/player/opponent horizontal proximity.
 
-    If player position is within 10% of frame width from ball position,
-    it's a player hit (green). Otherwise, opponent hit (red).
+    Conservative behavior:
+    - Only mark "opponent" when opponent is decisively closer than player.
+    - If data is missing or ambiguous, return "unknown" (not opponent).
     """
     ball_frame, ball_x = _nearest_value_by_frame(ball_centers, frame, max_delta=3)
     player_frame, player_x = _nearest_value_by_frame(player_centers, frame, max_delta=3)
     opponent_frame, opponent_x = _nearest_value_by_frame(opponent_centers, frame, max_delta=3)
 
-    # Calculate 10% of frame width as the proximity threshold in pixels
     proximity_px = max(1.0, float(video_width)) * proximity_threshold
+    separation_px = max(1.0, float(video_width)) * separation_margin
+
+    ball_side = _screen_side(ball_x, video_width)
+    player_side = _screen_side(player_x, video_width)
+    opponent_side = _screen_side(opponent_x, video_width)
 
     result: Dict[str, Any] = {
-        "method": "proximity_10_percent",
-        "hitter": "opponent",  # Default to opponent if we can't determine
+        "method": "dual_proximity_v2",
+        "hitter": "unknown",
         "confidence": 0.0,
         "reason": "insufficient_data",
         "ball_frame": ball_frame,
         "ball_x": round(ball_x, 2) if isinstance(ball_x, (int, float)) else None,
+        "ball_side": ball_side,
         "player_frame": player_frame,
         "player_x": round(player_x, 2) if isinstance(player_x, (int, float)) else None,
+        "player_side": player_side,
         "opponent_frame": opponent_frame,
         "opponent_x": round(opponent_x, 2) if isinstance(opponent_x, (int, float)) else None,
+        "opponent_side": opponent_side,
         "proximity_threshold_px": round(proximity_px, 2),
+        "separation_margin_px": round(separation_px, 2),
     }
 
-    # Need both ball and player positions
     if ball_x is None:
         result["reason"] = "ball_position_unavailable"
         return result
 
-    if player_x is None:
-        result["reason"] = "player_position_unavailable"
+    player_ball_dist: Optional[float] = None
+    opponent_ball_dist: Optional[float] = None
+    if player_x is not None:
+        player_ball_dist = abs(float(ball_x) - float(player_x))
+        result["player_ball_distance"] = round(player_ball_dist, 2)
+    if opponent_x is not None:
+        opponent_ball_dist = abs(float(ball_x) - float(opponent_x))
+        result["opponent_ball_distance"] = round(opponent_ball_dist, 2)
+
+    # Both anchors available: require decisive winner to mark opponent.
+    if player_ball_dist is not None and opponent_ball_dist is not None:
+        if (
+            player_ball_dist <= proximity_px
+            and player_ball_dist + separation_px <= opponent_ball_dist
+        ):
+            result["hitter"] = "player"
+            result["confidence"] = 0.92
+            result["reason"] = "player_decisively_closer"
+            return result
+        if (
+            opponent_ball_dist <= proximity_px
+            and opponent_ball_dist + separation_px <= player_ball_dist
+        ):
+            result["hitter"] = "opponent"
+            result["confidence"] = 0.9
+            result["reason"] = "opponent_decisively_closer"
+            return result
+
+        if player_ball_dist <= proximity_px and player_ball_dist <= opponent_ball_dist:
+            result["hitter"] = "player"
+            result["confidence"] = 0.7
+            result["reason"] = "player_closer_but_ambiguous"
+            return result
+
+        if opponent_ball_dist <= proximity_px and opponent_ball_dist < player_ball_dist:
+            result["reason"] = "opponent_closer_but_ambiguous"
+            result["confidence"] = 0.35
+            return result
+
+        result["reason"] = "both_outside_proximity"
         return result
 
-    # Calculate distance between player and ball
-    player_ball_dist = abs(float(ball_x) - float(player_x))
-    result["player_ball_distance"] = round(player_ball_dist, 2)
+    # Only player anchor available: still allow player assignment when reasonably close.
+    if player_ball_dist is not None:
+        if player_ball_dist <= proximity_px:
+            result["hitter"] = "player"
+            result["confidence"] = 0.62
+            result["reason"] = "player_only_within_proximity"
+        else:
+            result["reason"] = "player_only_outside_proximity"
+        return result
 
-    # If player is within 10% of frame width from ball, it's a player hit
-    if player_ball_dist <= proximity_px:
-        result["hitter"] = "player"
-        result["confidence"] = 0.90
-        result["reason"] = f"player_within_{int(proximity_threshold*100)}pct_of_ball"
-    else:
-        result["hitter"] = "opponent"
-        result["confidence"] = 0.85
-        result["reason"] = f"player_outside_{int(proximity_threshold*100)}pct_of_ball"
+    # Only opponent anchor available: never force opponent with weak context.
+    if opponent_ball_dist is not None:
+        if opponent_ball_dist <= proximity_px and ball_side is not None and ball_side == opponent_side:
+            result["reason"] = "opponent_only_same_side_low_confidence"
+            result["confidence"] = 0.3
+        else:
+            result["reason"] = "opponent_only_insufficient_context"
+        return result
 
+    # No usable player anchors.
+    result["reason"] = "no_player_or_opponent_position"
     return result
 
 
@@ -1119,6 +1173,17 @@ def _classify_single_event_with_elbow_trend(
             "contact_frame": event.frame,
             "reason": f"insufficient_{dominant_arm}_elbow_samples",
             "frame_numbers": sampled_frames,
+            "elbow_debug": {
+                "dominant_arm": dominant_arm,
+                "lookback_frames": lookback_frames,
+                "lookahead_frames": lookahead_frames,
+                "min_delta_deg": round(min_delta_deg, 3),
+                "sampled_frames": sampled_frames,
+                "sampled_angles_deg": [round(float(a), 3) for a in sampled_angles],
+                "smoothed_angles_deg": [],
+                "delta_deg": None,
+                "classification_rule": "increasing_backhand_decreasing_forehand",
+            },
             "raw": "",
         }
 
@@ -1148,6 +1213,17 @@ def _classify_single_event_with_elbow_trend(
             f"lookahead={lookahead_frames}; rule=increasing_backhand"
         ),
         "frame_numbers": sampled_frames,
+        "elbow_debug": {
+            "dominant_arm": dominant_arm,
+            "lookback_frames": lookback_frames,
+            "lookahead_frames": lookahead_frames,
+            "min_delta_deg": round(min_delta_deg, 3),
+            "sampled_frames": sampled_frames,
+            "sampled_angles_deg": [round(float(a), 3) for a in sampled_angles],
+            "smoothed_angles_deg": [round(float(a), 3) for a in smoothed],
+            "delta_deg": round(delta, 3),
+            "classification_rule": "increasing_backhand_decreasing_forehand",
+        },
         "raw": "",
     }
 
@@ -1672,6 +1748,14 @@ def detect_strokes_hybrid(
                 player_centers=player_center_by_frame,
                 opponent_centers=opponent_center_by_frame,
                 video_width=video_width,
+                proximity_threshold=_safe_float(
+                    os.getenv("STROKE_HITTER_PROXIMITY_THRESHOLD", "0.14"),
+                    0.14,
+                ),
+                separation_margin=_safe_float(
+                    os.getenv("STROKE_HITTER_SEPARATION_MARGIN", "0.035"),
+                    0.035,
+                ),
             )
             for event in events
         ]

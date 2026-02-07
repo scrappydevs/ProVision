@@ -305,6 +305,10 @@ export interface StrokeMetrics {
   shoulder_rotation_range: number;
   event_sources?: string | string[];
   event_frame?: number;
+  event_hitter?: "player" | "opponent" | "unknown" | string;
+  event_hitter_confidence?: number;
+  event_hitter_reason?: string;
+  event_hitter_method?: string;
 }
 
 export interface StrokeInsightData {
@@ -313,6 +317,10 @@ export interface StrokeInsightData {
   classification_confidence?: number;
   classification_reasoning?: string;
   stroke_type_correct?: boolean;
+  shot_owner?: "player" | "opponent" | "unknown" | string;
+  shot_owner_confidence?: number;
+  shot_owner_reason?: string;
+  shot_owner_method?: string;
   model?: string;
   generated_at?: string;
 }
@@ -332,6 +340,15 @@ export interface Stroke {
   ai_insight_data?: StrokeInsightData | null;
 }
 
+export interface TimelineTip {
+  id: string;
+  timestamp: number;
+  duration: number;
+  title: string;
+  message: string;
+  seek_time?: number | null;
+}
+
 export interface StrokeSummary {
   session_id: string;
   average_form_score: number;
@@ -341,6 +358,7 @@ export interface StrokeSummary {
   forehand_count: number;
   backhand_count: number;
   strokes: Stroke[];
+  timeline_tips?: TimelineTip[];
 }
 
 export interface AnalyzeStrokesRequest {
