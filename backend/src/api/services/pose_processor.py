@@ -361,9 +361,12 @@ class PoseProcessor:
                     if opponent_center and len(keypoints_data) > 1:
                         # Find closest to opponent center (excluding player_idx)
                         opp_idx = self._find_closest_player(results, opponent_center, exclude_indices=[player_idx])
+                        if frame_number == 0:
+                            print(f"[PoseProcessor] Frame 0: Found opponent at idx {opp_idx}, player at idx {player_idx}, total detections: {len(keypoints_data)}")
                         if opp_idx is None and len(keypoints_data) > 1:
                             # Fallback: pick any other person
                             opp_idx = 1 if player_idx == 0 else 0
+                            print(f"[PoseProcessor] WARNING: Could not find opponent near initial center, using fallback idx {opp_idx}")
                     elif len(keypoints_data) > 1:
                         # No opponent selected - pick the other person
                         opp_idx = 1 if player_idx == 0 else 0
@@ -519,9 +522,12 @@ class PoseProcessor:
                             
                             if opponent_center and len(keypoints_data) > 1:
                                 opp_idx = self._find_closest_player(results, opponent_center, exclude_indices=[player_idx])
+                                if frame_idx == 0:
+                                    print(f"[PoseProcessor] Overlay Frame 0: Found opponent at idx {opp_idx}, player at idx {player_idx}, total detections: {len(keypoints_data)}")
                                 if opp_idx is None and len(keypoints_data) > 1:
                                     # Fallback: pick any other person
                                     opp_idx = 1 if player_idx == 0 else 0
+                                    print(f"[PoseProcessor] Overlay WARNING: Could not find opponent near initial center, using fallback idx {opp_idx}")
                             elif len(keypoints_data) > 1:
                                 opp_idx = 1 if player_idx == 0 else 0
 
