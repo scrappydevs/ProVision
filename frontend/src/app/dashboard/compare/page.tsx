@@ -150,8 +150,8 @@ const normalizeMatchupAnalysis = (data?: MatchupAnalysisResponse | null) => {
   const candidates: string[] = [];
   if (typeof data.raw === "string" && data.raw.includes("{")) candidates.push(data.raw);
   if (typeof data.headline === "string" && data.headline.includes("{")) candidates.push(data.headline);
-  // Backend puts raw JSON into tactical_advantage as ["<json>"] when parsing fails
-  const ta = data.tactical_advantage;
+  // Backend puts raw JSON into tactical_advantage as ["<json>"] or a bare string when parsing fails
+  const ta: unknown = data.tactical_advantage;
   if (typeof ta === "string" && ta.includes("{")) candidates.push(ta);
   if (Array.isArray(ta) && ta.length === 1 && typeof ta[0] === "string" && ta[0].includes("{")) {
     candidates.push(ta[0]);
