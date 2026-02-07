@@ -542,6 +542,85 @@ def _nearest_value_by_frame(
     return nearest_frame, values_by_frame.get(nearest_frame)
 
 
+def _latest_value_on_or_before(
+    values_by_frame: Dict[int, float],
+    target_frame: int,
+    max_gap: int = 8,
+) -> Tuple[Optional[int], Optional[float]]:
+    if not values_by_frame:
+        return None, None
+    lo = target_frame - max(0, int(max_gap))
+    candidates = [frame for frame in values_by_frame.keys() if lo <= frame <= target_frame]
+    if not candidates:
+        return None, None
+    frame = max(candidates)
+    return frame, values_by_frame.get(frame)
+
+
+def _earliest_value_after(
+    values_by_frame: Dict[int, float],
+    target_frame: int,
+    max_gap: int = 10,
+    min_offset: int = 1,
+) -> Tuple[Optional[int], Optional[float]]:
+    if not values_by_frame:
+        return None, None
+    lo = target_frame + max(0, int(min_offset))
+    hi = target_frame + max(0, int(max_gap))
+    candidates = [frame for frame in values_by_frame.keys() if lo <= frame <= hi]
+    if not candidates:
+        return None, None
+    frame = min(candidates)
+    return frame, values_by_frame.get(frame)
+
+
+def _next_n_values_after(
+    values_by_frame: Dict[int, float],
+    target_frame: int,
+    max_gap: int = 14,
+    n: int = 5,
+    min_offset: int = 1,
+) -> List[Tuple[int, float]]:
+    if not values_by_frame:
+        return []
+    lo = target_frame + max(0, int(min_offset))
+    hi = target_frame + max(0, int(max_gap))
+    candidates = sorted(frame for frame in values_by_frame.keys() if lo <= frame <= hi)
+    out: List[Tuple[int, float]] = []
+    for frame in candidates:
+        value = values_by_frame.get(frame)
+        if isinstance(value, (int, float)):
+            out.append((frame, float(value)))
+        if len(out) >= max(1, int(n)):
+            break
+    return out
+
+
+def _nearest_or_last_known(
+    values_by_frame: Dict[int, float],
+    target_frame: int,
+    nearest_max_delta: int = 3,
+    last_known_max_gap: int = 120,
+) -> Tuple[Optional[int], Optional[float], str]:
+    nearest_frame, nearest_value = _nearest_value_by_frame(
+        values_by_frame,
+        target_frame,
+        max_delta=max(0, int(nearest_max_delta)),
+    )
+    if nearest_frame is not None and nearest_value is not None:
+        return nearest_frame, nearest_value, "nearest"
+
+    last_frame, last_value = _latest_value_on_or_before(
+        values_by_frame,
+        target_frame,
+        max_gap=max(0, int(last_known_max_gap)),
+    )
+    if last_frame is not None and last_value is not None:
+        return last_frame, last_value, "last_known"
+
+    return None, None, "missing"
+
+
 def _screen_side(x: Optional[float], video_width: int) -> Optional[str]:
     if not isinstance(x, (int, float)):
         return None
@@ -549,25 +628,29 @@ def _screen_side(x: Optional[float], video_width: int) -> Optional[str]:
     return "left" if float(x) < midpoint else "right"
 
 
-def _infer_hitter_for_event(
+def _infer_hitter_by_proximity(
     frame: int,
     ball_centers: Dict[int, float],
     player_centers: Dict[int, float],
     opponent_centers: Dict[int, float],
     video_width: int,
-    proximity_threshold: float = 0.14,
-    separation_margin: float = 0.035,
+    proximity_threshold: float,
+    separation_margin: float,
+    anchor_last_known_lookback_frames: int = 120,
 ) -> Dict[str, Any]:
-    """
-    Infer hitter ownership from ball/player/opponent horizontal proximity.
-
-    Conservative behavior:
-    - Only mark "opponent" when opponent is decisively closer than player.
-    - If data is missing or ambiguous, return "unknown" (not opponent).
-    """
     ball_frame, ball_x = _nearest_value_by_frame(ball_centers, frame, max_delta=3)
-    player_frame, player_x = _nearest_value_by_frame(player_centers, frame, max_delta=3)
-    opponent_frame, opponent_x = _nearest_value_by_frame(opponent_centers, frame, max_delta=3)
+    player_frame, player_x, player_anchor_source = _nearest_or_last_known(
+        player_centers,
+        frame,
+        nearest_max_delta=3,
+        last_known_max_gap=max(1, int(anchor_last_known_lookback_frames)),
+    )
+    opponent_frame, opponent_x, opponent_anchor_source = _nearest_or_last_known(
+        opponent_centers,
+        frame,
+        nearest_max_delta=3,
+        last_known_max_gap=max(1, int(anchor_last_known_lookback_frames)),
+    )
 
     proximity_px = max(1.0, float(video_width)) * proximity_threshold
     separation_px = max(1.0, float(video_width)) * separation_margin
@@ -586,9 +669,11 @@ def _infer_hitter_for_event(
         "ball_side": ball_side,
         "player_frame": player_frame,
         "player_x": round(player_x, 2) if isinstance(player_x, (int, float)) else None,
+        "player_anchor_source": player_anchor_source,
         "player_side": player_side,
         "opponent_frame": opponent_frame,
         "opponent_x": round(opponent_x, 2) if isinstance(opponent_x, (int, float)) else None,
+        "opponent_anchor_source": opponent_anchor_source,
         "opponent_side": opponent_side,
         "proximity_threshold_px": round(proximity_px, 2),
         "separation_margin_px": round(separation_px, 2),
@@ -661,6 +746,255 @@ def _infer_hitter_for_event(
 
     # No usable player anchors.
     result["reason"] = "no_player_or_opponent_position"
+    return result
+
+
+def _infer_hitter_for_event(
+    frame: int,
+    ball_centers: Dict[int, float],
+    player_centers: Dict[int, float],
+    opponent_centers: Dict[int, float],
+    video_width: int,
+    proximity_threshold: float = 0.14,
+    separation_margin: float = 0.035,
+    trend_lookback_frames: int = 8,
+    trend_lookahead_frames: int = 10,
+    trend_min_away_ratio: float = 0.008,
+    trend_margin_ratio: float = 0.004,
+    direction_frames_after: int = 5,
+    direction_min_delta_ratio: float = 0.0025,
+    anchor_last_known_lookback_frames: int = 120,
+) -> Dict[str, Any]:
+    """
+    Infer hitter ownership using pre/post-shot distance trend first, then
+    fall back to same-frame proximity if trend data is missing or ambiguous.
+    """
+    proximity_result = _infer_hitter_by_proximity(
+        frame=frame,
+        ball_centers=ball_centers,
+        player_centers=player_centers,
+        opponent_centers=opponent_centers,
+        video_width=video_width,
+        proximity_threshold=proximity_threshold,
+        separation_margin=separation_margin,
+        anchor_last_known_lookback_frames=anchor_last_known_lookback_frames,
+    )
+
+    trend_min_away_px = max(2.0, max(1.0, float(video_width)) * max(0.001, float(trend_min_away_ratio)))
+    trend_margin_px = max(1.0, max(1.0, float(video_width)) * max(0.0005, float(trend_margin_ratio)))
+
+    ball_pre_frame, ball_pre_x = _latest_value_on_or_before(
+        ball_centers,
+        frame,
+        max_gap=max(2, int(trend_lookback_frames)),
+    )
+    direction_frames_after = max(2, int(direction_frames_after))
+    future_ball_samples = (
+        _next_n_values_after(
+            ball_centers,
+            int(ball_pre_frame) if isinstance(ball_pre_frame, int) else frame,
+            max_gap=max(4, int(trend_lookahead_frames), direction_frames_after * 3),
+            n=direction_frames_after,
+            min_offset=1,
+        )
+        if isinstance(ball_pre_frame, int)
+        else []
+    )
+    ball_post_frame = future_ball_samples[-1][0] if future_ball_samples else None
+    ball_post_x = (
+        sum(sample_x for _, sample_x in future_ball_samples) / len(future_ball_samples)
+        if future_ball_samples
+        else None
+    )
+
+    result: Dict[str, Any] = dict(proximity_result)
+    result["method"] = "post5_direction_distance_trend_v2"
+    result["trend_lookback_frames"] = max(2, int(trend_lookback_frames))
+    result["trend_lookahead_frames"] = max(2, int(trend_lookahead_frames))
+    result["trend_min_away_px"] = round(trend_min_away_px, 2)
+    result["trend_margin_px"] = round(trend_margin_px, 2)
+    result["direction_frames_after"] = direction_frames_after
+    result["direction_samples_count"] = len(future_ball_samples)
+    result["anchor_last_known_lookback_frames"] = max(1, int(anchor_last_known_lookback_frames))
+    result["ball_pre_frame"] = ball_pre_frame
+    result["ball_pre_x"] = round(ball_pre_x, 2) if isinstance(ball_pre_x, (int, float)) else None
+    result["ball_post_frame"] = ball_post_frame
+    result["ball_post_x"] = round(ball_post_x, 2) if isinstance(ball_post_x, (int, float)) else None
+    result["ball_post_frames"] = [sample_frame for sample_frame, _ in future_ball_samples]
+
+    if ball_pre_x is None or ball_post_x is None:
+        result["method"] = "post5_direction_distance_trend_v2+proximity_fallback"
+        result["reason"] = f"trend_ball_window_missing:{proximity_result.get('reason')}"
+        return result
+
+    if isinstance(ball_pre_frame, int):
+        player_pre_frame, player_pre_x, player_pre_anchor_source = _nearest_or_last_known(
+            player_centers,
+            int(ball_pre_frame),
+            nearest_max_delta=4,
+            last_known_max_gap=max(1, int(anchor_last_known_lookback_frames)),
+        )
+        opponent_pre_frame, opponent_pre_x, opponent_pre_anchor_source = _nearest_or_last_known(
+            opponent_centers,
+            int(ball_pre_frame),
+            nearest_max_delta=4,
+            last_known_max_gap=max(1, int(anchor_last_known_lookback_frames)),
+        )
+    else:
+        player_pre_frame, player_pre_x, player_pre_anchor_source = None, None, "missing"
+        opponent_pre_frame, opponent_pre_x, opponent_pre_anchor_source = None, None, "missing"
+
+    player_pre_dist = abs(float(ball_pre_x) - float(player_pre_x)) if player_pre_x is not None else None
+    opponent_pre_dist = abs(float(ball_pre_x) - float(opponent_pre_x)) if opponent_pre_x is not None else None
+
+    player_post_samples: List[float] = []
+    opponent_post_samples: List[float] = []
+    player_post_frame: Optional[int] = None
+    opponent_post_frame: Optional[int] = None
+    player_post_anchor_sources: List[str] = []
+    opponent_post_anchor_sources: List[str] = []
+    for sample_frame, sample_ball_x in future_ball_samples:
+        p_frame, p_x, p_source = _nearest_or_last_known(
+            player_centers,
+            sample_frame,
+            nearest_max_delta=4,
+            last_known_max_gap=max(1, int(anchor_last_known_lookback_frames)),
+        )
+        o_frame, o_x, o_source = _nearest_or_last_known(
+            opponent_centers,
+            sample_frame,
+            nearest_max_delta=4,
+            last_known_max_gap=max(1, int(anchor_last_known_lookback_frames)),
+        )
+        if p_x is not None:
+            player_post_samples.append(abs(float(sample_ball_x) - float(p_x)))
+            player_post_anchor_sources.append(p_source)
+            if player_post_frame is None:
+                player_post_frame = p_frame
+        if o_x is not None:
+            opponent_post_samples.append(abs(float(sample_ball_x) - float(o_x)))
+            opponent_post_anchor_sources.append(o_source)
+            if opponent_post_frame is None:
+                opponent_post_frame = o_frame
+
+    player_post_dist = _median(player_post_samples, default=0.0) if player_post_samples else None
+    opponent_post_dist = _median(opponent_post_samples, default=0.0) if opponent_post_samples else None
+
+    result.update(
+        {
+            "player_pre_frame": player_pre_frame,
+            "player_post_frame": player_post_frame,
+            "player_pre_anchor_source": player_pre_anchor_source,
+            "player_post_anchor_source": (
+                ",".join(sorted(set(player_post_anchor_sources)))
+                if player_post_anchor_sources
+                else "missing"
+            ),
+            "opponent_pre_frame": opponent_pre_frame,
+            "opponent_post_frame": opponent_post_frame,
+            "opponent_pre_anchor_source": opponent_pre_anchor_source,
+            "opponent_post_anchor_source": (
+                ",".join(sorted(set(opponent_post_anchor_sources)))
+                if opponent_post_anchor_sources
+                else "missing"
+            ),
+            "player_pre_distance": round(player_pre_dist, 2) if isinstance(player_pre_dist, (int, float)) else None,
+            "player_post_distance": round(player_post_dist, 2) if isinstance(player_post_dist, (int, float)) else None,
+            "opponent_pre_distance": round(opponent_pre_dist, 2) if isinstance(opponent_pre_dist, (int, float)) else None,
+            "opponent_post_distance": round(opponent_post_dist, 2) if isinstance(opponent_post_dist, (int, float)) else None,
+        }
+    )
+
+    if (
+        player_pre_dist is None
+        or player_post_dist is None
+        or opponent_pre_dist is None
+        or opponent_post_dist is None
+    ):
+        result["method"] = "post5_direction_distance_trend_v2+proximity_fallback"
+        result["reason"] = f"trend_player_anchor_missing:{proximity_result.get('reason')}"
+        return result
+
+    player_away_delta = float(player_post_dist - player_pre_dist)
+    opponent_away_delta = float(opponent_post_dist - opponent_pre_dist)
+    player_vs_opponent_delta = float(player_away_delta - opponent_away_delta)
+    opponent_vs_player_delta = float(opponent_away_delta - player_away_delta)
+    direction_min_px = max(1.0, max(1.0, float(video_width)) * max(0.0005, float(direction_min_delta_ratio)))
+    direction_dx = float(ball_post_x - ball_pre_x)
+    direction_dt = (
+        float(ball_post_frame - ball_pre_frame)
+        if isinstance(ball_post_frame, int) and isinstance(ball_pre_frame, int)
+        else 0.0
+    )
+    direction_speed = direction_dx / max(1.0, abs(direction_dt))
+    opponent_direction_away = (
+        isinstance(opponent_pre_x, (int, float))
+        and abs(direction_dx) >= direction_min_px
+        and ((direction_dx * (float(ball_pre_x) - float(opponent_pre_x))) > 0.0)
+    )
+    player_direction_away = (
+        isinstance(player_pre_x, (int, float))
+        and abs(direction_dx) >= direction_min_px
+        and ((direction_dx * (float(ball_pre_x) - float(player_pre_x))) > 0.0)
+    )
+
+    result["player_away_delta"] = round(player_away_delta, 2)
+    result["opponent_away_delta"] = round(opponent_away_delta, 2)
+    result["player_vs_opponent_delta"] = round(player_vs_opponent_delta, 2)
+    result["opponent_vs_player_delta"] = round(opponent_vs_player_delta, 2)
+    result["ball_direction_dx"] = round(direction_dx, 2)
+    result["ball_direction_dt"] = round(direction_dt, 2)
+    result["ball_direction_px_per_frame"] = round(direction_speed, 3)
+    result["direction_min_px"] = round(direction_min_px, 2)
+    result["direction_away_from_opponent"] = bool(opponent_direction_away)
+    result["direction_away_from_player"] = bool(player_direction_away)
+
+    # Requested behavior: if post-shot direction is away from opponent, treat as opponent hit.
+    if opponent_direction_away and not player_direction_away:
+        confidence = min(0.97, 0.78 + min(0.18, abs(direction_dx) / max(8.0, direction_min_px * 6.0)))
+        result["hitter"] = "opponent"
+        result["confidence"] = round(confidence, 3)
+        result["reason"] = (
+            f"post_direction_away_from_opponent:dx={direction_dx:.2f};"
+            f" opp_delta={opponent_away_delta:.2f}; player_delta={player_away_delta:.2f}"
+        )
+        return result
+
+    if player_direction_away and not opponent_direction_away:
+        confidence = min(0.97, 0.78 + min(0.18, abs(direction_dx) / max(8.0, direction_min_px * 6.0)))
+        result["hitter"] = "player"
+        result["confidence"] = round(confidence, 3)
+        result["reason"] = (
+            f"post_direction_away_from_player:dx={direction_dx:.2f};"
+            f" player_delta={player_away_delta:.2f}; opp_delta={opponent_away_delta:.2f}"
+        )
+        return result
+
+    if player_away_delta >= trend_min_away_px and player_vs_opponent_delta >= trend_margin_px:
+        confidence = min(0.96, 0.78 + min(0.18, player_vs_opponent_delta / max(8.0, trend_margin_px * 4.0)))
+        result["hitter"] = "player"
+        result["confidence"] = round(confidence, 3)
+        result["reason"] = (
+            f"trend_player_away:{player_away_delta:.2f}px;"
+            f" opponent_away:{opponent_away_delta:.2f}px"
+        )
+        return result
+
+    if opponent_away_delta >= trend_min_away_px and opponent_vs_player_delta >= trend_margin_px:
+        confidence = min(0.96, 0.78 + min(0.18, opponent_vs_player_delta / max(8.0, trend_margin_px * 4.0)))
+        result["hitter"] = "opponent"
+        result["confidence"] = round(confidence, 3)
+        result["reason"] = (
+            f"trend_opponent_away:{opponent_away_delta:.2f}px;"
+            f" player_away:{player_away_delta:.2f}px"
+        )
+        return result
+
+    # Trend exists but is ambiguous; keep proximity decision for resilience.
+    result["method"] = "post5_direction_distance_trend_v2+proximity_fallback"
+    result["reason"] = f"trend_ambiguous:{proximity_result.get('reason')}"
+    result["hitter"] = str(proximity_result.get("hitter") or "unknown")
+    result["confidence"] = round(_safe_float(proximity_result.get("confidence"), 0.0), 3)
     return result
 
 
@@ -967,6 +1301,7 @@ def _classify_single_event_with_claude(
     trajectory_by_frame: Optional[Dict[str, Any]] = None,
     session_id: str = "",
     elbow_context: Optional[Dict[str, Any]] = None,
+    backend_prediction: Optional[Dict[str, Any]] = None,
 ) -> Dict[str, Any]:
     debug_info(f"🎬 EXTRACTING FRAMES FOR EVENT at frame {event.frame}")
     frame_extract_start = perf_counter()
@@ -1013,14 +1348,21 @@ def _classify_single_event_with_claude(
     frame_extract_elapsed = (perf_counter() - frame_extract_start) * 1000
     debug_section_end(f"EXTRACTED {len(sent_frames)} FRAMES", elapsed_ms=frame_extract_elapsed)
 
+    backend_prediction = backend_prediction if isinstance(backend_prediction, dict) else {}
+    backend_default_label = _valid_forehand_backhand_label(backend_prediction.get("label"))
+    backend_source = str(backend_prediction.get("source") or "none")
+    backend_confidence = _safe_float(backend_prediction.get("confidence"), 0.0)
+
     if not image_blocks:
         print(f"[STROKE DEBUG] ⚠️ NO FRAMES AVAILABLE FOR EVENT at frame {event.frame}")
+        fallback_label = backend_default_label or "no_hit"
         return {
-            "label": "uncertain",
-            "confidence": 0.0,
-            "contact_frame": None,
-            "reason": "no_frames_available_for_event",
+            "label": fallback_label,
+            "confidence": round(max(0.0, min(1.0, backend_confidence if fallback_label in {"forehand", "backhand"} else 0.0)), 3),
+            "contact_frame": event.frame if fallback_label in {"forehand", "backhand"} else None,
+            "reason": f"no_frames_available_for_event:backend_prediction={backend_source}",
             "frame_numbers": frame_numbers,
+            "backend_prediction": backend_prediction,
             "raw": "",
         }
 
@@ -1039,27 +1381,41 @@ def _classify_single_event_with_claude(
             "Use this as a prior, but confirm classification from the visual motion in frames.\n\n"
         )
 
+    backend_prediction_block = ""
+    if backend_default_label:
+        backend_prediction_block = (
+            "Backend prior prediction (optional tie-breaker):\n"
+            f"{json.dumps(backend_prediction, ensure_ascii=True)}\n"
+            "If visual evidence is weak or ambiguous, you may keep this prior label.\n\n"
+        )
+
+    system_prompt = (
+        "You are a strict table-tennis stroke classifier.\n"
+        "Output must be valid JSON only with label in {forehand, backhand, no_hit}.\n"
+        "Never output unknown/uncertain labels."
+    )
+
     prompt = (
-        "You are analyzing a table tennis video to classify a hit.\n\n"
+        "Classify ONE candidate shot event from video frames.\n\n"
         f"Candidate hit frame: {event.frame}\n"
         f"Frames provided (pre-contact + contact): {sent_frames}\n"
         f"Player handedness: {handedness}\n"
         f"Camera facing: {camera_facing}\n"
         f"Detection sources: {', '.join(event.sources)}\n\n"
-        "The ball is marked with a GREEN bounding box labeled 'BALL' when detected.\n\n"
+        "The ball is marked with a GREEN bounding box labeled BALL when detected.\n\n"
+        "Temporal requirement:\n"
+        "- Reconstruct the motion by FRAME NUMBER order shown in overlays.\n"
+        "- Do not infer sequence from attachment order alone.\n\n"
         f"{elbow_context_block}"
-        "Your task: Classify this event as FOREHAND, BACKHAND, or NO_HIT.\n\n"
-        "CRITICAL RULES:\n"
-        "1. Use 'no_hit' if this is not even close to a real shot/contact event.\n"
-        "2. Otherwise classify as 'forehand' or 'backhand'.\n"
-        "3. Keep response strictly JSON only.\n\n"
-        "Analyze the player's form:\n"
-        "- RACKET POSITION: Which side of the body is the racket on?\n"
-        "- ARM POSITION: Extended across body (backhand) or on dominant side (forehand)?\n"
-        "- STANCE & BODY ROTATION: How are shoulders/hips oriented?\n\n"
-        "Classification guide:\n"
-        "- FOREHAND: Racket on dominant-hand side (right for right-hander, left for left-hander)\n"
-        "- BACKHAND: Racket crosses to non-dominant side, arm across body\n\n"
+        f"{backend_prediction_block}"
+        "Decision rules:\n"
+        "1. Return no_hit only if there is no plausible ball contact/stroke action.\n"
+        "2. If it is a shot, you MUST choose exactly one: forehand or backhand.\n"
+        "3. Never return unknown/uncertain.\n"
+        "4. If visual evidence is close, you may keep backend prior prediction.\n\n"
+        "Forehand/backhand guide:\n"
+        "- FOREHAND: racket swing on dominant side.\n"
+        "- BACKHAND: arm/racket crosses body to non-dominant side.\n\n"
         "Return ONLY valid JSON:\n"
         "{\n"
         '  "label": "forehand" | "backhand" | "no_hit",\n'
@@ -1067,7 +1423,7 @@ def _classify_single_event_with_claude(
         '  "contact_frame": integer or null,\n'
         '  "reason": "brief explanation"\n'
         "}\n\n"
-        "If uncertain and no clear shot action is visible, return no_hit."
+        "Use compact reasoning with explicit reference to arm path and ball contact evidence."
     )
 
     user_content: List[Dict[str, Any]] = [{"type": "text", "text": prompt}]
@@ -1084,6 +1440,7 @@ def _classify_single_event_with_claude(
             model=model,
             max_tokens=220,
             temperature=0,
+            system=system_prompt,
             messages=[{"role": "user", "content": user_content}],
         )
         claude_api_elapsed = (perf_counter() - claude_api_start) * 1000
@@ -1102,12 +1459,14 @@ def _classify_single_event_with_claude(
 
     except Exception as exc:
         debug_header(f"❌ CLAUDE API ERROR: {exc}")
+        fallback_label = backend_default_label or "no_hit"
         return {
-            "label": "uncertain",
-            "confidence": 0.0,
-            "contact_frame": None,
-            "reason": f"claude_error:{exc}",
+            "label": fallback_label,
+            "confidence": round(max(0.0, min(1.0, backend_confidence if fallback_label in {"forehand", "backhand"} else 0.0)), 3),
+            "contact_frame": event.frame if fallback_label in {"forehand", "backhand"} else None,
+            "reason": f"claude_error:{exc}:backend_prediction={backend_source}",
             "frame_numbers": sent_frames,
+            "backend_prediction": backend_prediction,
             "raw": "",
         }
 
@@ -1117,6 +1476,21 @@ def _classify_single_event_with_claude(
     contact_frame_raw = parsed.get("contact_frame")
     contact_frame = contact_frame_raw if isinstance(contact_frame_raw, int) else None
     reason = str(parsed.get("reason") or "").strip()[:220]
+
+    if label not in {"forehand", "backhand", "no_hit"}:
+        if backend_default_label:
+            label = backend_default_label
+            confidence = max(confidence, max(0.55, min(0.95, backend_confidence)))
+            reason = f"fallback_to_backend_prediction:{backend_source}; {reason}".strip()[:220]
+            if contact_frame is None:
+                contact_frame = event.frame
+        else:
+            label = "no_hit"
+            confidence = max(confidence, 0.0)
+            reason = f"fallback_to_no_hit_invalid_label; {reason}".strip()[:220]
+
+    if label in {"forehand", "backhand"} and contact_frame is None:
+        contact_frame = event.frame
 
     debug_info(f"🏓 CLASSIFICATION RESULT",
                Frame=event.frame,
@@ -1144,6 +1518,7 @@ def _classify_single_event_with_claude(
         "reason": reason or "no_reason_provided",
         "frame_numbers": sent_frames,
         "elbow_context": elbow_context if isinstance(elbow_context, dict) else None,
+        "backend_prediction": backend_prediction,
         "raw": raw_text[:1200],
         "debug_path": debug_path,
     }
@@ -1369,6 +1744,92 @@ def _compute_elbow_context_for_events(
     return contexts
 
 
+def _valid_forehand_backhand_label(value: Any) -> Optional[str]:
+    label = str(value or "").strip().lower()
+    if label in {"forehand", "backhand"}:
+        return label
+    return None
+
+
+def _build_backend_prediction_for_event(
+    event: DetectionEvent,
+    pose_strokes: Optional[List[Stroke]],
+    elbow_context: Optional[Dict[str, Any]],
+) -> Dict[str, Any]:
+    pose_label: Optional[str] = None
+    pose_reason: Optional[str] = None
+    pose_confidence: Optional[float] = None
+
+    if (
+        isinstance(event.matched_stroke_idx, int)
+        and pose_strokes
+        and 0 <= event.matched_stroke_idx < len(pose_strokes)
+    ):
+        matched = pose_strokes[event.matched_stroke_idx]
+        pose_label = _valid_forehand_backhand_label(getattr(matched, "stroke_type", None))
+        if pose_label:
+            metrics = getattr(matched, "metrics", {}) or {}
+            pose_reason = str(metrics.get("classifier_reason") or "pose_matched_stroke")
+            pose_confidence = _safe_float(metrics.get("classifier_confidence"), 0.8)
+            if pose_confidence <= 0:
+                pose_confidence = 0.8
+
+    elbow_label: Optional[str] = None
+    elbow_reason: Optional[str] = None
+    elbow_confidence: Optional[float] = None
+    if isinstance(elbow_context, dict):
+        elbow_label = _valid_forehand_backhand_label(elbow_context.get("label"))
+        if elbow_label:
+            elbow_reason = str(elbow_context.get("reason") or "elbow_trend_context")
+            elbow_confidence = _safe_float(elbow_context.get("confidence"), 0.6)
+            if elbow_confidence <= 0:
+                elbow_confidence = 0.6
+
+    selected_label = pose_label or elbow_label
+    selected_source = "pose_matched_stroke" if pose_label else ("elbow_trend_context" if elbow_label else None)
+    selected_conf = pose_confidence if pose_label else elbow_confidence
+    selected_reason = pose_reason if pose_label else elbow_reason
+
+    return {
+        "label": selected_label,
+        "source": selected_source,
+        "confidence": (
+            round(max(0.0, min(1.0, float(selected_conf))), 3)
+            if isinstance(selected_conf, (int, float))
+            else None
+        ),
+        "reason": selected_reason,
+        "pose_label": pose_label,
+        "elbow_label": elbow_label,
+    }
+
+
+def _claude_unavailable_fallback_results(
+    events: List[DetectionEvent],
+    backend_predictions: List[Dict[str, Any]],
+    reason_prefix: str,
+) -> List[Dict[str, Any]]:
+    out: List[Dict[str, Any]] = []
+    for idx, event in enumerate(events):
+        pred = backend_predictions[idx] if idx < len(backend_predictions) and isinstance(backend_predictions[idx], dict) else {}
+        label = _valid_forehand_backhand_label(pred.get("label")) or "no_hit"
+        pred_conf = _safe_float(pred.get("confidence"), 0.0)
+        confidence = max(0.0, min(1.0, pred_conf)) if label in {"forehand", "backhand"} else 0.0
+        pred_source = str(pred.get("source") or "none")
+        out.append(
+            {
+                "label": label,
+                "confidence": round(confidence, 3),
+                "contact_frame": event.frame if label in {"forehand", "backhand"} else None,
+                "reason": f"{reason_prefix}:backend_prediction={pred_source}",
+                "frame_numbers": [],
+                "backend_prediction": pred if isinstance(pred, dict) else None,
+                "raw": "",
+            }
+        )
+    return out
+
+
 def _classify_events_with_claude(
     events: List[DetectionEvent],
     video_url: Optional[str],
@@ -1380,6 +1841,7 @@ def _classify_events_with_claude(
     all_pose_frames: Optional[List[Dict[str, Any]]] = None,
     video_width: int = 0,
     video_height: int = 0,
+    pose_strokes: Optional[List[Stroke]] = None,
 ) -> Tuple[List[Dict[str, Any]], Dict[str, Any]]:
     debug_header(f"🎯 STARTING CLAUDE CLASSIFICATION - {len(events)} events")
 
@@ -1387,33 +1849,39 @@ def _classify_events_with_claude(
         print(f"[STROKE DEBUG] ⚠️ NO EVENTS TO CLASSIFY")
         return [], {"enabled": False, "reason": "no_events", "source": "claude_vision"}
 
+    elbow_contexts = _compute_elbow_context_for_events(
+        events=events,
+        all_pose_frames=all_pose_frames or [],
+        video_width=video_width,
+        video_height=video_height,
+        handedness=handedness,
+    )
+    backend_predictions: List[Dict[str, Any]] = []
+    for idx, event in enumerate(events):
+        elbow_ctx = elbow_contexts[idx] if idx < len(elbow_contexts) else {}
+        backend_predictions.append(
+            _build_backend_prediction_for_event(
+                event=event,
+                pose_strokes=pose_strokes,
+                elbow_context=elbow_ctx if isinstance(elbow_ctx, dict) else {},
+            )
+        )
+
     anthropic_key = os.getenv("ANTHROPIC_API_KEY", "").strip()
     if not anthropic_key:
-        fallback = [
-            {
-                "label": "uncertain",
-                "confidence": 0.0,
-                "contact_frame": None,
-                "reason": "anthropic_key_missing",
-                "frame_numbers": [],
-                "raw": "",
-            }
-            for _ in events
-        ]
+        fallback = _claude_unavailable_fallback_results(
+            events=events,
+            backend_predictions=backend_predictions,
+            reason_prefix="anthropic_key_missing",
+        )
         return fallback, {"enabled": False, "reason": "anthropic_key_missing", "source": "claude_vision"}
 
     if not video_url:
-        fallback = [
-            {
-                "label": "uncertain",
-                "confidence": 0.0,
-                "contact_frame": None,
-                "reason": "video_url_missing",
-                "frame_numbers": [],
-                "raw": "",
-            }
-            for _ in events
-        ]
+        fallback = _claude_unavailable_fallback_results(
+            events=events,
+            backend_predictions=backend_predictions,
+            reason_prefix="video_url_missing",
+        )
         return fallback, {"enabled": False, "reason": "video_url_missing", "source": "claude_vision"}
 
     # Build trajectory lookup by frame for ball bounding box overlay
@@ -1438,19 +1906,13 @@ def _classify_events_with_claude(
         if not cap.isOpened():
             raise RuntimeError("failed_to_open_local_video")
 
-        elbow_contexts = _compute_elbow_context_for_events(
-            events=events,
-            all_pose_frames=all_pose_frames or [],
-            video_width=video_width,
-            video_height=video_height,
-            handedness=handedness,
-        )
-
         results: List[Dict[str, Any]] = []
         total_claude_start = perf_counter()
 
         for idx, event in enumerate(events, 1):
             debug_info(f"📊 PROCESSING EVENT {idx}/{len(events)} at frame {event.frame}")
+            elbow_ctx = elbow_contexts[idx - 1] if (idx - 1) < len(elbow_contexts) else None
+            backend_pred = backend_predictions[idx - 1] if (idx - 1) < len(backend_predictions) else None
             results.append(
                 _classify_single_event_with_claude(
                     client=client,
@@ -1462,7 +1924,8 @@ def _classify_events_with_claude(
                     camera_facing=camera_facing,
                     trajectory_by_frame=trajectory_by_frame,
                     session_id=session_id,
-                    elbow_context=elbow_contexts[idx - 1] if (idx - 1) < len(elbow_contexts) else None,
+                    elbow_context=elbow_ctx if isinstance(elbow_ctx, dict) else None,
+                    backend_prediction=backend_pred if isinstance(backend_pred, dict) else None,
                 )
             )
 
@@ -1474,17 +1937,11 @@ def _classify_events_with_claude(
 
         return results, {"enabled": True, "reason": "ok", "model": model, "source": "claude_vision"}
     except Exception as exc:
-        fallback = [
-            {
-                "label": "uncertain",
-                "confidence": 0.0,
-                "contact_frame": None,
-                "reason": f"claude_pipeline_error:{exc}",
-                "frame_numbers": [],
-                "raw": "",
-            }
-            for _ in events
-        ]
+        fallback = _claude_unavailable_fallback_results(
+            events=events,
+            backend_predictions=backend_predictions,
+            reason_prefix=f"claude_pipeline_error:{exc}",
+        )
         return fallback, {
             "enabled": False,
             "reason": f"claude_pipeline_error:{exc}",
@@ -1515,6 +1972,16 @@ def _apply_hitter_inference_to_metrics(metrics: Dict[str, Any], hitter_info: Dic
             "event_ball_x": hitter_info.get("ball_x"),
             "event_player_x": hitter_info.get("player_x"),
             "event_opponent_x": hitter_info.get("opponent_x"),
+            "event_hitter_ball_pre_frame": hitter_info.get("ball_pre_frame"),
+            "event_hitter_ball_post_frame": hitter_info.get("ball_post_frame"),
+            "event_hitter_player_away_delta": hitter_info.get("player_away_delta"),
+            "event_hitter_opponent_away_delta": hitter_info.get("opponent_away_delta"),
+            "event_hitter_player_vs_opponent_delta": hitter_info.get("player_vs_opponent_delta"),
+            "event_hitter_opponent_vs_player_delta": hitter_info.get("opponent_vs_player_delta"),
+            "event_hitter_ball_direction_dx": hitter_info.get("ball_direction_dx"),
+            "event_hitter_ball_direction_px_per_frame": hitter_info.get("ball_direction_px_per_frame"),
+            "event_hitter_direction_away_from_opponent": hitter_info.get("direction_away_from_opponent"),
+            "event_hitter_direction_away_from_player": hitter_info.get("direction_away_from_player"),
         }
     )
 
@@ -1805,6 +2272,7 @@ def detect_strokes_hybrid(
                 all_pose_frames=all_pose_frames,
                 video_width=video_width,
                 video_height=video_height,
+                pose_strokes=raw_pose_strokes,
             ),
         )
     else:
@@ -1849,6 +2317,34 @@ def detect_strokes_hybrid(
                 separation_margin=_safe_float(
                     os.getenv("STROKE_HITTER_SEPARATION_MARGIN", "0.035"),
                     0.035,
+                ),
+                trend_lookback_frames=max(
+                    2,
+                    _safe_int(os.getenv("STROKE_HITTER_TREND_LOOKBACK_FRAMES", 8), 8),
+                ),
+                trend_lookahead_frames=max(
+                    2,
+                    _safe_int(os.getenv("STROKE_HITTER_TREND_LOOKAHEAD_FRAMES", 10), 10),
+                ),
+                trend_min_away_ratio=max(
+                    0.001,
+                    _safe_float(os.getenv("STROKE_HITTER_TREND_MIN_AWAY_RATIO", "0.008"), 0.008),
+                ),
+                trend_margin_ratio=max(
+                    0.0005,
+                    _safe_float(os.getenv("STROKE_HITTER_TREND_MARGIN_RATIO", "0.004"), 0.004),
+                ),
+                direction_frames_after=max(
+                    2,
+                    _safe_int(os.getenv("STROKE_HITTER_DIRECTION_FRAMES_AFTER", 5), 5),
+                ),
+                direction_min_delta_ratio=max(
+                    0.0005,
+                    _safe_float(os.getenv("STROKE_HITTER_DIRECTION_MIN_DELTA_RATIO", "0.0025"), 0.0025),
+                ),
+                anchor_last_known_lookback_frames=max(
+                    8,
+                    _safe_int(os.getenv("STROKE_HITTER_ANCHOR_LAST_KNOWN_LOOKBACK_FRAMES", 120), 120),
                 ),
             )
             for event in events
@@ -1991,6 +2487,42 @@ def detect_strokes_hybrid(
                 ),
             ),
             "elbow_min_delta_deg": max(1.0, _safe_float(os.getenv("STROKE_ELBOW_MIN_DELTA_DEG", 5.0), 5.0)),
+            "hitter_proximity_threshold": _safe_float(
+                os.getenv("STROKE_HITTER_PROXIMITY_THRESHOLD", "0.14"),
+                0.14,
+            ),
+            "hitter_separation_margin": _safe_float(
+                os.getenv("STROKE_HITTER_SEPARATION_MARGIN", "0.035"),
+                0.035,
+            ),
+            "hitter_trend_lookback_frames": max(
+                2,
+                _safe_int(os.getenv("STROKE_HITTER_TREND_LOOKBACK_FRAMES", 8), 8),
+            ),
+            "hitter_trend_lookahead_frames": max(
+                2,
+                _safe_int(os.getenv("STROKE_HITTER_TREND_LOOKAHEAD_FRAMES", 10), 10),
+            ),
+            "hitter_trend_min_away_ratio": max(
+                0.001,
+                _safe_float(os.getenv("STROKE_HITTER_TREND_MIN_AWAY_RATIO", "0.008"), 0.008),
+            ),
+            "hitter_trend_margin_ratio": max(
+                0.0005,
+                _safe_float(os.getenv("STROKE_HITTER_TREND_MARGIN_RATIO", "0.004"), 0.004),
+            ),
+            "hitter_direction_frames_after": max(
+                2,
+                _safe_int(os.getenv("STROKE_HITTER_DIRECTION_FRAMES_AFTER", 5), 5),
+            ),
+            "hitter_direction_min_delta_ratio": max(
+                0.0005,
+                _safe_float(os.getenv("STROKE_HITTER_DIRECTION_MIN_DELTA_RATIO", "0.0025"), 0.0025),
+            ),
+            "hitter_anchor_last_known_lookback_frames": max(
+                8,
+                _safe_int(os.getenv("STROKE_HITTER_ANCHOR_LAST_KNOWN_LOOKBACK_FRAMES", 120), 120),
+            ),
         },
         "classifier_meta": classifier_meta,
         "claude_meta": classifier_meta if str(classifier_meta.get("source")) == "claude_vision" else {

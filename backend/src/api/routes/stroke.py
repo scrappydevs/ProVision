@@ -218,6 +218,20 @@ def _write_local_shot_label_log(
                 continue
             events_by_frame.setdefault(frame, []).append(event)
 
+        hitter_by_hitter: Dict[str, int] = {}
+        hitter_by_method: Dict[str, int] = {}
+        hitter_by_reason: Dict[str, int] = {}
+
+        def _bump(counter: Dict[str, int], key: Any) -> None:
+            key_str = str(key).strip() if key is not None else ""
+            if not key_str:
+                key_str = "missing"
+            counter[key_str] = counter.get(key_str, 0) + 1
+
+        def _sorted_counter(counter: Dict[str, int], field_name: str) -> List[Dict[str, Any]]:
+            items = sorted(counter.items(), key=lambda kv: (-kv[1], kv[0]))
+            return [{field_name: k, "count": v} for k, v in items]
+
         shots: List[Dict[str, Any]] = []
         shot_index = 0
         for stroke in debug_strokes:
@@ -250,7 +264,38 @@ def _write_local_shot_label_log(
                 if isinstance(matched_event, dict) and isinstance(matched_event.get("classification"), dict)
                 else {}
             )
+            hitter_inference = (
+                matched_event.get("hitter_inference")
+                if isinstance(matched_event, dict) and isinstance(matched_event.get("hitter_inference"), dict)
+                else {}
+            )
             elbow_debug = classification.get("elbow_debug") if isinstance(classification.get("elbow_debug"), dict) else None
+
+            event_hitter = str(
+                metrics.get("event_hitter")
+                or hitter_inference.get("hitter")
+                or "unknown"
+            ).strip().lower()
+            try:
+                event_hitter_confidence = float(
+                    metrics.get("event_hitter_confidence", hitter_inference.get("confidence", 0.0))
+                )
+            except (TypeError, ValueError):
+                event_hitter_confidence = 0.0
+            event_hitter_reason = str(
+                metrics.get("event_hitter_reason")
+                or hitter_inference.get("reason")
+                or ""
+            ).strip()
+            event_hitter_method = str(
+                metrics.get("event_hitter_method")
+                or hitter_inference.get("method")
+                or ""
+            ).strip()
+
+            _bump(hitter_by_hitter, event_hitter)
+            _bump(hitter_by_method, event_hitter_method)
+            _bump(hitter_by_reason, event_hitter_reason)
 
             shots.append(
                 {
@@ -265,6 +310,10 @@ def _write_local_shot_label_log(
                     "classifier_confidence": metrics.get("classifier_confidence", classification.get("confidence")),
                     "classifier_reason": metrics.get("classifier_reason", classification.get("reason")),
                     "classification_frame_numbers": classification.get("frame_numbers"),
+                    "event_hitter": event_hitter,
+                    "event_hitter_confidence": round(event_hitter_confidence, 3),
+                    "event_hitter_method": event_hitter_method or None,
+                    "event_hitter_reason": event_hitter_reason or None,
                     "elbow_stats": elbow_debug,
                 }
             )
@@ -278,6 +327,11 @@ def _write_local_shot_label_log(
             "classifier_mode": "claude" if use_claude_classifier else "elbow_trend",
             "settings": hybrid_debug_payload.get("settings") if isinstance(hybrid_debug_payload, dict) else {},
             "shot_count": len(shots),
+            "hitter_breakdown": {
+                "by_hitter": _sorted_counter(hitter_by_hitter, "hitter"),
+                "by_method": _sorted_counter(hitter_by_method, "method"),
+                "by_reason": _sorted_counter(hitter_by_reason, "reason"),
+            },
             "shots": shots,
         }
 

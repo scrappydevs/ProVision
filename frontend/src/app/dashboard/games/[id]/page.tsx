@@ -1613,7 +1613,7 @@ export default function GameViewerPage() {
 
         {/* Main area — stacks vertically when AI sidebar is open */}
         <div className={cn(
-          "gap-3 flex-1 min-h-0",
+          "gap-2 flex-1 min-h-0",
           aiChatOpen ? "flex flex-col overflow-y-auto" : "flex"
         )}>
           {/* Left: Video or Court (full area) */}
@@ -1962,7 +1962,7 @@ export default function GameViewerPage() {
               <div className="flex-1 flex min-h-0 overflow-hidden">
                 <div className={cn(
                   "mx-auto flex flex-col min-h-0 overflow-hidden",
-                  aiChatOpen ? "w-full h-auto max-h-[50vh]" : "w-full h-full max-w-[calc(100%-8px)]"
+                  aiChatOpen ? "w-full h-auto max-h-[50vh]" : "w-full h-full max-w-[calc(100%-4px)]"
                 )}>
                   {/* 3D Ball Trajectory Visualization */}
                   {activeTab === "track" && (

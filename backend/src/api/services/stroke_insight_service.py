@@ -313,6 +313,12 @@ def generate_insight_for_stroke(
         if key in metrics:
             metrics_summary[key] = metrics[key]
 
+    system_prompt = (
+        "You are a strict table-tennis stroke analyst.\n"
+        "Return valid JSON only.\n"
+        "When evaluating stroke type, resolve to forehand or backhand; if evidence is weak, keep existing label."
+    )
+
     prompt = (
         "You are analyzing a table tennis stroke from video frames to provide coaching insights.\n\n"
         f"Current classification: {stroke_type} (from elbow-trend heuristic)\n"
@@ -332,6 +338,7 @@ def generate_insight_for_stroke(
         "- Give those diagnostics SOME weight as a secondary signal, but resolve conflicts using visual motion evidence.\n\n"
         "Your tasks:\n"
         "1. VERIFY or CORRECT the forehand/backhand classification. The heuristic may be wrong.\n"
+        "   If visual evidence is inconclusive, keep the current classification instead of guessing a third category.\n"
         "   - FOREHAND: Racket on dominant-hand side (right for right-hander)\n"
         "   - BACKHAND: Racket crosses to non-dominant side, arm across body\n"
         "2. Provide a 2-4 sentence coaching insight about the player's form on this specific stroke.\n"
@@ -355,6 +362,7 @@ def generate_insight_for_stroke(
             model=model,
             max_tokens=500,
             temperature=0,
+            system=system_prompt,
             messages=[{"role": "user", "content": user_content}],
         )
         raw_text = _extract_text_from_anthropic_response(response)
