@@ -23,10 +23,18 @@ export function generateTipsFromStrokes(
     return tips;
   }
 
-  // Generate tips for each stroke - spaced out to avoid overlap
+  // Generate tips only for significant strokes (excellent or needs improvement)
   strokes.forEach((stroke, index) => {
     const strokeDuration = (stroke.end_frame - stroke.start_frame) / fps;
     const contactTime = stroke.peak_frame / fps;
+
+    // Only generate tips for strokes that need attention (poor) or deserve praise (excellent)
+    // Skip "okay" strokes (form_score 75-85) to reduce noise
+    const shouldGenerateTip = stroke.form_score < 75 || stroke.form_score > 85;
+
+    if (!shouldGenerateTip) {
+      return; // Skip this stroke
+    }
 
     // Main contact tip (primary technique feedback with opponent context)
     const contactTip = generateStrokeTip(stroke, index, opponentContext, playerName);
@@ -34,72 +42,16 @@ export function generateTipsFromStrokes(
       tips.push({
         id: `stroke-${stroke.id}-contact`,
         timestamp: contactTime,
-        duration: 6.0, // Long enough to read - video pauses anyway
+        duration: 5.5, // Enough time to read while video plays
         title: contactTip.title,
         message: contactTip.message,
         strokeId: stroke.id,
         seekTime: stroke.start_frame / fps,
       });
     }
-
-    // Add follow-through tip only if it's a significant issue or excellent shot
-    const followTip = generateFollowThroughTip(stroke, playerName);
-    if (followTip && shouldShowFollowThroughTip(stroke)) {
-      // Only show if there's enough time before next stroke
-      const nextStroke = strokes[index + 1];
-      const timeUntilNext = nextStroke
-        ? (nextStroke.start_frame / fps) - (stroke.end_frame / fps)
-        : 999;
-
-      if (timeUntilNext > 3.0) {
-        tips.push({
-          id: `stroke-${stroke.id}-follow`,
-          timestamp: stroke.end_frame / fps + 0.5,
-          duration: 5.0,
-          title: followTip.title,
-          message: followTip.message,
-          strokeId: stroke.id,
-          seekTime: stroke.start_frame / fps,
-        });
-      }
-    }
   });
 
-  // Add rally summary at the end
-  if (strokes.length > 0) {
-    const lastStroke = strokes[strokes.length - 1];
-    const forehandCount = strokes.filter(s => s.stroke_type === "forehand").length;
-    const backhandCount = strokes.filter(s => s.stroke_type === "backhand").length;
-
-    tips.push({
-      id: "rally-summary",
-      timestamp: lastStroke.end_frame / fps + 1.0,
-      duration: 3.0,
-      title: "Rally complete",
-      message: `${strokes.length} shot${strokes.length > 1 ? 's' : ''} | FH:BH ${forehandCount}:${backhandCount}`,
-    });
-  }
-
   return tips.sort((a, b) => a.timestamp - b.timestamp);
-}
-
-/**
- * Check if follow-through tip should be shown (only for significant issues or excellent shots)
- */
-function shouldShowFollowThroughTip(stroke: Stroke): boolean {
-  const { form_score, metrics } = stroke;
-
-  // Show for excellent shots
-  if (form_score > 85) return true;
-
-  // Show if follow-through is significantly incomplete
-  if (metrics.elbow_range < 35) return true;
-
-  // Show if shoulder rotation is very limited
-  const shoulderRotRange = Math.abs(metrics.shoulder_rotation_range);
-  if (shoulderRotRange < 20) return true;
-
-  return false;
 }
 
 /**
@@ -157,9 +109,9 @@ function generateStrokeTip(
 
   // Priority 1: If form is excellent, give positive reinforcement with opponent context
   if (form_score > 85) {
-    const baseMessage = `Great kinetic chain coordination - efficiently transferring energy from legs through core to racket`;
+    const baseMessage = `Excellent kinetic chain - strong power transfer`;
     const contextualMessage = oppContext.hasOpponent
-      ? `${baseMessage}. Opponent at ${oppContext.opponentPosition} - good shot placement`
+      ? `${baseMessage}. Opponent at ${oppContext.opponentPosition}`
       : baseMessage;
 
     return {
@@ -174,7 +126,7 @@ function generateStrokeTip(
   if (metrics.elbow_angle < 120) {
     return {
       title: `${prefix} ${strokeName}`,
-      message: `Extend arm more at contact - a straighter arm creates a longer lever, increasing racket speed and control`,
+      message: `Extend arm more at contact for better power`,
     };
   }
 
@@ -183,7 +135,7 @@ function generateStrokeTip(
   if (hipRotRange < 10) {
     return {
       title: `${prefix} ${strokeName}`,
-      message: `Rotate hips more - hip rotation transfers energy from legs and core into the shot, generating more power`,
+      message: `Rotate hips more to generate power`,
     };
   }
 
@@ -191,7 +143,7 @@ function generateStrokeTip(
   if (metrics.elbow_range < 40) {
     return {
       title: `${prefix} ${strokeName}`,
-      message: `Complete the follow-through - this ensures full energy transfer and helps control ball spin and direction`,
+      message: `Complete the follow-through`,
     };
   }
 
@@ -200,7 +152,7 @@ function generateStrokeTip(
   if (shoulderRotRange < 15) {
     return {
       title: `${prefix} ${strokeName}`,
-      message: `Use more shoulder turn - shoulder rotation works with hip rotation to maximize the kinetic chain effect`,
+      message: `Increase shoulder rotation`,
     };
   }
 
@@ -208,12 +160,12 @@ function generateStrokeTip(
   if (metrics.knee_angle < 130) {
     return {
       title: `${prefix} ${strokeName}`,
-      message: `Stance too low - slightly higher stance allows quicker weight transfer and better mobility between shots`,
+      message: `Stance too low - raise slightly for mobility`,
     };
   } else if (metrics.knee_angle > 170) {
     return {
       title: `${prefix} ${strokeName}`,
-      message: `Bend knees more - lower center of gravity improves balance and lets you generate power from legs`,
+      message: `Bend knees more for better balance`,
     };
   }
 
@@ -222,80 +174,14 @@ function generateStrokeTip(
   if (stroke_type === "forehand" && spineLean < 3) {
     return {
       title: `${prefix} ${strokeName}`,
-      message: `Lean forward into the shot - weight transfer from back foot to front foot adds momentum to stroke`,
+      message: `Transfer weight forward into the shot`,
     };
   }
 
-  // Priority 3: Good form - show encouraging feedback with one area to refine
-  if (form_score > 70) {
-    const oppSuffix = oppContext.hasOpponent
-      ? ` Opponent at ${oppContext.opponentPosition} - consider shot direction`
-      : "";
-
-    // Find one thing to improve
-    if (hipRotRange < 25 && hipRotRange >= 10) {
-      return {
-        title: `${prefix} ${strokeName} - Good`,
-        message: `Solid form - increasing hip rotation further will add more power without sacrificing control.${oppSuffix}`,
-      };
-    }
-    if (shoulderRotRange < 30 && shoulderRotRange >= 15) {
-      return {
-        title: `${prefix} ${strokeName} - Good`,
-        message: `Strong technique - extend shoulder turn through finish to maximize spin potential.${oppSuffix}`,
-      };
-    }
-
-    const baseMessage = `Well-coordinated stroke - body segments are working together efficiently`;
-    return {
-      title: `${prefix} ${strokeName} - Good`,
-      message: oppContext.hasOpponent
-        ? `${baseMessage}. Opponent at ${oppContext.opponentPosition} - good tactical awareness`
-        : baseMessage,
-    };
-  }
-
-  // Priority 4: Needs significant work
+  // Priority 3: Needs significant work
   return {
     title: `${prefix} ${strokeName}`,
-    message: `Focus on fundamentals - work on coordinating kinetic chain from legs → hips → shoulders → arm`,
+    message: `Focus on coordinating legs → hips → shoulders → arm`,
   };
 }
 
-/**
- * Generate follow-through phase tip
- */
-function generateFollowThroughTip(stroke: Stroke, playerName?: string): { title: string; message: string } | null {
-  const { stroke_type, metrics } = stroke;
-  const strokeName = stroke_type.charAt(0).toUpperCase() + stroke_type.slice(1);
-  const prefix = playerName ? `${playerName.split(" ")[0]}'s` : "Your";
-
-  // Check follow-through completion
-  if (metrics.elbow_range < 40) {
-    return {
-      title: `${prefix} ${strokeName} finish`,
-      message: `Incomplete follow-through - extend fully to maximize spin and control`,
-    };
-  }
-
-  const shoulderRotRange = Math.abs(metrics.shoulder_rotation_range);
-  if (shoulderRotRange < 30) {
-    return {
-      title: `${prefix} ${strokeName} finish`,
-      message: `Finish with full shoulder rotation - this adds topspin and stability`,
-    };
-  }
-
-  // Good follow-through
-  if (metrics.elbow_range > 60 && shoulderRotRange > 30) {
-    return {
-      title: `${prefix} ${strokeName} finish`,
-      message: `Excellent follow-through - complete extension gives maximum control`,
-    };
-  }
-
-  return {
-    title: `${prefix} ${strokeName} finish`,
-    message: `Good finish - maintaining extension helps with shot consistency`,
-  };
-}

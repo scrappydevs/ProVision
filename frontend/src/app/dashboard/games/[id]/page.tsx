@@ -104,7 +104,6 @@ export default function GameViewerPage() {
   const [videoBounds, setVideoBounds] = useState<{ top: number; right: number; width: number; height: number } | null>(null);
   const isResizing = useRef(false);
   const [activeTip, setActiveTip] = useState<VideoTip | null>(null);
-  const [tipPausedVideo, setTipPausedVideo] = useState(false);
 
   const [showPlayerSelection, setShowPlayerSelection] = useState(false);
   const playerSelectionAutoOpened = useRef(false);
@@ -418,16 +417,7 @@ export default function GameViewerPage() {
   // Handle tip state changes - pause video when tip appears, user resumes manually
   const handleTipChange = useCallback((tip: VideoTip | null) => {
     setActiveTip(tip);
-
-    if (!videoRef.current) return;
-
-    if (tip && !videoRef.current.paused) {
-      // Tip appeared - pause video so user can read
-      videoRef.current.pause();
-      setIsPlaying(false);
-      setTipPausedVideo(true);
-    }
-    // Don't auto-resume - let user click play when ready
+    // Don't pause video - let insights appear as overlays while video plays
   }, []);
 
   const showTrack = activeTab === "track";
@@ -1087,7 +1077,6 @@ export default function GameViewerPage() {
     videoRef.current.currentTime = targetTime;
     videoRef.current.pause();
     setIsPlaying(false);
-    setTipPausedVideo(false);
   }, []);
 
   const handleTabClick = useCallback((tabId: TabId) => {
@@ -1203,6 +1192,44 @@ export default function GameViewerPage() {
                   isPlaying={isPlaying}
                   onTipChange={handleTipChange}
                 />
+
+                {/* Live Stroke Indicator - Glass overlay on video */}
+                {hasStrokes && (activeStroke || lastStroke) && (
+                  <div className="absolute bottom-6 left-6 pointer-events-none z-20">
+                    <div className={cn(
+                      "glass-shot-card px-4 py-2.5 flex items-center gap-2.5 transition-all duration-300",
+                      activeStroke
+                        ? activeStroke.stroke_type === "forehand"
+                          ? "ring-1 ring-[#9B7B5B]/40"
+                          : "ring-1 ring-[#5B9B7B]/40"
+                        : "opacity-60"
+                    )}>
+                      <div className={cn(
+                        "w-2.5 h-2.5 rounded-full",
+                        activeStroke
+                          ? activeStroke.stroke_type === "forehand"
+                            ? "bg-[#9B7B5B] animate-pulse"
+                            : "bg-[#5B9B7B] animate-pulse"
+                          : "bg-[#363436]"
+                      )} />
+                      <span className={cn(
+                        "text-sm font-medium capitalize",
+                        activeStroke
+                          ? activeStroke.stroke_type === "forehand"
+                            ? "text-[#9B7B5B]"
+                            : "text-[#5B9B7B]"
+                          : "text-[#8A8885]"
+                      )}>
+                        {activeStroke
+                          ? activeStroke.stroke_type
+                          : lastStroke
+                            ? `Last ${lastStroke.stroke_type}`
+                            : null
+                        }
+                      </span>
+                    </div>
+                  </div>
+                )}
 
                 {/* Tracking in-progress overlay */}
                 {isTracking && videoBounds && (
@@ -1511,83 +1538,34 @@ export default function GameViewerPage() {
                       </>
                     )}
 
-                    {/* ── Live Stroke Indicator (synced to video frame) ── */}
-                    {hasStrokes && (
-                      <div className={cn(
-                        "p-2.5 rounded-lg transition-all duration-200",
-                        activeStroke
-                          ? activeStroke.stroke_type === "forehand" ? "bg-[#9B7B5B]/15 ring-1 ring-[#9B7B5B]/40"
-                          : activeStroke.stroke_type === "backhand" ? "bg-[#5B9B7B]/15 ring-1 ring-[#5B9B7B]/40"
-                          : "bg-[#1E1D1F]"
-                          : "bg-[#1E1D1F]"
-                      )}>
-                        {activeStroke ? (
-                          <div className="flex items-center gap-2.5">
-                            <div className={cn(
-                              "w-2.5 h-2.5 rounded-full animate-pulse",
-                              activeStroke.stroke_type === "forehand" ? "bg-[#9B7B5B]"
-                              : activeStroke.stroke_type === "backhand" ? "bg-[#5B9B7B]"
-                              : "bg-[#8A8885]"
-                            )} />
-                            <span className={cn(
-                              "text-base font-medium capitalize",
-                              activeStroke.stroke_type === "forehand" ? "text-[#9B7B5B]"
-                              : activeStroke.stroke_type === "backhand" ? "text-[#5B9B7B]"
-                              : "text-[#8A8885]"
-                            )}>
-                              {activeStroke.stroke_type}
-                            </span>
-                            <span className="text-sm text-[#6A6865] ml-auto">
-                              Form {activeStroke.form_score.toFixed(0)}
-                            </span>
-                          </div>
-                        ) : lastStroke ? (
-                          <div className="flex items-center gap-2.5">
-                            <div className="w-2.5 h-2.5 rounded-full bg-[#363436]" />
-                            <span className="text-sm text-[#6A6865]">
-                              Last: <span className={cn(
-                                "capitalize",
-                                lastStroke.stroke_type === "forehand" ? "text-[#9B7B5B]"
-                                : lastStroke.stroke_type === "backhand" ? "text-[#5B9B7B]"
-                                : "text-[#8A8885]"
-                              )}>{lastStroke.stroke_type}</span>
-                            </span>
-                            <span className="text-sm text-[#6A6865] ml-auto">
-                              Form {lastStroke.form_score.toFixed(0)}
-                            </span>
-                          </div>
-                        ) : (
-                          <p className="text-xs text-[#6A6865] text-center">Play video to see live stroke detection</p>
-                        )}
-                      </div>
-                    )}
-
                     {/* ── Live Point Indicator (synced to video frame) ── */}
                     {pointEvents.length > 0 && (
                       <div className={cn(
-                        "p-2.5 rounded-lg transition-all duration-200",
+                        "p-2.5 rounded-lg transition-all duration-200 shrink-0",
                         activePointEvent ? "bg-[#C45C5C]/15 ring-1 ring-[#C45C5C]/40" : "bg-[#1E1D1F]"
                       )}>
                         {activePointEvent ? (
-                          <div className="flex items-center gap-2.5">
-                            <div className="w-2.5 h-2.5 rounded-full bg-[#C45C5C] animate-pulse" />
-                            <span className="text-base font-medium text-[#C45C5C]">Point scored</span>
-                            <span className="text-sm text-[#6A6865] ml-auto">
+                          <div className="flex items-center gap-2">
+                            <div className="w-2 h-2 rounded-full bg-[#C45C5C] animate-pulse" />
+                            <span className="text-sm font-medium text-[#C45C5C]">Point scored</span>
+                            <span className="text-xs text-[#6A6865] ml-auto">
                               {fmtTime(activePointEvent.timestamp)}
                             </span>
                           </div>
                         ) : lastPointEvent ? (
-                          <div className="flex items-center gap-2.5">
-                            <div className="w-2.5 h-2.5 rounded-full bg-[#363436]" />
-                            <span className="text-sm text-[#6A6865]">
-                              Last point: <span className="text-[#C45C5C]">{fmtTime(lastPointEvent.timestamp)}</span>
-                            </span>
-                            <span className="text-sm text-[#6A6865] ml-auto capitalize">
+                          <div className="flex items-center justify-between gap-2">
+                            <div className="flex items-center gap-2">
+                              <div className="w-2 h-2 rounded-full bg-[#363436]" />
+                              <span className="text-sm text-[#8A8885]">
+                                Last point <span className="font-medium text-[#C45C5C]">{fmtTime(lastPointEvent.timestamp)}</span>
+                              </span>
+                            </div>
+                            <span className="text-sm font-medium text-[#E8E6E3] capitalize">
                               {lastPointEvent.reason.replace(/_/g, " ")}
                             </span>
                           </div>
                         ) : (
-                          <p className="text-xs text-[#6A6865] text-center">Play video to see point events</p>
+                          <p className="text-[11px] text-[#6A6865] text-center">Play video to see point events</p>
                         )}
                       </div>
                     )}
@@ -1598,8 +1576,8 @@ export default function GameViewerPage() {
                         {hasStrokes ? (
                           <div className="flex flex-col gap-2 min-h-0 flex-1">
                             {/* Camera facing toggle + Re-analyze */}
-                            <div className="flex items-center justify-between">
-                              <p className="text-[10px] text-[#6A6865] uppercase tracking-wider">Stroke Breakdown</p>
+                            <div className="flex items-center justify-between shrink-0">
+                              <p className="text-[11px] text-[#6A6865] uppercase tracking-wider">Stroke Breakdown</p>
                               <div className="flex items-center gap-2">
                                 <button
                                   onClick={() => strokeMutation.mutate()}
@@ -1615,60 +1593,36 @@ export default function GameViewerPage() {
                                     const current = (session?.camera_facing ?? "auto") as "auto" | "toward" | "away";
                                     updateSessionMutation.mutate({ camera_facing: cycle[current] });
                                   }}
-                                  className="flex items-center gap-1 text-[10px] text-[#6A6865] hover:text-[#E8E6E3] transition-colors"
-                                  title="Camera orientation: auto-detect, facing toward camera, or facing away"
+                                  className="flex items-center gap-1.5 px-2 py-1 rounded-lg bg-[#1E1D1F] hover:bg-[#2D2C2E] transition-colors"
+                                  title="Player orientation: Auto-detect, facing camera (front), or facing away (back)"
                                 >
-                                  <span>Cam:</span>
-                                  <span className={`px-1.5 py-0.5 rounded font-medium ${
+                                  <span className="text-[10px] text-[#6A6865]">View:</span>
+                                  <span className={`text-[11px] font-medium ${
                                     (session?.camera_facing ?? "auto") === "auto"
-                                      ? "bg-[#9B7B5B]/20 text-[#9B7B5B]"
+                                      ? "text-[#9B7B5B]"
                                       : (session?.camera_facing ?? "auto") === "toward"
-                                      ? "bg-[#6B8E6B]/20 text-[#6B8E6B]"
-                                      : "bg-[#7B8ECE]/20 text-[#7B8ECE]"
+                                      ? "text-[#6B8E6B]"
+                                      : "text-[#7B8ECE]"
                                   }`}>
                                     {(session?.camera_facing ?? "auto") === "auto" ? "Auto" : (session?.camera_facing ?? "auto") === "toward" ? "Front" : "Back"}
                                   </span>
                                 </button>
                               </div>
                             </div>
-                            <div className="grid grid-cols-2 gap-2">
-                              <div className="p-2.5 rounded-lg bg-[#1E1D1F] text-center">
-                                <p className="text-2xl font-light text-[#9B7B5B]">{strokeSummary?.forehand_count ?? 0}</p>
-                                <p className="text-[11px] text-[#6A6865] mt-0.5">Forehand</p>
-                              </div>
-                              <div className="p-2.5 rounded-lg bg-[#1E1D1F] text-center">
-                                <p className="text-2xl font-light text-[#5B9B7B]">{strokeSummary?.backhand_count ?? 0}</p>
-                                <p className="text-[11px] text-[#6A6865] mt-0.5">Backhand</p>
-                              </div>
-                            </div>
-                            {/* FH/BH ratio bar */}
+
+                            {/* Stroke Distribution */}
                             {(strokeSummary?.total_strokes ?? 0) > 0 && (
-                              <div>
-                                <div className="flex h-2 rounded-full overflow-hidden bg-[#363436]">
+                              <div className="shrink-0">
+                                <div className="flex h-2.5 rounded-full overflow-hidden bg-[#363436]">
                                   <div className="bg-[#9B7B5B] transition-all" style={{ width: `${((strokeSummary?.forehand_count ?? 0) / (strokeSummary?.total_strokes ?? 1)) * 100}%` }} />
                                   <div className="bg-[#5B9B7B] transition-all" style={{ width: `${((strokeSummary?.backhand_count ?? 0) / (strokeSummary?.total_strokes ?? 1)) * 100}%` }} />
                                 </div>
-                                <div className="flex justify-between mt-1.5">
-                                  <span className="text-xs font-medium text-[#9B7B5B]">FH {Math.round(((strokeSummary?.forehand_count ?? 0) / (strokeSummary?.total_strokes ?? 1)) * 100)}%</span>
-                                  <span className="text-xs font-medium text-[#5B9B7B]">BH {Math.round(((strokeSummary?.backhand_count ?? 0) / (strokeSummary?.total_strokes ?? 1)) * 100)}%</span>
+                                <div className="flex justify-between mt-2 gap-2">
+                                  <span className="text-sm font-medium text-[#9B7B5B]">Forehand ({strokeSummary?.forehand_count ?? 0}) - {Math.round(((strokeSummary?.forehand_count ?? 0) / (strokeSummary?.total_strokes ?? 1)) * 100)}%</span>
+                                  <span className="text-sm font-medium text-[#5B9B7B]">Backhand ({strokeSummary?.backhand_count ?? 0}) - {Math.round(((strokeSummary?.backhand_count ?? 0) / (strokeSummary?.total_strokes ?? 1)) * 100)}%</span>
                                 </div>
                               </div>
                             )}
-                            {/* Form metrics */}
-                            <div className="space-y-1.5">
-                              <div className="flex justify-between items-center">
-                                <span className="text-xs text-[#8A8885]">Avg Form</span>
-                                <span className="text-lg font-mono font-medium text-[#E8E6E3]">{strokeSummary?.average_form_score?.toFixed(1)}</span>
-                              </div>
-                              <div className="flex justify-between items-center">
-                                <span className="text-xs text-[#8A8885]">Best Form</span>
-                                <span className="text-lg font-mono font-medium text-[#9B7B5B]">{strokeSummary?.best_form_score?.toFixed(1)}</span>
-                              </div>
-                              <div className="flex justify-between items-center">
-                                <span className="text-xs text-[#8A8885]">Consistency</span>
-                                <span className="text-lg font-mono font-medium text-[#E8E6E3]">{strokeSummary?.consistency_score?.toFixed(1)}</span>
-                              </div>
-                            </div>
 
                             {/* All Insights throughout the video */}
                             {videoTips.length > 0 && (
