@@ -486,16 +486,16 @@ export default function PlayerProfilePage() {
 
                           {/* Hover panel for clips */}
                           {insight.clips.length > 0 && (
-                            <div className="absolute left-full top-0 ml-2 z-50 w-64 rounded-lg bg-content1 shadow-2xl overflow-hidden opacity-0 invisible group-hover:opacity-100 group-hover:visible transition-all duration-200">
-                              <div className="p-2.5 space-y-1.5">
-                                <div className="px-2 py-1 text-[10px] uppercase tracking-wider text-foreground/60 font-semibold">
+                            <div className="absolute left-full top-0 ml-2 z-50 w-64 rounded-xl bg-background border border-foreground/20 shadow-2xl overflow-hidden opacity-0 invisible group-hover:opacity-100 group-hover:visible transition-all duration-200">
+                              <div className="p-3 space-y-1.5">
+                                <div className="px-2 py-1.5 text-[10px] uppercase tracking-wider text-foreground/50 font-semibold border-b border-foreground/10 pb-2 mb-1">
                                   Source clips
                                 </div>
                                 {insight.clips.map((clip) => (
                                   <button
                                     key={clip.id}
                                     onClick={() => handleClipOpen(clip, insight.tipMatch)}
-                                    className="w-full flex items-center gap-2 rounded-md bg-content1/40 p-2 text-left hover:bg-content1/60 transition-colors"
+                                    className="w-full flex items-center gap-2 rounded-md bg-content1 hover:bg-content2 p-2 text-left transition-colors"
                                   >
                                     {clip.videoUrl && (
                                       <div className="relative w-14 h-10 rounded overflow-hidden shrink-0 bg-background">
@@ -556,16 +556,16 @@ export default function PlayerProfilePage() {
 
                           {/* Hover panel for clips */}
                           {insight.clips.length > 0 && (
-                            <div className="absolute left-full top-0 ml-2 z-50 w-64 rounded-lg bg-content1 shadow-2xl overflow-hidden opacity-0 invisible group-hover:opacity-100 group-hover:visible transition-all duration-200">
-                              <div className="p-2.5 space-y-1.5">
-                                <div className="px-2 py-1 text-[10px] uppercase tracking-wider text-foreground/60 font-semibold">
+                            <div className="absolute left-full top-0 ml-2 z-50 w-64 rounded-xl bg-background border border-foreground/20 shadow-2xl overflow-hidden opacity-0 invisible group-hover:opacity-100 group-hover:visible transition-all duration-200">
+                              <div className="p-3 space-y-1.5">
+                                <div className="px-2 py-1.5 text-[10px] uppercase tracking-wider text-foreground/50 font-semibold border-b border-foreground/10 pb-2 mb-1">
                                   Source clips
                                 </div>
                                 {insight.clips.map((clip) => (
                                   <button
                                     key={clip.id}
                                     onClick={() => handleClipOpen(clip, insight.tipMatch)}
-                                    className="w-full flex items-center gap-2 rounded-md bg-content1/40 p-2 text-left hover:bg-content1/60 transition-colors"
+                                    className="w-full flex items-center gap-2 rounded-md bg-content1 hover:bg-content2 p-2 text-left transition-colors"
                                   >
                                     {clip.videoUrl && (
                                       <div className="relative w-14 h-10 rounded overflow-hidden shrink-0 bg-background">
