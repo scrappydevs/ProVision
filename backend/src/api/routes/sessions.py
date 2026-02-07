@@ -14,14 +14,15 @@ logger = logging.getLogger(__name__)
 
 
 async def _run_tracknet_background(session_id: str, video_url: str):
-    """Background task: run ball tracking on newly uploaded video."""
+    """Background task: run ball tracking on newly uploaded video.
+    
+    Only writes trajectory_data — does NOT update session status, since pose
+    analysis (which runs after or in parallel) owns the status lifecycle.
+    """
     try:
         logger.info(f"[TrackNet] Starting ball tracking for session: {session_id}")
         from ..services.sam2_service import sam2_service
         supabase = get_supabase()
-
-        # Update status to processing
-        supabase.table("sessions").update({"status": "processing"}).eq("id", session_id).execute()
 
         trajectory_data, video_info = await sam2_service.track_with_tracknet(
             session_id=session_id,
@@ -36,19 +37,15 @@ async def _run_tracknet_background(session_id: str, video_url: str):
             "video_info": video_info,
         }
 
+        # Only write trajectory data — status is managed by the pose analysis pipeline
         supabase.table("sessions").update({
             "trajectory_data": trajectory_dict,
-            "status": "ready",
         }).eq("id", session_id).execute()
 
         logger.info(f"[TrackNet] Auto-tracking complete: session={session_id}, frames={len(trajectory_data.frames)}")
     except Exception as e:
         logger.error(f"[TrackNet] Auto-tracking failed for {session_id}: {e}", exc_info=True)
-        try:
-            supabase = get_supabase()
-            supabase.table("sessions").update({"status": "failed"}).eq("id", session_id).execute()
-        except Exception:
-            pass
+        # Don't set status to failed — TrackNet failure is non-fatal, pose analysis may still succeed
 
 
 async def _run_dashboard_analysis_background(session_id: str, user_id: str, video_url: str):
