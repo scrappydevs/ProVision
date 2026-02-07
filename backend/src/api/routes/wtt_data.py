@@ -10,6 +10,19 @@ logger = logging.getLogger(__name__)
 router = APIRouter()
 
 
+def _get_match_counts_by_tournament(supabase, tournament_ids: list[str]) -> dict[str, int]:
+    """Fetch match counts for all tournaments in a single query."""
+    if not tournament_ids:
+        return {}
+    result = supabase.table("wtt_matches").select("tournament_id").in_("tournament_id", tournament_ids).execute()
+    counts: dict[str, int] = {tid: 0 for tid in tournament_ids}
+    for row in result.data or []:
+        tid = row.get("tournament_id")
+        if tid and tid in counts:
+            counts[tid] += 1
+    return counts
+
+
 # ── Response Models ──────────────────────────────────────────────────
 
 class WTTTournamentResponse(BaseModel):
@@ -92,12 +105,12 @@ async def list_wtt_tournaments(
             query = query.ilike("name", f"%{search}%")
 
         result = query.range(offset, offset + limit - 1).execute()
+        tournament_ids = [t["id"] for t in result.data]
+        match_counts = _get_match_counts_by_tournament(supabase, tournament_ids)
 
         tournaments = []
         for t in result.data:
-            # Count matches
-            mc = supabase.table("wtt_matches").select("id", count="exact").eq("tournament_id", t["id"]).execute()
-            t["match_count"] = mc.count if hasattr(mc, 'count') and mc.count is not None else len(mc.data)
+            t["match_count"] = match_counts.get(t["id"], 0)
             tournaments.append(WTTTournamentResponse(**t))
 
         return tournaments
@@ -117,8 +130,7 @@ async def get_wtt_tournament(
         if not result.data:
             raise HTTPException(status_code=404, detail="Tournament not found")
 
-        mc = supabase.table("wtt_matches").select("id", count="exact").eq("tournament_id", tournament_id).execute()
-        result.data["match_count"] = mc.count if hasattr(mc, 'count') and mc.count is not None else len(mc.data)
+        result.data["match_count"] = _get_match_counts_by_tournament(supabase, [tournament_id]).get(tournament_id, 0)
 
         return WTTTournamentResponse(**result.data)
     except HTTPException:
