@@ -222,6 +222,46 @@ export default function PlayerProfilePage() {
     );
   };
 
+  const formatTime = useCallback((seconds?: number) => {
+    if (seconds === undefined || Number.isNaN(seconds)) return undefined;
+    const minutes = Math.floor(seconds / 60);
+    const remainder = Math.floor(seconds % 60);
+    return `${minutes}:${remainder.toString().padStart(2, "0")}`;
+  }, []);
+
+  const recentTips = useMemo(() => {
+    const tips = generateTipsFromStrokes(latestStrokeSummary?.strokes || []);
+    return tips.filter((tip) => !tip.id.includes("follow") && !tip.id.includes("summary"));
+  }, [latestStrokeSummary?.strokes]);
+
+  const insights: Insight[] = useMemo(() => {
+    if (!recentTips.length) return [];
+    return recentTips.map((tip) => {
+      const titleLower = tip.title.toLowerCase();
+      const kind: InsightKind = titleLower.includes("excellent") || titleLower.includes("good")
+        ? "strength"
+        : "weakness";
+      const timestamp = tip.seekTime !== undefined ? formatTime(tip.seekTime) : undefined;
+      const hasClip = Boolean(latestGameId);
+      return {
+        id: tip.id,
+        kind,
+        title: tip.title,
+        summary: tip.message,
+        tipMatch: tip.id,
+        metric: hasClip ? (timestamp ? `Start ${timestamp}` : "Open clip") : undefined,
+        clips: hasClip ? [{
+          id: `${tip.id}-clip`,
+          label: latestGame?.name ? `${latestGame.name}` : "View in game",
+          sessionId: latestGameId,
+          timestamp,
+          startSeconds: tip.seekTime,
+        }] : [],
+      };
+    });
+  }, [recentTips, latestGameId, latestGame?.name, formatTime]);
+
+  // Early returns AFTER all hooks
   if (playerLoading) {
     return (
       <div className="flex items-center justify-center h-64">
@@ -272,45 +312,6 @@ export default function PlayerProfilePage() {
     statusOptions.find((o) => o.value === status)?.label ?? status;
 
   const ittfData = player.ittf_data;
-
-  const formatTime = useCallback((seconds?: number) => {
-    if (seconds === undefined || Number.isNaN(seconds)) return undefined;
-    const minutes = Math.floor(seconds / 60);
-    const remainder = Math.floor(seconds % 60);
-    return `${minutes}:${remainder.toString().padStart(2, "0")}`;
-  }, []);
-
-  const recentTips = useMemo(() => {
-    const tips = generateTipsFromStrokes(latestStrokeSummary?.strokes || []);
-    return tips.filter((tip) => !tip.id.includes("follow") && !tip.id.includes("summary"));
-  }, [latestStrokeSummary?.strokes]);
-
-  const insights: Insight[] = useMemo(() => {
-    if (!recentTips.length) return [];
-    return recentTips.map((tip) => {
-      const titleLower = tip.title.toLowerCase();
-      const kind: InsightKind = titleLower.includes("excellent") || titleLower.includes("good")
-        ? "strength"
-        : "weakness";
-      const timestamp = tip.seekTime !== undefined ? formatTime(tip.seekTime) : undefined;
-      const hasClip = Boolean(latestGameId);
-      return {
-        id: tip.id,
-        kind,
-        title: tip.title,
-        summary: tip.message,
-        tipMatch: tip.id,
-        metric: hasClip ? (timestamp ? `Start ${timestamp}` : "Open clip") : undefined,
-        clips: hasClip ? [{
-          id: `${tip.id}-clip`,
-          label: latestGame?.name ? `${latestGame.name}` : "View in game",
-          sessionId: latestGameId,
-          timestamp,
-          startSeconds: tip.seekTime,
-        }] : [],
-      };
-    });
-  }, [recentTips, latestGameId, latestGame?.name, formatTime]);
 
   const handleClipOpen = (clip: InsightClip, tipMatch?: string) => {
     if (clip.sessionId) {
