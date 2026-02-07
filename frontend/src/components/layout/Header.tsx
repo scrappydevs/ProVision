@@ -2,10 +2,13 @@
 
 import { useAuth } from "@/hooks/useAuth";
 import { Button } from "@/components/ui/button";
-import { LogOut, User } from "lucide-react";
+import { LogOut, User, Sparkles } from "lucide-react";
+import { useAIChat } from "@/contexts/AIChatContext";
+import { cn } from "@/lib/utils";
 
 export function Header() {
   const { user, signOut } = useAuth();
+  const { isOpen: aiOpen, toggle: toggleAI } = useAIChat();
 
   return (
     <header className="h-16 border-b border-border bg-background fixed top-0 left-0 right-0 z-40">
@@ -17,6 +20,26 @@ export function Header() {
         <div className="flex items-center gap-4">
           {user && (
             <div className="flex items-center gap-3">
+              {/* AI Chat toggle */}
+              <button
+                onClick={toggleAI}
+                className={cn(
+                  "flex items-center gap-2 px-3 py-1.5 rounded-full text-xs font-medium transition-all",
+                  aiOpen
+                    ? "bg-primary/15 text-primary ring-1 ring-primary/30"
+                    : "text-muted-foreground hover:text-foreground hover:bg-muted"
+                )}
+                title="Toggle AI Coach"
+              >
+                <Sparkles className="w-3.5 h-3.5" />
+                <span className="hidden sm:inline">AI Coach</span>
+                {aiOpen && (
+                  <div className="w-1.5 h-1.5 rounded-full bg-primary" />
+                )}
+              </button>
+
+              <div className="w-px h-6 bg-border" />
+
               <div className="flex items-center gap-2">
                 <div className="w-8 h-8 rounded-full bg-muted flex items-center justify-center">
                   {user.user_metadata?.avatar_url ? (

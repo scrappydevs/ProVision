@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useCallback, useMemo } from "react";
+import { useState, useCallback, useEffect, useMemo } from "react";
 import { useParams, useRouter } from "next/navigation";
 import { Button } from "@/components/ui/button";
 import { Card, CardBody, CardHeader, CardFooter, ScrollShadow } from "@heroui/react";
@@ -24,6 +24,7 @@ import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { playerKeys } from "@/hooks/usePlayers";
 import { sessionKeys } from "@/hooks/useSessions";
 import ClipSelector from "@/components/players/ClipSelector";
+import { useAIChat } from "@/contexts/AIChatContext";
 
 type Tab = "recordings" | "games";
 type RecordingFilter = "all" | RecordingType;
@@ -104,6 +105,8 @@ export default function PlayerProfilePage() {
   const createClipMutation = useCreateClip();
   const analyzeRecordingMutation = useAnalyzeRecording();
 
+  const { setContext: setAIChatContext, clearContext: clearAIChatContext } = useAIChat();
+
   const createGameMutation = useMutation({
     mutationFn: async ({ file, name }: { file: File; name: string }) => {
       const formData = new FormData();
@@ -121,6 +124,30 @@ export default function PlayerProfilePage() {
       setGameName("");
     },
   });
+
+  // Set AI chat context with player data, recordings, and tips
+  useEffect(() => {
+    if (!player) return;
+    setAIChatContext({
+      playerId,
+      playerName: player.name,
+      sessionId: undefined,
+      sessionName: undefined,
+      recordings: recordings?.map((r) => ({
+        id: r.id,
+        title: r.title,
+        type: r.type,
+        session_id: r.session_id,
+      })),
+      tips: [
+        { title: "Forehand acceleration", summary: "Explosive hip rotation and clean wrist snap on fast rallies.", kind: "strength" },
+        { title: "Recovery footwork", summary: "Quick reset to neutral stance after wide forehand exchanges.", kind: "strength" },
+        { title: "Backhand depth", summary: "Contact point drifts high under pressure, leaving returns short.", kind: "weakness" },
+        { title: "Serve variation", summary: "Limited spin variation on second serve during long points.", kind: "weakness" },
+      ],
+    });
+    return () => clearAIChatContext();
+  }, [player, recordings, playerId, setAIChatContext, clearAIChatContext]);
 
   const handleAvatarUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
@@ -195,6 +222,46 @@ export default function PlayerProfilePage() {
     );
   };
 
+  const formatTime = useCallback((seconds?: number) => {
+    if (seconds === undefined || Number.isNaN(seconds)) return undefined;
+    const minutes = Math.floor(seconds / 60);
+    const remainder = Math.floor(seconds % 60);
+    return `${minutes}:${remainder.toString().padStart(2, "0")}`;
+  }, []);
+
+  const recentTips = useMemo(() => {
+    const tips = generateTipsFromStrokes(latestStrokeSummary?.strokes || []);
+    return tips.filter((tip) => !tip.id.includes("follow") && !tip.id.includes("summary"));
+  }, [latestStrokeSummary?.strokes]);
+
+  const insights: Insight[] = useMemo(() => {
+    if (!recentTips.length) return [];
+    return recentTips.map((tip) => {
+      const titleLower = tip.title.toLowerCase();
+      const kind: InsightKind = titleLower.includes("excellent") || titleLower.includes("good")
+        ? "strength"
+        : "weakness";
+      const timestamp = tip.seekTime !== undefined ? formatTime(tip.seekTime) : undefined;
+      const hasClip = Boolean(latestGameId);
+      return {
+        id: tip.id,
+        kind,
+        title: tip.title,
+        summary: tip.message,
+        tipMatch: tip.id,
+        metric: hasClip ? (timestamp ? `Start ${timestamp}` : "Open clip") : undefined,
+        clips: hasClip ? [{
+          id: `${tip.id}-clip`,
+          label: latestGame?.name ? `${latestGame.name}` : "View in game",
+          sessionId: latestGameId,
+          timestamp,
+          startSeconds: tip.seekTime,
+        }] : [],
+      };
+    });
+  }, [recentTips, latestGameId, latestGame?.name, formatTime]);
+
+  // Early returns AFTER all hooks
   if (playerLoading) {
     return (
       <div className="flex items-center justify-center h-64">
@@ -245,45 +312,6 @@ export default function PlayerProfilePage() {
     statusOptions.find((o) => o.value === status)?.label ?? status;
 
   const ittfData = player.ittf_data;
-
-  const formatTime = useCallback((seconds?: number) => {
-    if (seconds === undefined || Number.isNaN(seconds)) return undefined;
-    const minutes = Math.floor(seconds / 60);
-    const remainder = Math.floor(seconds % 60);
-    return `${minutes}:${remainder.toString().padStart(2, "0")}`;
-  }, []);
-
-  const recentTips = useMemo(() => {
-    const tips = generateTipsFromStrokes(latestStrokeSummary?.strokes || []);
-    return tips.filter((tip) => !tip.id.includes("follow") && !tip.id.includes("summary"));
-  }, [latestStrokeSummary?.strokes]);
-
-  const insights: Insight[] = useMemo(() => {
-    if (!recentTips.length) return [];
-    return recentTips.map((tip) => {
-      const titleLower = tip.title.toLowerCase();
-      const kind: InsightKind = titleLower.includes("excellent") || titleLower.includes("good")
-        ? "strength"
-        : "weakness";
-      const timestamp = tip.seekTime !== undefined ? formatTime(tip.seekTime) : undefined;
-      const hasClip = Boolean(latestGameId);
-      return {
-        id: tip.id,
-        kind,
-        title: tip.title,
-        summary: tip.message,
-        tipMatch: tip.id,
-        metric: hasClip ? (timestamp ? `Start ${timestamp}` : "Open clip") : undefined,
-        clips: hasClip ? [{
-          id: `${tip.id}-clip`,
-          label: latestGame?.name ? `${latestGame.name}` : "View in game",
-          sessionId: latestGameId,
-          timestamp,
-          startSeconds: tip.seekTime,
-        }] : [],
-      };
-    });
-  }, [recentTips, latestGameId, latestGame?.name, formatTime]);
 
   const handleClipOpen = (clip: InsightClip, tipMatch?: string) => {
     if (clip.sessionId) {
@@ -552,7 +580,7 @@ export default function PlayerProfilePage() {
         </div>
 
         {/* Right: recordings — larger and more prominent */}
-        <div className="absolute right-6 top-[15%] bottom-6 w-[420px] flex flex-col z-20">
+        <div className="absolute right-6 top-[15%] bottom-6 w-[560px] flex flex-col z-20">
           {/* Header with enhanced styling */}
           <div className="flex flex-col gap-3 mb-5 px-4 py-3 bg-content1/30 backdrop-blur-xl rounded-3xl border border-foreground/15">
             <div className="flex items-center justify-between">
@@ -570,7 +598,7 @@ export default function PlayerProfilePage() {
                 Add
               </button>
             </div>
-            <div className="flex items-center gap-2">
+            <div className="flex items-center gap-2 shrink-0">
               {(["all", "match", "informal", "clip"] as const).map((f) => (
                 <button
                   key={f}
