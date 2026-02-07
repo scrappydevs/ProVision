@@ -16,7 +16,6 @@ interface BirdEyeViewProps {
 }
 
 type PhysicsMode = "replay" | "predict" | "whatif" | "heatmap";
-type CameraPreset = "default" | "top" | "side" | "end" | "player";
 
 const TABLE_W = 2.74;
 const TABLE_D = 1.525;
@@ -27,15 +26,6 @@ const LEG_SIZE = 0.06;
 const SURFACE_Y = TABLE_H + TABLE_THICK / 2;
 const GRAVITY = 9.81;
 const RESTITUTION = 0.85;
-
-// Camera preset positions: [position, target]
-const CAMERA_PRESETS: Record<CameraPreset, { pos: [number, number, number]; label: string }> = {
-  default: { pos: [2.2, 2.2, 2.2], label: "3D" },
-  top:     { pos: [0, 4.0, 0.01], label: "Top" },
-  side:    { pos: [0, 1.2, 3.5], label: "Side" },
-  end:     { pos: [4.0, 1.5, 0], label: "End" },
-  player:  { pos: [-3.0, 1.3, 0], label: "Player" },
-};
 
 function Table({ onClick }: { onClick?: (point: THREE.Vector3) => void }) {
   const handleClick = useCallback((e: ThreeEvent<MouseEvent>) => {
@@ -88,425 +78,45 @@ function Table({ onClick }: { onClick?: (point: THREE.Vector3) => void }) {
       ))}
       {/* Floor */}
       <mesh position={[0, -0.01, 0]} rotation={[-Math.PI / 2, 0, 0]} receiveShadow>
-        <planeGeometry args={[10, 7]} />
+        <planeGeometry args={[6, 4]} />
         <meshStandardMaterial color="#1E1D1F" roughness={0.9} />
       </mesh>
     </group>
   );
 }
 
-// ============================================================================
-// Step 1: Pixel-space noise filter
-// ============================================================================
-
-interface FilteredPoint {
-  frame: number;
-  x: number;
-  y: number;
-  confidence: number;
-  isToss: boolean; // serve toss frames rendered differently
-}
-
-/**
- * Filter raw trajectory points in pixel space BEFORE any 3D mapping.
- *
- * - Median filter: if a point jumps far from both predecessor AND successor, remove it.
- * - Velocity continuity: sharp direction reversals that snap back are noise.
- * - Serve toss: nearly-vertical ball movement in a tight X range is flagged.
- */
-function filterTrajectoryNoise(raw: TrajectoryPoint[]): FilteredPoint[] {
-  if (raw.length < 3) return raw.map(f => ({ ...f, isToss: false }));
-
-  const JUMP_THRESH = 80; // pixels — if dist to BOTH neighbors exceeds this, it's noise
-  const sorted = [...raw].sort((a, b) => a.frame - b.frame);
-
-  // Pass 1: median filter — remove isolated spikes
-  const pass1: (TrajectoryPoint & { keep: boolean })[] = sorted.map((p, i) => {
-    if (i === 0 || i === sorted.length - 1) return { ...p, keep: true };
-    const prev = sorted[i - 1];
-    const next = sorted[i + 1];
-    const prevGap = p.frame - prev.frame;
-    const nextGap = next.frame - p.frame;
-    // Only apply to close frames (gap <= 3)
-    if (prevGap > 3 || nextGap > 3) return { ...p, keep: true };
-    const distPrev = Math.sqrt((p.x - prev.x) ** 2 + (p.y - prev.y) ** 2);
-    const distNext = Math.sqrt((p.x - next.x) ** 2 + (p.y - next.y) ** 2);
-    // Isolated spike: far from both neighbors
-    if (distPrev > JUMP_THRESH && distNext > JUMP_THRESH) return { ...p, keep: false };
-    return { ...p, keep: true };
-  });
-
-  const kept = pass1.filter(p => p.keep);
-
-  // Pass 2: velocity continuity — remove points where direction reverses >120° and snaps back
-  const pass2: (TrajectoryPoint & { keep: boolean })[] = kept.map((p, i) => {
-    if (i < 2 || i >= kept.length - 1) return { ...p, keep: true };
-    const pp = kept[i - 1];
-    const ppp = kept[i - 2];
-    const np = kept[i + 1];
-    // Trend direction from previous 2 points
-    const trendDx = pp.x - ppp.x;
-    const trendDy = pp.y - ppp.y;
-    const trendLen = Math.sqrt(trendDx * trendDx + trendDy * trendDy);
-    if (trendLen < 3) return { ...p, keep: true }; // too slow to judge
-    // Current direction
-    const curDx = p.x - pp.x;
-    const curDy = p.y - pp.y;
-    const curLen = Math.sqrt(curDx * curDx + curDy * curDy);
-    if (curLen < 3) return { ...p, keep: true };
-    // Dot product for angle
-    const dot = (trendDx * curDx + trendDy * curDy) / (trendLen * curLen);
-    if (dot < -0.5) {
-      // Sharp reversal — check if NEXT point also reverses back (snap-back noise)
-      const nextDx = np.x - p.x;
-      const nextDy = np.y - p.y;
-      const nextLen = Math.sqrt(nextDx * nextDx + nextDy * nextDy);
-      if (nextLen > 3) {
-        const dot2 = (curDx * nextDx + curDy * nextDy) / (curLen * nextLen);
-        if (dot2 < -0.3) return { ...p, keep: false }; // snap back = noise
-      }
-    }
-    return { ...p, keep: true };
-  });
-
-  const clean = pass2.filter(p => p.keep);
-
-  // Pass 3: detect serve toss sequences
-  const result: FilteredPoint[] = clean.map((p, i) => {
-    let isToss = false;
-    if (i >= 2 && i < clean.length - 2) {
-      // A toss is: ball moves mostly vertically (small dX, large dY upward)
-      // in a tight horizontal band over ~5+ consecutive frames
-      const window = clean.slice(Math.max(0, i - 3), Math.min(clean.length, i + 4));
-      const xRange = Math.max(...window.map(w => w.x)) - Math.min(...window.map(w => w.x));
-      const yRange = Math.max(...window.map(w => w.y)) - Math.min(...window.map(w => w.y));
-      // Toss: X range < 40px but Y range > 60px (mostly vertical movement)
-      if (xRange < 40 && yRange > 60) isToss = true;
-    }
-    return { frame: p.frame, x: p.x, y: p.y, confidence: p.confidence, isToss };
-  });
-
-  return result;
-}
-
-// ============================================================================
-// Step 2: Detect events (bounces, hits, toss peaks)
-// ============================================================================
-
-interface TrajectoryEvent {
-  frame: number;
-  index: number; // index into filtered points array
-  type: "bounce" | "hit" | "toss_peak";
-}
-
-/**
- * Detect bounces (Y-velocity reversal / local Y maxima in video coords),
- * hits (X-direction changes), and toss peaks from filtered pixel data.
- */
-function detectEvents(points: FilteredPoint[]): TrajectoryEvent[] {
-  if (points.length < 5) return [];
-  const events: TrajectoryEvent[] = [];
-
-  for (let i = 2; i < points.length - 2; i++) {
-    const prev = points[i - 1];
-    const cur = points[i];
-    const next = points[i + 1];
-    const gap1 = cur.frame - prev.frame;
-    const gap2 = next.frame - cur.frame;
-    if (gap1 > 5 || gap2 > 5) continue; // too big a gap to judge
-
-    // Bounce: local maximum in video-Y (ball at lowest physical point = table)
-    // In video coords, Y increases downward, so a bounce is a local max in Y.
-    if (cur.y > prev.y && cur.y > next.y && (cur.y - prev.y) > 3 && (cur.y - next.y) > 3) {
-      events.push({ frame: cur.frame, index: i, type: "bounce" });
-      continue;
-    }
-
-    // Hit / direction change: X-velocity reverses sign with significant magnitude
-    const dxPrev = cur.x - prev.x;
-    const dxNext = next.x - cur.x;
-    if ((dxPrev > 15 && dxNext < -15) || (dxPrev < -15 && dxNext > 15)) {
-      events.push({ frame: cur.frame, index: i, type: "hit" });
-      continue;
-    }
-
-    // Toss peak: local minimum in video-Y (ball at highest physical point) during a toss
-    if (cur.isToss && cur.y < prev.y && cur.y < next.y) {
-      events.push({ frame: cur.frame, index: i, type: "toss_peak" });
-    }
-  }
-
-  return events;
-}
-
-// ============================================================================
-// Step 3 & 4: Segment into arcs and fit smooth curves
-// ============================================================================
-
-interface ArcSegment {
-  points: FilteredPoint[];
-  isToss: boolean;
-  /** Whether the arc crosses the net (X=0 in 3D) and clears it */
-  netCrossing: "clears" | "clips" | "none";
-}
-
-/**
- * Segment filtered trajectory into arcs between events, then generate
- * smooth CatmullRom curves in 3D for each arc.
- */
-function segmentIntoArcs(points: FilteredPoint[], events: TrajectoryEvent[]): ArcSegment[] {
-  if (points.length < 2) return [];
-
-  // Build cut indices from events
-  const cutIndices = events.map(e => e.index).sort((a, b) => a - b);
-  // Add boundaries
-  const boundaries = [0, ...cutIndices, points.length - 1];
-  // Deduplicate and sort
-  const unique = [...new Set(boundaries)].sort((a, b) => a - b);
-
-  const arcs: ArcSegment[] = [];
-  for (let i = 0; i < unique.length - 1; i++) {
-    const start = unique[i];
-    const end = unique[i + 1];
-    if (end - start < 1) continue;
-    const slice = points.slice(start, end + 1);
-    const isToss = slice.filter(p => p.isToss).length > slice.length * 0.5;
-    arcs.push({ points: slice, isToss, netCrossing: "none" });
-  }
-
-  return arcs;
-}
-
-// ============================================================================
-// Step 5: Wider scale mapping (IQR-based)
-// ============================================================================
-
-interface TrajectoryBounds {
-  /** IQR anchors for X: P25 and P75 map to table edges */
-  xP25: number; xP75: number;
-  /** IQR anchors for Y */
-  yP25: number; yP75: number;
-  /** Full range for baseline computation */
-  minX: number; maxX: number;
-  minY: number; maxY: number;
-  /** Per-bucket baseline Y */
-  baselineByBucket: number[];
-  bucketCount: number;
-}
-
-/**
- * Compute IQR-based bounds. The P25-P75 range of X maps to the table width.
- * Points outside this range naturally extend far beyond the table.
- */
-function computeTrajectoryBounds(frames: FilteredPoint[]): TrajectoryBounds {
-  const BUCKETS = 16;
-  const xs = frames.map(f => f.x).sort((a, b) => a - b);
-  const ys = frames.map(f => f.y).sort((a, b) => a - b);
-
-  const minX = xs[0], maxX = xs[xs.length - 1];
-  const minY = ys[0], maxY = ys[ys.length - 1];
-  const xP25 = xs[Math.floor(xs.length * 0.25)];
-  const xP75 = xs[Math.floor(xs.length * 0.75)];
-  const yP25 = ys[Math.floor(ys.length * 0.25)];
-  const yP75 = ys[Math.floor(ys.length * 0.75)];
-
-  const rangeX = maxX - minX || 1;
-
-  // Per-bucket baseline (90th percentile of Y in each X slice)
-  const bucketValues: number[][] = Array.from({ length: BUCKETS }, () => []);
-  for (const f of frames) {
-    const bIdx = Math.min(BUCKETS - 1, Math.max(0, Math.floor(((f.x - minX) / rangeX) * BUCKETS)));
-    bucketValues[bIdx].push(f.y);
-  }
-  const baselineByBucket: number[] = [];
-  let lastGood = maxY;
-  for (let i = 0; i < BUCKETS; i++) {
-    const vals = bucketValues[i];
-    if (vals.length >= 2) {
-      vals.sort((a, b) => a - b);
-      lastGood = vals[Math.floor(vals.length * 0.9)];
-    }
-    baselineByBucket.push(lastGood);
-  }
-
-  return { xP25, xP75, yP25, yP75, minX, maxX, minY, maxY, baselineByBucket, bucketCount: BUCKETS };
-}
-
-/**
- * Map video pixel coordinates to 3D table coordinates using IQR-based scaling.
- *
- * The IQR (P25-P75) of X positions maps to the table width. This means:
- * - Most rallying activity fills the table
- * - Extreme positions (serves, off-table shots) extend well beyond table edges
- *
- * Height is derived from deviation above the per-bucket baseline.
- */
-function videoToTable(
-  px: number,
-  py: number,
-  bounds: TrajectoryBounds,
-): [number, number, number] {
-  const iqrX = bounds.xP75 - bounds.xP25 || 1;
-  const iqrY = bounds.yP75 - bounds.yP25 || 1;
-
-  // X: P25→-TABLE_W/2, P75→+TABLE_W/2. Points outside IQR extend beyond table.
-  const nx = (px - bounds.xP25) / iqrX; // 0 at P25, 1 at P75
-  const x = (nx - 0.5) * TABLE_W; // centered: -W/2 to +W/2 for IQR
-
-  // Z (depth): same approach with Y IQR
-  const ny = (py - bounds.yP25) / iqrY;
-  const z = (ny - 0.5) * TABLE_D;
-
-  // Height: deviation above the baseline at this X position
-  const rangeX = bounds.maxX - bounds.minX || 1;
-  const bucketIdx = Math.min(
-    bounds.bucketCount - 1,
-    Math.max(0, Math.floor(((px - bounds.minX) / rangeX) * bounds.bucketCount))
-  );
-  const baselineY = bounds.baselineByBucket[bucketIdx];
-  const heightPx = Math.max(0, baselineY - py); // pixels above baseline (video Y is inverted)
-  const fullRange = bounds.maxY - bounds.minY || 1;
-  const heightFrac = Math.min(1, heightPx / (fullRange * 0.7));
-  const maxHeight = 0.8; // 80cm max for high lobs/serves
-  const y = SURFACE_Y + 0.02 + Math.sqrt(heightFrac) * maxHeight;
-
+function videoToTable(px: number, py: number, videoW = 1280, videoH = 828): [number, number, number] {
+  const x = (px / videoW) * TABLE_W - TABLE_W / 2;
+  const z = (py / videoH) * TABLE_D - TABLE_D / 2;
+  // Estimate ball height from vertical position in frame:
+  // Top of frame (low py) = ball high in the air, bottom = at table level
+  const normalizedY = Math.max(0, 1 - (py / videoH)); // 0=bottom, 1=top
+  const maxHeight = 0.4; // ~40cm max arc above table
+  const y = SURFACE_Y + 0.02 + normalizedY * normalizedY * maxHeight; // quadratic for natural arc
   return [x, y, z];
 }
 
-/**
- * Generate smooth 3D curve points for an arc using CatmullRom interpolation.
- * Returns ~20 points per arc for rendering.
- */
-function arcTo3DCurve(
-  arc: ArcSegment,
-  bounds: TrajectoryBounds,
-): [number, number, number][] {
-  const pts = arc.points;
-  if (pts.length < 2) return [];
-  if (pts.length === 2) {
-    return [videoToTable(pts[0].x, pts[0].y, bounds), videoToTable(pts[1].x, pts[1].y, bounds)];
-  }
-
-  // Map all arc points to 3D
-  const controlPoints = pts.map(p => {
-    const [x, y, z] = videoToTable(p.x, p.y, bounds);
-    return new THREE.Vector3(x, y, z);
-  });
-
-  // Use CatmullRom spline through the control points
-  const curve = new THREE.CatmullRomCurve3(controlPoints, false, "centripetal", 0.5);
-  const subdivisions = Math.max(10, pts.length * 4);
-  return curve.getPoints(subdivisions).map(v => [v.x, v.y, v.z] as [number, number, number]);
-}
-
-/**
- * Check if an arc crosses the net (X=0) and whether it clears net height.
- */
-function checkNetCrossing(
-  curvePoints: [number, number, number][]
-): "clears" | "clips" | "none" {
-  const netTopY = SURFACE_Y + NET_H;
-  for (let i = 1; i < curvePoints.length; i++) {
-    const prevX = curvePoints[i - 1][0];
-    const curX = curvePoints[i][0];
-    if ((prevX < 0 && curX >= 0) || (prevX > 0 && curX <= 0)) {
-      // Interpolate Y at X=0
-      const t = Math.abs(prevX) / (Math.abs(prevX) + Math.abs(curX));
-      const yAtNet = curvePoints[i - 1][1] + t * (curvePoints[i][1] - curvePoints[i - 1][1]);
-      return yAtNet >= netTopY ? "clears" : "clips";
-    }
-  }
-  return "none";
-}
-
-// ============================================================================
-// Processed trajectory: the full pipeline output
-// ============================================================================
-
-interface ProcessedArc {
-  curvePoints: [number, number, number][];
-  isToss: boolean;
-  netCrossing: "clears" | "clips" | "none";
-  startFrame: number;
-  endFrame: number;
-}
-
-interface ProcessedTrajectory {
-  arcs: ProcessedArc[];
-  /** All points in order for ball position lookup */
-  allPoints: { frame: number; pos: [number, number, number] }[];
-  bounds: TrajectoryBounds;
-}
-
-/**
- * Full pipeline: filter → detect events → segment → fit curves → check net.
- */
-function processTrajectory(rawFrames: TrajectoryPoint[]): ProcessedTrajectory {
-  // Step 1: Pixel-space noise filter
-  const filtered = filterTrajectoryNoise(rawFrames);
-  if (filtered.length < 2) {
-    return { arcs: [], allPoints: [], bounds: computeTrajectoryBounds(filtered.length ? filtered : [{ frame: 0, x: 0, y: 0, confidence: 0, isToss: false }]) };
-  }
-
-  // Step 2: Detect events
-  const events = detectEvents(filtered);
-
-  // Step 3: Segment into arcs
-  const arcSegments = segmentIntoArcs(filtered, events);
-
-  // Step 5: Compute IQR-based bounds
-  const bounds = computeTrajectoryBounds(filtered);
-
-  // Step 4 & 6 & 7: Fit curves, check net
-  const arcs: ProcessedArc[] = arcSegments.map(seg => {
-    const curvePoints = arcTo3DCurve(seg, bounds);
-    const netCrossing = checkNetCrossing(curvePoints);
-    return {
-      curvePoints,
-      isToss: seg.isToss,
-      netCrossing,
-      startFrame: seg.points[0].frame,
-      endFrame: seg.points[seg.points.length - 1].frame,
-    };
-  });
-
-  // Build allPoints for ball position lookup (from filtered data)
-  const allPoints = filtered.map(p => ({
-    frame: p.frame,
-    pos: videoToTable(p.x, p.y, bounds),
-  }));
-
-  return { arcs, allPoints, bounds };
-}
-
-/**
- * Compute predicted trajectory arc from current ball velocity.
- *
- * Physics model:
- *   - Velocities are computed in "3D meters per frame" from recent positions
- *   - Converted to m/s using the video FPS for proper gravity integration
- *   - Gravity (9.81 m/s²) applied to vertical velocity each timestep
- *   - Bounce on table surface with restitution coefficient
- *   - Net collision at x=0 (net height = SURFACE_Y + NET_H)
- *   - Ball stops if it hits the net or goes below the floor
- */
+// Compute predicted trajectory arc from velocity.
+// Uses averaged velocity over a wider window to avoid jitter.
 function computePrediction(
   points: { pos: [number, number, number]; frame: number }[],
   currentFrame: number,
-  fps: number,
-  steps = 60
+  steps = 40
 ): [number, number, number][] {
-  const recent = points.filter((p) => p.frame <= currentFrame).slice(-15);
-  if (recent.length < 4) return [];
+  // Increased from 12 to 20 points for more stable predictions
+  const recent = points.filter((p) => p.frame <= currentFrame).slice(-20);
+  if (recent.length < 6) return []; // Require more points for better accuracy
 
   const last = recent[recent.length - 1];
 
-  // Compute weighted average velocity (meters per frame)
+  // Average velocity over multiple consecutive pairs for stability
+  // Use weighted average - more recent frames have higher weight
   let sumVx = 0, sumVz = 0, sumVy = 0, totalWeight = 0;
   for (let i = 1; i < recent.length; i++) {
     const frameDiff = recent[i].frame - recent[i - 1].frame;
     if (frameDiff > 0 && frameDiff < 10) {
-      const weight = i / recent.length; // recent frames weighted more
+      // Weight decreases linearly with distance from current frame
+      const weight = i / recent.length;
       const vx = (recent[i].pos[0] - recent[i - 1].pos[0]) / frameDiff;
       const vz = (recent[i].pos[2] - recent[i - 1].pos[2]) / frameDiff;
       const vy = (recent[i].pos[1] - recent[i - 1].pos[1]) / frameDiff;
@@ -518,61 +128,29 @@ function computePrediction(
   }
   if (totalWeight === 0) return [];
 
-  // Velocity in m/frame → convert to m/s for physics
-  const effectiveFps = fps > 0 ? fps : 30;
-  const vxPerFrame = sumVx / totalWeight;
-  const vzPerFrame = sumVz / totalWeight;
-  const vyPerFrame = sumVy / totalWeight;
-
-  let vxSec = vxPerFrame * effectiveFps;
-  let vzSec = vzPerFrame * effectiveFps;
-  let vySec = vyPerFrame * effectiveFps;
-
-  // If vertical velocity is near zero or slightly negative, give a small
-  // upward boost for a more natural arc prediction
-  if (vySec < 0.3 && vySec > -2.0) {
-    vySec = Math.max(vySec, 0.8);
-  }
-
-  const dt = 1.0 / effectiveFps; // timestep in seconds
-  const netTopY = SURFACE_Y + NET_H;
+  const vx = sumVx / totalWeight;
+  const vz = sumVz / totalWeight;
+  const vy = sumVy / totalWeight || 0.05; // Use calculated vertical velocity or small upward arc
+  const dt = 0.033; // ~30fps time step
 
   const path: [number, number, number][] = [last.pos];
   let x = last.pos[0], y = last.pos[1], z = last.pos[2];
+  let cvx = vx, cvy = vy, cvz = vz;
 
   for (let i = 0; i < steps; i++) {
-    // Integrate position
-    x += vxSec * dt;
-    vySec -= GRAVITY * dt; // gravity: decelerate upward / accelerate downward
-    y += vySec * dt;
-    z += vzSec * dt;
+    x += cvx;
+    cvy -= GRAVITY * dt * dt;
+    y += cvy;
+    z += cvz;
 
-    // Net collision: ball crosses x=0 plane and is below net top
-    const prevX = path[path.length - 1][0];
-    if ((prevX < 0 && x >= 0) || (prevX > 0 && x <= 0)) {
-      if (y < netTopY) {
-        // Ball hits the net — stop prediction here
-        path.push([0, y, z]);
-        break;
-      }
+    // Bounce off table surface
+    if (y < SURFACE_Y + 0.01 && Math.abs(x) < TABLE_W / 2 && Math.abs(z) < TABLE_D / 2) {
+      y = SURFACE_Y + 0.01;
+      cvy = Math.abs(cvy) * RESTITUTION;
     }
 
-    // Bounce off table surface (only if ball is above the table area)
-    if (y <= SURFACE_Y + 0.005 && Math.abs(x) <= TABLE_W / 2 && Math.abs(z) <= TABLE_D / 2) {
-      y = SURFACE_Y + 0.005;
-      vySec = Math.abs(vySec) * RESTITUTION;
-      // Dampen horizontal velocity slightly on bounce
-      vxSec *= 0.95;
-      vzSec *= 0.95;
-      // Stop bouncing if velocity is negligible
-      if (Math.abs(vySec) < 0.05) break;
-    }
-
-    // Ball fell off the table and below floor
+    // Stop if off table and below surface
     if (y < 0) break;
-
-    // Ball went far off scene — stop rendering (wider range now)
-    if (Math.abs(x) > TABLE_W * 3 || Math.abs(z) > TABLE_D * 3) break;
 
     path.push([x, y, z]);
   }
@@ -619,12 +197,11 @@ function computeWhatIfArc(
 }
 
 function BallTrajectory({
-  trajectoryData, currentFrame, mode, fps, whatIfStart, whatIfSpeed, whatIfAngle, whatIfDir,
+  trajectoryData, currentFrame, mode, whatIfStart, whatIfSpeed, whatIfAngle, whatIfDir,
 }: {
   trajectoryData?: TrajectoryData;
   currentFrame: number;
   mode: PhysicsMode;
-  fps: number;
   whatIfStart: [number, number, number] | null;
   whatIfSpeed: number;
   whatIfAngle: number;
@@ -633,67 +210,73 @@ function BallTrajectory({
   const ballRef = useRef<THREE.Mesh>(null);
   const glowRef = useRef<THREE.Mesh>(null);
 
-  // Full pipeline: filter → events → arcs → curves → net check
-  const processed = useMemo((): ProcessedTrajectory => {
-    if (!trajectoryData?.frames?.length) {
-      return { arcs: [], allPoints: [], bounds: computeTrajectoryBounds([{ frame: 0, x: 0, y: 0, confidence: 0, isToss: false }]) };
+  const videoW = trajectoryData?.video_info?.width ?? 1280;
+  const videoH = trajectoryData?.video_info?.height ?? 828;
+
+  // Max 3D distance between consecutive points before treating it as tracking noise.
+  // Table is ~2.74m wide; a fast rally moves ~0.3m per frame max.
+  const jump3D = 0.45;
+
+  const points3D = useMemo(() => {
+    if (!trajectoryData?.frames?.length) return [];
+    const raw = trajectoryData.frames.map((f: TrajectoryPoint) => ({
+      frame: f.frame,
+      pos: videoToTable(f.x, f.y, videoW, videoH),
+    }));
+    // Filter out points that jump unreasonably far from their predecessor
+    const filtered: typeof raw = [];
+    for (let i = 0; i < raw.length; i++) {
+      if (filtered.length === 0) {
+        filtered.push(raw[i]);
+        continue;
+      }
+      const prev = filtered[filtered.length - 1].pos;
+      const cur = raw[i].pos;
+      const dx = cur[0] - prev[0];
+      const dy = cur[1] - prev[1];
+      const dz = cur[2] - prev[2];
+      const dist = Math.sqrt(dx * dx + dy * dy + dz * dz);
+      if (dist < jump3D || raw[i].frame - filtered[filtered.length - 1].frame > 10) {
+        // Accept if distance is small, or enough frames have passed that a
+        // large move is plausible (e.g. after a long gap in detections)
+        filtered.push(raw[i]);
+      }
+      // Otherwise skip this noisy point entirely
     }
-    return processTrajectory(trajectoryData.frames);
-  }, [trajectoryData]);
+    return filtered;
+  }, [trajectoryData, videoW, videoH, jump3D]);
 
-  const { arcs, allPoints, bounds } = processed;
+  const trailPath = useMemo((): [number, number, number][] => {
+    return points3D.filter((p) => p.frame <= currentFrame).map((p) => p.pos);
+  }, [points3D, currentFrame]);
 
-  // Find arcs visible at the current frame
-  const visibleArcs = useMemo(() => {
-    return arcs.filter(a => a.startFrame <= currentFrame);
-  }, [arcs, currentFrame]);
+  const recentTrail = useMemo((): [number, number, number][] => trailPath.slice(-60), [trailPath]);
 
-  // Current arc (the one being actively drawn)
-  const currentArc = useMemo(() => {
-    return arcs.find(a => a.startFrame <= currentFrame && a.endFrame >= currentFrame) ?? null;
-  }, [arcs, currentFrame]);
-
-  // For the current arc, compute partial curve up to currentFrame
-  const currentArcPartial = useMemo((): [number, number, number][] | null => {
-    if (!currentArc || !currentArc.curvePoints.length) return null;
-    const totalFrameSpan = currentArc.endFrame - currentArc.startFrame || 1;
-    const progress = (currentFrame - currentArc.startFrame) / totalFrameSpan;
-    const clampedProgress = Math.min(1, Math.max(0, progress));
-    const endIdx = Math.ceil(clampedProgress * (currentArc.curvePoints.length - 1));
-    return currentArc.curvePoints.slice(0, endIdx + 1);
-  }, [currentArc, currentFrame]);
-
-  // Ball target position — sampled from the smooth CatmullRom curve
-  // so the ball follows the exact same smooth path as the rendered arcs.
-  const targetPos = useMemo((): [number, number, number] | null => {
-    // If we're inside a current arc, sample the curve at the right progress
-    if (currentArc && currentArc.curvePoints.length >= 2) {
-      const totalFrameSpan = currentArc.endFrame - currentArc.startFrame || 1;
-      const progress = Math.min(1, Math.max(0, (currentFrame - currentArc.startFrame) / totalFrameSpan));
-      const idx = progress * (currentArc.curvePoints.length - 1);
-      const lo = Math.floor(idx);
-      const hi = Math.min(lo + 1, currentArc.curvePoints.length - 1);
-      const t = idx - lo;
-      const a = currentArc.curvePoints[lo];
-      const b = currentArc.curvePoints[hi];
-      return [
-        a[0] + (b[0] - a[0]) * t,
-        a[1] + (b[1] - a[1]) * t,
-        a[2] + (b[2] - a[2]) * t,
-      ];
+  // Smoothed target position — average the last few valid 3D points to
+  // avoid the ball marker swashing around from frame-to-frame noise.
+  const targetPos = useMemo(() => {
+    if (!points3D.length) return null;
+    const visible = points3D.filter((p) => p.frame <= currentFrame);
+    if (!visible.length) return points3D[0].pos;
+    // Average the last 3 positions for a stable target
+    const tail = visible.slice(-3);
+    const avg: [number, number, number] = [0, 0, 0];
+    for (const p of tail) {
+      avg[0] += p.pos[0];
+      avg[1] += p.pos[1];
+      avg[2] += p.pos[2];
     }
-    // Between arcs or before first arc — fall back to nearest filtered point
-    if (!allPoints.length) return null;
-    const visible = allPoints.filter(p => p.frame <= currentFrame);
-    if (!visible.length) return allPoints[0].pos;
-    return visible[visible.length - 1].pos;
-  }, [currentArc, allPoints, currentFrame]);
+    avg[0] /= tail.length;
+    avg[1] /= tail.length;
+    avg[2] /= tail.length;
+    return avg;
+  }, [points3D, currentFrame]);
 
   // Predicted path
   const predictedPath = useMemo((): [number, number, number][] => {
-    if (mode !== "predict" || !allPoints.length) return [];
-    return computePrediction(allPoints, currentFrame, fps);
-  }, [mode, allPoints, currentFrame, fps]);
+    if (mode !== "predict" || !points3D.length) return [];
+    return computePrediction(points3D, currentFrame);
+  }, [mode, points3D, currentFrame]);
 
   // What-if arc
   const whatIfPath = useMemo((): [number, number, number][] => {
@@ -719,10 +302,10 @@ function BallTrajectory({
     if (mode === "whatif" && whatIfStart) {
       ballRef.current.position.set(whatIfStart[0], whatIfStart[1], whatIfStart[2]);
     } else {
-      // Smooth lerp — 0.2 gives a gentle glide along the curve
-      ballRef.current.position.x = THREE.MathUtils.lerp(ballRef.current.position.x, targetPos[0], 0.2);
-      ballRef.current.position.y = THREE.MathUtils.lerp(ballRef.current.position.y, targetPos[1], 0.2);
-      ballRef.current.position.z = THREE.MathUtils.lerp(ballRef.current.position.z, targetPos[2], 0.2);
+      // Higher lerp factor since targetPos is already smoothed (averaged over last 3 points)
+      ballRef.current.position.x = THREE.MathUtils.lerp(ballRef.current.position.x, targetPos[0], 0.35);
+      ballRef.current.position.y = THREE.MathUtils.lerp(ballRef.current.position.y, targetPos[1], 0.35);
+      ballRef.current.position.z = THREE.MathUtils.lerp(ballRef.current.position.z, targetPos[2], 0.35);
     }
     if (glowRef.current) {
       glowRef.current.position.copy(ballRef.current.position);
@@ -737,55 +320,10 @@ function BallTrajectory({
 
   const ballPos = mode === "whatif" && whatIfStart ? whatIfStart : targetPos!;
 
-  // Determine which arcs are "recent" (last 2 fully visible arcs) vs "old"
-  const recentArcCount = 2;
-  const fullyVisibleArcs = visibleArcs.filter(a => a.endFrame <= currentFrame);
-  const recentCutoff = fullyVisibleArcs.length - recentArcCount;
-
   return (
     <group>
-      {/* Render completed arcs */}
-      {fullyVisibleArcs.map((arc, i) => {
-        if (arc.curvePoints.length < 2) return null;
-        const isRecent = i >= recentCutoff;
-        const isToss = arc.isToss;
-        const clips = arc.netCrossing === "clips";
-
-        // Color: rally arcs bronze, toss arcs fainter, net clips red
-        const color = clips ? "#C45C5C" : "#9B7B5B";
-        const opacity = isToss ? 0.12 : isRecent ? 0.5 : 0.12;
-        const lineWidth = isToss ? 1 : isRecent ? 2 : 1;
-
-        return (
-          <group key={`arc-${arc.startFrame}`}>
-            <Line
-              points={arc.curvePoints}
-              color={color}
-              transparent
-              opacity={opacity}
-              lineWidth={lineWidth}
-            />
-            {/* Net clip indicator: small X marker at net crossing */}
-            {clips && (
-              <mesh position={[0, SURFACE_Y + NET_H + 0.01, 0]}>
-                <sphereGeometry args={[0.015, 8, 8]} />
-                <meshBasicMaterial color="#C45C5C" transparent opacity={0.7} />
-              </mesh>
-            )}
-          </group>
-        );
-      })}
-
-      {/* Render current (in-progress) arc */}
-      {currentArcPartial && currentArcPartial.length >= 2 && (
-        <Line
-          points={currentArcPartial}
-          color={currentArc?.netCrossing === "clips" ? "#C45C5C" : "#9B7B5B"}
-          transparent
-          opacity={0.7}
-          lineWidth={2.5}
-        />
-      )}
+      {trailPath.length >= 2 && <Line points={trailPath} color="#9B7B5B" transparent opacity={0.15} lineWidth={1} />}
+      {recentTrail.length >= 2 && <Line points={recentTrail} color="#9B7B5B" transparent opacity={0.6} lineWidth={2} />}
 
       {/* Predicted path (dashed) */}
       {predictedPath.length >= 2 && (
@@ -805,26 +343,11 @@ function BallTrajectory({
         <Line points={whatIfPath} color="#5B9B7B" transparent opacity={0.8} lineWidth={2} />
       )}
 
-      {/* Ball shadow on table surface */}
-      <mesh
-        position={[ballPos[0], SURFACE_Y + 0.003, ballPos[2]]}
-        rotation={[-Math.PI / 2, 0, 0]}
-      >
-        <circleGeometry args={[0.025, 16]} />
-        <meshBasicMaterial
-          color="#000000"
-          transparent
-          opacity={Math.max(0.05, 0.4 - (ballPos[1] - SURFACE_Y) * 0.8)}
-          depthWrite={false}
-        />
-      </mesh>
-
-      {/* Ball glow */}
+      {/* Ball */}
       <mesh ref={glowRef} position={ballPos}>
         <sphereGeometry args={[0.04, 16, 16]} />
         <meshBasicMaterial color="#9B7B5B" transparent opacity={0.2} />
       </mesh>
-      {/* Ball */}
       <mesh ref={ballRef} position={ballPos} castShadow>
         <sphereGeometry args={[0.02, 16, 16]} />
         <meshStandardMaterial color="#F5F5F0" emissive="#9B7B5B" emissiveIntensity={0.3} roughness={0.2} metalness={0.1} />
@@ -848,16 +371,12 @@ function ImpactHeatmap({ trajectoryData }: { trajectoryData?: TrajectoryData }) 
   const texture = useMemo(() => {
     const BINS_X = 80, BINS_Z = 50;
     const grid = Array.from({ length: BINS_Z }, () => new Float32Array(BINS_X));
-    const filtered = trajectoryData?.frames?.length
-      ? filterTrajectoryNoise(trajectoryData.frames)
-      : [];
-    const hBounds = filtered.length
-      ? computeTrajectoryBounds(filtered)
-      : computeTrajectoryBounds([{ frame: 0, x: 0, y: 0, confidence: 0, isToss: false }]);
+    const videoW = trajectoryData?.video_info?.width ?? 1280;
+    const videoH = trajectoryData?.video_info?.height ?? 828;
 
-    if (filtered.length) {
-      for (const f of filtered) {
-        const [tx, , tz] = videoToTable(f.x, f.y, hBounds);
+    if (trajectoryData?.frames) {
+      for (const f of trajectoryData.frames) {
+        const [tx, , tz] = videoToTable(f.x, f.y, videoW, videoH);
         const bx = Math.floor(((tx + TABLE_W / 2) / TABLE_W) * BINS_X);
         const bz = Math.floor(((tz + TABLE_D / 2) / TABLE_D) * BINS_Z);
         // Gaussian splat: spread each point across a 5x5 kernel for smooth gradients
@@ -976,30 +495,6 @@ function PosePlayers({ poseData, currentFrame }: { poseData?: PoseAnalysisData; 
   );
 }
 
-/** Animate camera to a preset position */
-function CameraController({ preset }: { preset: CameraPreset }) {
-  const { camera } = useThree();
-
-  useEffect(() => {
-    const target = CAMERA_PRESETS[preset].pos;
-    // Smoothly lerp the camera over ~20 frames
-    let frame = 0;
-    const startPos = camera.position.clone();
-    const endPos = new THREE.Vector3(...target);
-    const animate = () => {
-      frame++;
-      const t = Math.min(1, frame / 20);
-      const ease = t * (2 - t); // ease-out
-      camera.position.lerpVectors(startPos, endPos, ease);
-      camera.lookAt(0, TABLE_H, 0);
-      if (t < 1) requestAnimationFrame(animate);
-    };
-    animate();
-  }, [preset, camera]);
-
-  return null;
-}
-
 function PlayerCapsule({ position, color }: { position: [number, number, number]; color: string }) {
   const ref = useRef<THREE.Mesh>(null);
   useFrame(() => {
@@ -1017,11 +512,10 @@ function PlayerCapsule({ position, color }: { position: [number, number, number]
 }
 
 function Scene({
-  trajectoryData, poseData, currentFrame, totalFrames, mode, fps,
+  trajectoryData, poseData, currentFrame, totalFrames, mode,
   whatIfStart, setWhatIfStart, whatIfSpeed, whatIfAngle, whatIfDir,
 }: Omit<BirdEyeViewProps, "isPlaying"> & {
   mode: PhysicsMode;
-  fps: number;
   whatIfStart: [number, number, number] | null;
   setWhatIfStart: (p: [number, number, number] | null) => void;
   whatIfSpeed: number;
@@ -1041,7 +535,7 @@ function Scene({
       <pointLight position={[-2, 3, -1]} intensity={0.3} color="#9B7B5B" />
       <Table onClick={mode === "whatif" ? handleTableClick : undefined} />
       <BallTrajectory
-        trajectoryData={trajectoryData} currentFrame={currentFrame} mode={mode} fps={fps}
+        trajectoryData={trajectoryData} currentFrame={currentFrame} mode={mode}
         whatIfStart={whatIfStart} whatIfSpeed={whatIfSpeed} whatIfAngle={whatIfAngle} whatIfDir={whatIfDir}
       />
       {mode === "heatmap" && <ImpactHeatmap trajectoryData={trajectoryData} />}
@@ -1051,9 +545,7 @@ function Scene({
 }
 
 export function BirdEyeView({ trajectoryData, poseData, currentFrame, totalFrames, isPlaying }: BirdEyeViewProps) {
-  const [mode, setMode] = useState<PhysicsMode>("predict");
-  const [cameraPreset, setCameraPreset] = useState<CameraPreset>("default");
-  const fps = trajectoryData?.video_info?.fps ?? 30;
+  const [mode, setMode] = useState<PhysicsMode>("predict"); // Auto-enable prediction
   const [whatIfStart, setWhatIfStart] = useState<[number, number, number] | null>(null);
   const [whatIfSpeed, setWhatIfSpeed] = useState(3);
   const [whatIfAngle, setWhatIfAngle] = useState(15);
@@ -1077,20 +569,6 @@ export function BirdEyeView({ trajectoryData, poseData, currentFrame, totalFrame
           ))}
         </div>
         <div className="flex items-center gap-2">
-          {/* Camera preset buttons */}
-          <div className="flex items-center gap-0.5 px-1 py-0.5 rounded bg-black/40 backdrop-blur-sm">
-            {(Object.keys(CAMERA_PRESETS) as CameraPreset[]).map((p) => (
-              <button
-                key={p}
-                onClick={() => setCameraPreset(p)}
-                className={`px-1.5 py-0.5 rounded text-[8px] transition-colors ${
-                  cameraPreset === p ? "bg-[#9B7B5B]/40 text-foreground" : "text-muted-foreground hover:text-foreground"
-                }`}
-              >
-                {CAMERA_PRESETS[p].label}
-              </button>
-            ))}
-          </div>
           <div className="flex items-center gap-1.5 px-2 py-1 rounded bg-black/40 backdrop-blur-sm">
             <div className="w-2 h-2 rounded-full bg-[#F5F5F0] border border-[#9B7B5B]" />
             <span className="text-[9px] text-muted-foreground">Ball</span>
@@ -1131,25 +609,19 @@ export function BirdEyeView({ trajectoryData, poseData, currentFrame, totalFrame
 
       <div className="h-full min-h-[16rem] flex-1">
         <Canvas
-          camera={{
-            position: CAMERA_PRESETS.default.pos,
-            fov: 38,
-            near: 0.1,
-            far: 50,
-          }}
+          camera={{ position: [0, 2.5, 2.8], fov: 45, near: 0.1, far: 50 }}
           shadows
           gl={{ alpha: true, antialias: true }}
           dpr={[1, 2]}
           style={{ background: "transparent" }}
         >
           <Suspense fallback={null}>
-            <CameraController preset={cameraPreset} />
             <Scene
               trajectoryData={trajectoryData} poseData={poseData} currentFrame={currentFrame} totalFrames={totalFrames}
-              mode={mode} fps={fps} whatIfStart={whatIfStart} setWhatIfStart={setWhatIfStart}
+              mode={mode} whatIfStart={whatIfStart} setWhatIfStart={setWhatIfStart}
               whatIfSpeed={whatIfSpeed} whatIfAngle={whatIfAngle} whatIfDir={whatIfDir}
             />
-            <OrbitControls enablePan enableZoom enableRotate target={[0, TABLE_H, 0]} minDistance={0.8} maxDistance={8} maxPolarAngle={Math.PI / 2.1} />
+            <OrbitControls enablePan enableZoom enableRotate target={[0, TABLE_H, 0]} minDistance={1} maxDistance={8} maxPolarAngle={Math.PI / 2.1} />
           </Suspense>
         </Canvas>
       </div>

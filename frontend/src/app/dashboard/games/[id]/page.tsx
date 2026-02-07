@@ -1631,17 +1631,8 @@ export default function GameViewerPage() {
                       </>
                     )}
 
-                    {/* ── Processing / Error / Empty states ── */}
-                    {isPoseProcessing ? (
-                      <div className="text-center py-6">
-                        <Loader2 className="w-6 h-6 text-[#9B7B5B] mx-auto mb-3 animate-spin" />
-                        <p className="text-xs text-[#E8E6E3] mb-1">Pose estimation running...</p>
-                        <p className="text-[10px] text-[#6A6865]">Analyzing player movements frame by frame.</p>
-                        {session?.selected_player && (
-                          <p className="text-[10px] text-[#9B7B5B] mt-2">Tracking Player {session.selected_player.player_idx + 1}</p>
-                        )}
-                      </div>
-                    ) : session?.status === "failed" && !hasPose ? (
+                    {/* ── Error / Empty states ── */}
+                    {session?.status === "failed" && !hasPose ? (
                       <div className="text-center py-6">
                         <Activity className="w-6 h-6 text-[#C45C5C] mx-auto mb-3" />
                         <p className="text-xs text-[#C45C5C] mb-1">Pose analysis failed</p>
@@ -1668,7 +1659,7 @@ export default function GameViewerPage() {
               {/* Analytics Dashboard — full-width panel */}
               {activeTab === "analytics" && (
                 <div className="bg-background/60 dark:bg-content1/60 rounded-xl overflow-y-auto h-full">
-                  <AnalyticsDashboard sessionId={gameId} onSeekToTime={handleAnalyticsSeek} />
+                  <AnalyticsDashboard sessionId={gameId} onSeekToTime={handleAnalyticsSeek} playerName={firstPlayer?.name} />
                 </div>
               )}
 

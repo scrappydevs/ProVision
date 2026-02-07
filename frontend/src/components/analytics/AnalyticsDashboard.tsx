@@ -14,6 +14,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 interface AnalyticsDashboardProps {
   sessionId: string;
   onSeekToTime?: (timeSec: number) => void;
+  playerName?: string;
 }
 
 interface ChartClickPayload {
@@ -35,7 +36,7 @@ function formatBytes(size?: number): string {
   return `${(size / (1024 * 1024 * 1024)).toFixed(1)} GB`;
 }
 
-export function AnalyticsDashboard({ sessionId, onSeekToTime }: AnalyticsDashboardProps) {
+export function AnalyticsDashboard({ sessionId, onSeekToTime, playerName }: AnalyticsDashboardProps) {
   const queryClient = useQueryClient();
   const { data: analytics, isLoading, error } = useAnalytics(sessionId);
   const { data: poseData } = usePoseAnalysis(sessionId, 1000, 0);
@@ -343,6 +344,8 @@ export function AnalyticsDashboard({ sessionId, onSeekToTime }: AnalyticsDashboa
     return { avgHeight, highCount, lowCount, total: moments.length };
   }, [contact.contact_moments]);
 
+  const pName = playerName || "Player";
+
   // --- AI Insight generators ---
 
   const overviewInsight = useMemo(() => {
@@ -353,19 +356,19 @@ export function AnalyticsDashboard({ sessionId, onSeekToTime }: AnalyticsDashboa
         const weaker = dominant === "forehand-dominant" ? "backhand" : "forehand";
         parts.push(`Heavily ${dominant} shot selection. The ${weaker} is underused — opponents at this level will target that side to exploit the imbalance.`);
       } else {
-        parts.push(`Well-balanced shot selection between forehand and backhand, making the player tactically unpredictable.`);
+        parts.push(`Well-balanced shot selection between forehand and backhand, making ${pName} tactically unpredictable.`);
       }
     }
     if (consistency) {
-      if (consistency.score >= 80) parts.push(`Stroke mechanics are highly repeatable — a hallmark of elite-level technique.`);
-      else if (consistency.score < 50) parts.push(`Stroke technique varies significantly between shots. Under pressure, mechanics tend to break down — drilling fundamentals would help lock it in.`);
-      else parts.push(`Moderate stroke consistency. The best shots show what's possible, but the technique isn't fully locked in yet across every exchange.`);
+      if (consistency.score >= 80) parts.push(`${pName}'s stroke mechanics are highly repeatable — a hallmark of elite-level technique.`);
+      else if (consistency.score < 50) parts.push(`${pName}'s stroke technique varies significantly between shots. Under pressure, mechanics tend to break down — drilling fundamentals would help lock it in.`);
+      else parts.push(`Moderate stroke consistency. ${pName}'s best shots show what's possible, but the technique isn't fully locked in yet across every exchange.`);
     }
     if (hasOpponentData) {
       parts.push(`Opponent pose data available — comparative analysis included below.`);
     }
     return parts.length ? parts.join(" ") : null;
-  }, [shotMix, consistency, hasOpponentData]);
+  }, [shotMix, consistency, hasOpponentData, pName]);
 
   const speedInsight = useMemo(() => {
     const cvSpeed = ballSpeed.avg > 0 ? ballSpeed.stddev / ballSpeed.avg : 0;
@@ -387,11 +390,11 @@ export function AnalyticsDashboard({ sessionId, onSeekToTime }: AnalyticsDashboa
     const avgVel = movement.avg_velocity;
     const parts: string[] = [];
     if (avgVel < 1) {
-      parts.push("Minimal lateral movement — the player stays planted and relies on reach rather than footwork. At the professional level, better split-stepping and recovery movement would improve court coverage.");
+      parts.push(`Minimal lateral movement — ${pName} stays planted and relies on reach rather than footwork. Better split-stepping and recovery movement would improve court coverage.`);
     } else if (avgVel > 3) {
-      parts.push("Excellent court coverage with high movement speed. The player is reading the ball early and getting into position well ahead of contact.");
+      parts.push(`Excellent court coverage with high movement speed. ${pName} is reading the ball early and getting into position well ahead of contact.`);
     } else {
-      parts.push("Solid movement patterns with efficient positioning between shots.");
+      parts.push(`Solid movement patterns with efficient positioning between shots.`);
     }
     if (contactAnalysis && contactAnalysis.total > 3) {
       const highPct = Math.round((contactAnalysis.highCount / contactAnalysis.total) * 100);
@@ -400,7 +403,7 @@ export function AnalyticsDashboard({ sessionId, onSeekToTime }: AnalyticsDashboa
       if (lowPct > 40) parts.push(`${lowPct}% of contacts are below average height — often retrieving low balls, which limits attacking options.`);
     }
     return parts.join(" ");
-  }, [movement, contactAnalysis]);
+  }, [movement, contactAnalysis, pName]);
 
   const jointInsight = useMemo(() => {
     if (playerFrames.length === 0) return null;
@@ -425,7 +428,7 @@ export function AnalyticsDashboard({ sessionId, onSeekToTime }: AnalyticsDashboa
         const diff = Math.abs(pAvg - oAvg);
         if (diff > 10) {
           const more = pAvg > oAvg ? "more extended" : "more compact";
-          parts.push(`Player's elbow averages ${Math.round(pAvg)}° vs opponent's ${Math.round(oAvg)}° — player uses a ${more} stroke, ${pAvg > oAvg ? "generating more power but needing faster recovery" : "trading raw power for quicker transitions"}.`);
+          parts.push(`${pName}'s elbow averages ${Math.round(pAvg)}° vs opponent's ${Math.round(oAvg)}° — ${pName} uses a ${more} stroke, ${pAvg > oAvg ? "generating more power but needing faster recovery" : "trading raw power for quicker transitions"}.`);
         } else {
           parts.push(`Both players use similar elbow angles (~${Math.round(pAvg)}°), suggesting comparable stroke mechanics.`);
         }
@@ -435,9 +438,9 @@ export function AnalyticsDashboard({ sessionId, onSeekToTime }: AnalyticsDashboa
         const pAvg = avgP(pKnees);
         const oAvg = avgP(oKnees);
         if (pAvg < oAvg - 8) {
-          parts.push(`Player maintains a lower stance (knee ${Math.round(pAvg)}° vs ${Math.round(oAvg)}°) — better loaded for explosive footwork.`);
+          parts.push(`${pName} maintains a lower stance (knee ${Math.round(pAvg)}° vs ${Math.round(oAvg)}°) — better loaded for explosive footwork.`);
         } else if (pAvg > oAvg + 8) {
-          parts.push(`Opponent sits lower (knee ${Math.round(oAvg)}° vs player's ${Math.round(pAvg)}°) — opponent has a more athletic base position.`);
+          parts.push(`Opponent sits lower (knee ${Math.round(oAvg)}° vs ${pName}'s ${Math.round(pAvg)}°) — opponent has a more athletic base position.`);
         }
       }
 
@@ -446,7 +449,7 @@ export function AnalyticsDashboard({ sessionId, onSeekToTime }: AnalyticsDashboa
         const oAvg = avgP(oHips);
         const diff = Math.abs(pAvg - oAvg);
         if (diff > 8) {
-          const who = pAvg > oAvg ? "Player" : "Opponent";
+          const who = pAvg > oAvg ? pName : "Opponent";
           parts.push(`${who} generates more hip rotation (${Math.round(Math.max(pAvg, oAvg))}° vs ${Math.round(Math.min(pAvg, oAvg))}°), translating to greater power transfer through the kinetic chain.`);
         }
       }
@@ -469,7 +472,7 @@ export function AnalyticsDashboard({ sessionId, onSeekToTime }: AnalyticsDashboa
     }
 
     return parts.length ? parts.join(" ") : null;
-  }, [playerFrames, opponentFrames, hasOpponentData]);
+  }, [playerFrames, opponentFrames, hasOpponentData, pName]);
 
   // Posture comparison insight (shoulder rotation & spine lean)
   const postureComparisonInsight = useMemo(() => {
@@ -488,7 +491,7 @@ export function AnalyticsDashboard({ sessionId, onSeekToTime }: AnalyticsDashboa
       const pRotation = Math.abs(avgP(pLShoulder) - avgP(pRShoulder));
       const oRotation = Math.abs(avgP(oLShoulder) - avgP(oRShoulder));
       if (Math.abs(pRotation - oRotation) > 5) {
-        const who = pRotation > oRotation ? "Player" : "Opponent";
+        const who = pRotation > oRotation ? pName : "Opponent";
         parts.push(`${who} shows greater shoulder rotation asymmetry (${Math.round(Math.max(pRotation, oRotation))}° diff vs ${Math.round(Math.min(pRotation, oRotation))}°), indicating more upper-body torque in strokes.`);
       }
     }
@@ -503,13 +506,13 @@ export function AnalyticsDashboard({ sessionId, onSeekToTime }: AnalyticsDashboa
       const pLean = Math.abs(avgP(pLKnee) - avgP(pRKnee));
       const oLean = Math.abs(avgP(oLKnee) - avgP(oRKnee));
       if (pLean > 10 || oLean > 10) {
-        const who = pLean > oLean ? "Player" : "Opponent";
+        const who = pLean > oLean ? pName : "Opponent";
         parts.push(`${who} leans more to one side (${Math.round(Math.max(pLean, oLean))}° knee asymmetry vs ${Math.round(Math.min(pLean, oLean))}°) — this could indicate a dominant-side weight transfer pattern.`);
       }
     }
 
     return parts.length ? parts.join(" ") : null;
-  }, [playerFrames, opponentFrames, hasOpponentData]);
+  }, [playerFrames, opponentFrames, hasOpponentData, pName]);
 
   const ballSpeedTimeline = ballSpeed.timeline.map((point) => ({
     ...point,
@@ -704,7 +707,7 @@ export function AnalyticsDashboard({ sessionId, onSeekToTime }: AnalyticsDashboa
                 {hasOpponentData ? (
                   <>
                     <Radar
-                      name="Player"
+                      name={pName}
                       dataKey="player"
                       stroke="#9B7B5B"
                       fill="#9B7B5B"
