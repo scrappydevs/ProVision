@@ -1906,7 +1906,7 @@ def _classify_events_with_claude(
     try:
         import anthropic
 
-        model = os.getenv("STROKE_CLAUDE_MODEL", "claude-sonnet-4-20250514")
+        model = os.getenv("STROKE_CLAUDE_MODEL", "claude-3-5-haiku-20241022")
         client = anthropic.Anthropic(api_key=anthropic_key)
 
         storage_path = extract_video_path_from_url(video_url)

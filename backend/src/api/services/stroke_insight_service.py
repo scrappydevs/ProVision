@@ -203,11 +203,15 @@ def _generate_timeline_tips_from_insights(
     out: List[Dict[str, Any]] = []
     
     for s in strokes:
-        if not _is_player_stroke_for_insights(s):
+        # Include all non-opponent strokes (use the broader _is_player_stroke check
+        # instead of _is_player_stroke_for_insights which has a confidence threshold
+        # that can exclude legitimate player strokes)
+        if _is_reliable_opponent_stroke(s):
             continue
         
         ai_insight = str(s.get("ai_insight") or "").strip()
-        if not ai_insight:
+        # Skip strokes that are explicitly marked as opponent in their insight text
+        if ai_insight and "opponent stroke" in ai_insight.lower():
             continue
         
         stroke_type = str(s.get("stroke_type") or "").strip().lower()
@@ -219,8 +223,14 @@ def _generate_timeline_tips_from_insights(
         peak_time = round(peak_frame / fps, 3)
         start_time = round(start_frame / fps, 3)
         
-        # Tip duration: show for 3.5 seconds around the stroke
-        tip_duration = 3.5
+        # Tip duration: show for 2.5 seconds (shorter to avoid overlap with next stroke)
+        tip_duration = 2.5
+        
+        # Use AI insight if available, otherwise generate a basic tip from metrics
+        if ai_insight:
+            message = _normalize_tip_message(ai_insight)
+        else:
+            message = f"{stroke_type.title()} stroke detected at frame {peak_frame}."
         
         out.append(
             {
@@ -229,20 +239,15 @@ def _generate_timeline_tips_from_insights(
                 "duration": tip_duration,
                 "seek_time": start_time,
                 "title": _stroke_title(stroke_type, form_score)[:64],
-                "message": _normalize_tip_message(ai_insight),
+                "message": message,
                 "source_stroke_id": s.get("id"),
             }
         )
 
-    # Sort by timestamp and enforce minimum 1.5s spacing
+    # Sort by timestamp — no spacing filter so every stroke gets a tip
     out.sort(key=lambda t: t["timestamp"])
-    spaced: List[Dict[str, Any]] = []
-    for tip in out:
-        prev = spaced[-1] if spaced else None
-        if not prev or tip["timestamp"] - prev["timestamp"] >= 1.5:
-            spaced.append(tip)
     
-    return spaced
+    return out
 
 
 def _extract_frames_for_insight(
@@ -420,7 +425,7 @@ def generate_insight_for_stroke(
     try:
         response = client.messages.create(
             model=model,
-            max_tokens=500,
+            max_tokens=350,  # Reduced for faster, more concise responses
             temperature=0,
             system=system_prompt,
             messages=[{"role": "user", "content": user_content}],
@@ -541,7 +546,7 @@ def generate_insights_for_session(
     try:
         import anthropic
 
-        model = os.getenv("STROKE_CLAUDE_MODEL", "claude-sonnet-4-20250514")
+        model = os.getenv("STROKE_CLAUDE_MODEL", "claude-3-5-haiku-20241022")
         client = anthropic.Anthropic(api_key=anthropic_key)
 
         storage_path = extract_video_path_from_url(video_url)
