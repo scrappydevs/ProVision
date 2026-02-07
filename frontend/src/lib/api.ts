@@ -482,6 +482,9 @@ export const getPlayerGames = (
 export interface AIChatRequest {
   message: string;
   session_id: string;
+  player_id?: string;
+  player_name?: string;
+  context_summary?: string;
   history?: Array<{ role: string; content: string }>;
 }
 

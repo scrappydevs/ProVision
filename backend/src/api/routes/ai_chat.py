@@ -1,130 +1,35 @@
 import os
+import logging
 from typing import Optional, List
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
 
 from ..database.supabase import get_supabase, get_current_user_id
 
+logger = logging.getLogger(__name__)
 router = APIRouter()
 
-ANTHROPIC_API_KEY = os.getenv("ANTHROPIC_API_KEY", "")
+SYSTEM_PROMPT = """You are an elite AI table tennis coaching analyst for ProVision.
+You have deep knowledge of table tennis technique, biomechanics, training methodology, and match strategy.
 
-SYSTEM_PROMPT = """You are an AI sports analyst for ProVision, a ping pong / table tennis analysis platform.
-You have access to tools that let you query game data. When the user asks about a game, use the appropriate tools.
+You are provided with rich context about the player, their recordings, match history, stroke analysis, and performance data.
+Use this data to give highly specific, actionable coaching advice.
 
-Available data you can reference:
-- Ball trajectory (position per frame, velocity, spin estimate)
-- Pose analysis (skeleton keypoints, joint angles, body metrics)
-- Session/game metadata (name, status, video path)
-
-Be concise but insightful. Use sports coaching terminology. Format responses with markdown bold for key terms.
-When giving technique advice, be specific and actionable."""
-
-TOOLS = [
-    {
-        "name": "get_ball_trajectory",
-        "description": "Get ball tracking trajectory data including position per frame, velocity, and spin estimate",
-        "input_schema": {
-            "type": "object",
-            "properties": {
-                "session_id": {"type": "string", "description": "The game session ID"}
-            },
-            "required": ["session_id"]
-        }
-    },
-    {
-        "name": "get_pose_data",
-        "description": "Get player pose analysis data including skeleton keypoints and joint angles",
-        "input_schema": {
-            "type": "object",
-            "properties": {
-                "session_id": {"type": "string", "description": "The game session ID"}
-            },
-            "required": ["session_id"]
-        }
-    },
-    {
-        "name": "get_game_info",
-        "description": "Get game session metadata including name, status, and available analysis",
-        "input_schema": {
-            "type": "object",
-            "properties": {
-                "session_id": {"type": "string", "description": "The game session ID"}
-            },
-            "required": ["session_id"]
-        }
-    },
-    {
-        "name": "analyze_technique",
-        "description": "Analyze player technique based on pose and trajectory data, providing coaching tips",
-        "input_schema": {
-            "type": "object",
-            "properties": {
-                "session_id": {"type": "string", "description": "The game session ID"},
-                "focus": {"type": "string", "description": "What to focus on: stroke, footwork, positioning, serve"}
-            },
-            "required": ["session_id"]
-        }
-    }
-]
-
-
-def execute_tool(tool_name: str, tool_input: dict, user_id: str) -> str:
-    supabase = get_supabase()
-    session_id = tool_input.get("session_id", "")
-
-    try:
-        if tool_name == "get_ball_trajectory":
-            result = supabase.table("sessions").select("trajectory_data").eq("id", session_id).eq("user_id", user_id).single().execute()
-            if not result.data or not result.data.get("trajectory_data"):
-                return "No trajectory data available. The ball has not been tracked yet."
-            td = result.data["trajectory_data"]
-            frames = td.get("frames", [])
-            velocity = td.get("velocity", [])
-            spin = td.get("spin_estimate", "unknown")
-            avg_speed = sum(velocity) / len(velocity) if velocity else 0
-            peak_speed = max(velocity) if velocity else 0
-            return f"Trajectory: {len(frames)} frames tracked. Avg speed: {avg_speed:.1f} px/f. Peak speed: {peak_speed:.1f} px/f. Spin: {spin}."
-
-        elif tool_name == "get_pose_data":
-            result = supabase.table("sessions").select("pose_data, pose_video_path, status").eq("id", session_id).eq("user_id", user_id).single().execute()
-            if not result.data:
-                return "Session not found."
-            has_pose = bool(result.data.get("pose_video_path"))
-            status = result.data.get("status", "unknown")
-            pose = result.data.get("pose_data", {})
-            joint_angles = pose.get("joint_angles", {})
-            angle_summary = ", ".join(f"{k}: {v[-1]:.0f}°" for k, v in list(joint_angles.items())[:4] if v) if joint_angles else "No joint angle data"
-            return f"Pose analysis: {'Available' if has_pose else 'Not available'}. Status: {status}. Joint angles: {angle_summary}."
-
-        elif tool_name == "get_game_info":
-            result = supabase.table("sessions").select("name, status, video_path, ego_video_path, pose_video_path, trajectory_data").eq("id", session_id).eq("user_id", user_id).single().execute()
-            if not result.data:
-                return "Session not found."
-            d = result.data
-            has_traj = bool(d.get("trajectory_data", {}).get("frames"))
-            return f"Game: {d['name']}. Status: {d['status']}. Has video: {bool(d.get('video_path'))}. Has pose: {bool(d.get('pose_video_path'))}. Has trajectory: {has_traj}."
-
-        elif tool_name == "analyze_technique":
-            focus = tool_input.get("focus", "general")
-            result = supabase.table("sessions").select("trajectory_data, pose_data").eq("id", session_id).eq("user_id", user_id).single().execute()
-            if not result.data:
-                return "Session not found."
-            td = result.data.get("trajectory_data", {})
-            spin = td.get("spin_estimate", "unknown")
-            velocity = td.get("velocity", [])
-            avg_speed = sum(velocity) / len(velocity) if velocity else 0
-            return f"Technique analysis (focus: {focus}). Ball spin: {spin}, avg speed: {avg_speed:.1f} px/f. Ready for coaching recommendations."
-
-        else:
-            return f"Unknown tool: {tool_name}"
-    except Exception as e:
-        return f"Tool error: {str(e)}"
+Formatting rules:
+- Use **bold** for key terms and metrics
+- Be concise but insightful — coaches are busy
+- Reference specific data points (form scores, stroke counts, match results)
+- When suggesting improvements, be specific about the body mechanics
+- If asked to summarize, give a structured overview with strengths and areas to improve
+- If no data is available for something, say so honestly rather than guessing"""
 
 
 class ChatRequest(BaseModel):
     message: str
-    session_id: str
+    session_id: str = ""
+    player_id: Optional[str] = None
+    player_name: Optional[str] = None
+    context_summary: Optional[str] = None
     history: Optional[List[dict]] = None
 
 
@@ -133,68 +38,321 @@ class ChatResponse(BaseModel):
     tool_calls: List[dict] = []
 
 
+def _gather_player_context(player_id: str, user_id: str) -> str:
+    """Pull comprehensive player data from DB."""
+    supabase = get_supabase()
+    parts = []
+
+    try:
+        # Player profile
+        player = supabase.table("players").select(
+            "name, position, team, notes, handedness, is_active, ittf_id, ittf_data, created_at"
+        ).eq("id", player_id).eq("coach_id", user_id).single().execute()
+
+        if player.data:
+            p = player.data
+            parts.append(f"## Player Profile\n"
+                         f"Name: {p['name']}\n"
+                         f"Handedness: {p.get('handedness', 'unknown')}\n"
+                         f"Position: {p.get('position') or 'not set'}\n"
+                         f"Team: {p.get('team') or 'not set'}\n"
+                         f"Active: {p.get('is_active', True)}\n"
+                         f"Notes: {p.get('notes') or 'none'}")
+
+            # ITTF data
+            ittf = p.get("ittf_data")
+            if ittf:
+                parts.append(f"\n## ITTF Data\n"
+                             f"Ranking: {ittf.get('ranking', 'N/A')}\n"
+                             f"Career best: {ittf.get('career_best_ranking', 'N/A')}\n"
+                             f"Nationality: {ittf.get('nationality', 'N/A')}\n"
+                             f"Playing style: {ittf.get('playing_style', 'N/A')}\n"
+                             f"Career W/L: {ittf.get('career_wins', 0)}/{ittf.get('career_losses', 0)}\n"
+                             f"Senior titles: {ittf.get('senior_titles', 0)}")
+                recent = ittf.get("recent_matches", [])
+                if recent:
+                    parts.append("Recent ITTF matches:")
+                    for m in recent[:5]:
+                        parts.append(f"  - vs {m.get('opponent', '?')} at {m.get('tournament', '?')}: "
+                                     f"{m.get('score', '?')} ({m.get('result', '?')})")
+    except Exception as e:
+        logger.warning(f"Failed to get player profile: {e}")
+
+    try:
+        # Recordings
+        recs = supabase.table("recordings").select(
+            "id, title, type, session_id, duration, created_at, clip_start_time, clip_end_time"
+        ).eq("player_id", player_id).order("created_at", desc=True).limit(15).execute()
+
+        if recs.data:
+            parts.append(f"\n## Recordings ({len(recs.data)} total)")
+            for r in recs.data:
+                analyzed = "analyzed" if r.get("session_id") else "not analyzed"
+                dur = f"{r['duration']:.0f}s" if r.get("duration") else "unknown length"
+                parts.append(f"  - {r['title']} [{r['type']}] ({analyzed}, {dur})")
+    except Exception as e:
+        logger.warning(f"Failed to get recordings: {e}")
+
+    try:
+        # Game sessions for this player (via game_players junction)
+        gp = supabase.table("game_players").select("game_id").eq("player_id", player_id).execute()
+        if gp.data:
+            game_ids = [g["game_id"] for g in gp.data]
+            sessions = supabase.table("sessions").select(
+                "id, name, status, created_at, stroke_summary, trajectory_data"
+            ).in_("id", game_ids).order("created_at", desc=True).limit(10).execute()
+
+            if sessions.data:
+                parts.append(f"\n## Game Sessions ({len(sessions.data)} recent)")
+                for s in sessions.data:
+                    ss = s.get("stroke_summary") or {}
+                    traj = s.get("trajectory_data") or {}
+                    frames = len(traj.get("frames", []))
+                    strokes_info = ""
+                    if ss:
+                        strokes_info = (f"  Strokes: {ss.get('total_strokes', 0)} "
+                                        f"(FH:{ss.get('forehand_count', 0)} BH:{ss.get('backhand_count', 0)}) "
+                                        f"Avg form: {ss.get('average_form_score', 0):.1f} "
+                                        f"Best: {ss.get('best_form_score', 0):.1f} "
+                                        f"Consistency: {ss.get('consistency_score', 0):.1f}")
+                    parts.append(f"  - {s['name']} [{s['status']}] "
+                                 f"{'(' + str(frames) + ' trajectory frames)' if frames else ''}")
+                    if strokes_info:
+                        parts.append(strokes_info)
+    except Exception as e:
+        logger.warning(f"Failed to get sessions: {e}")
+
+    try:
+        # Stroke analytics across all their sessions
+        gp = supabase.table("game_players").select("game_id").eq("player_id", player_id).execute()
+        if gp.data:
+            game_ids = [g["game_id"] for g in gp.data]
+            strokes = supabase.table("stroke_analytics").select(
+                "session_id, stroke_type, form_score, max_velocity, duration, metrics"
+            ).in_("session_id", game_ids).order("created_at", desc=True).limit(50).execute()
+
+            if strokes.data:
+                fh = [s for s in strokes.data if s.get("stroke_type") == "forehand"]
+                bh = [s for s in strokes.data if s.get("stroke_type") == "backhand"]
+                fh_scores = [s["form_score"] for s in fh if s.get("form_score")]
+                bh_scores = [s["form_score"] for s in bh if s.get("form_score")]
+
+                parts.append(f"\n## Stroke Analytics (across all sessions)")
+                parts.append(f"Total analyzed: {len(strokes.data)} strokes ({len(fh)} FH, {len(bh)} BH)")
+                if fh_scores:
+                    parts.append(f"Forehand form: avg {sum(fh_scores)/len(fh_scores):.1f}, "
+                                 f"best {max(fh_scores):.1f}, worst {min(fh_scores):.1f}")
+                if bh_scores:
+                    parts.append(f"Backhand form: avg {sum(bh_scores)/len(bh_scores):.1f}, "
+                                 f"best {max(bh_scores):.1f}, worst {min(bh_scores):.1f}")
+
+                # Detailed metrics from a recent stroke
+                recent_with_metrics = [s for s in strokes.data if s.get("metrics")]
+                if recent_with_metrics:
+                    m = recent_with_metrics[0]["metrics"]
+                    metric_keys = list(m.keys())[:10]
+                    metrics_str = ", ".join(f"{k}: {m[k]}" for k in metric_keys if m.get(k) is not None)
+                    if metrics_str:
+                        parts.append(f"Recent stroke metrics: {metrics_str}")
+    except Exception as e:
+        logger.warning(f"Failed to get stroke analytics: {e}")
+
+    try:
+        # Tournament matchups
+        matchups = supabase.table("tournament_matchups").select(
+            "opponent_name, opponent_ranking, round, result, score, notes, tournaments(name)"
+        ).eq("player_id", player_id).order("created_at", desc=True).limit(10).execute()
+
+        if matchups.data:
+            parts.append(f"\n## Tournament History ({len(matchups.data)} matchups)")
+            for m in matchups.data:
+                tourn = m.get("tournaments", {})
+                t_name = tourn.get("name", "?") if isinstance(tourn, dict) else "?"
+                result = m.get("result", "pending")
+                parts.append(f"  - vs {m['opponent_name']} "
+                             f"(rank: {m.get('opponent_ranking', '?')}) "
+                             f"at {t_name} [{m.get('round', '?')}]: "
+                             f"{result} {m.get('score', '')}")
+    except Exception as e:
+        logger.warning(f"Failed to get matchups: {e}")
+
+    return "\n".join(parts) if parts else "No player data found."
+
+
+def _gather_session_context(session_id: str, user_id: str) -> str:
+    """Pull comprehensive session/game data from DB."""
+    supabase = get_supabase()
+    parts = []
+
+    try:
+        session = supabase.table("sessions").select(
+            "name, status, video_path, pose_video_path, ego_video_path, "
+            "trajectory_data, pose_data, stroke_summary, camera_facing, created_at"
+        ).eq("id", session_id).eq("user_id", user_id).single().execute()
+
+        if not session.data:
+            return "Session not found."
+
+        s = session.data
+        parts.append(f"## Game Session\n"
+                     f"Name: {s['name']}\n"
+                     f"Status: {s['status']}\n"
+                     f"Has video: {bool(s.get('video_path'))}\n"
+                     f"Has pose overlay: {bool(s.get('pose_video_path'))}\n"
+                     f"Has ego view: {bool(s.get('ego_video_path'))}\n"
+                     f"Camera facing: {s.get('camera_facing', 'auto')}")
+
+        # Trajectory data
+        traj = s.get("trajectory_data") or {}
+        frames = traj.get("frames", [])
+        velocity = traj.get("velocity", [])
+        if frames:
+            avg_v = sum(velocity) / len(velocity) if velocity else 0
+            peak_v = max(velocity) if velocity else 0
+            parts.append(f"\n## Ball Tracking\n"
+                         f"Frames tracked: {len(frames)}\n"
+                         f"Avg speed: {avg_v:.1f} px/frame\n"
+                         f"Peak speed: {peak_v:.1f} px/frame\n"
+                         f"Spin estimate: {traj.get('spin_estimate', 'unknown')}")
+
+        # Stroke summary
+        ss = s.get("stroke_summary") or {}
+        if ss:
+            parts.append(f"\n## Stroke Summary\n"
+                         f"Total: {ss.get('total_strokes', 0)} "
+                         f"(FH: {ss.get('forehand_count', 0)}, BH: {ss.get('backhand_count', 0)})\n"
+                         f"Avg form: {ss.get('average_form_score', 0):.1f}/100\n"
+                         f"Best form: {ss.get('best_form_score', 0):.1f}/100\n"
+                         f"Consistency: {ss.get('consistency_score', 0):.1f}/100")
+
+    except Exception as e:
+        logger.warning(f"Failed to get session: {e}")
+
+    try:
+        # Detailed stroke analytics for this session
+        strokes = supabase.table("stroke_analytics").select(
+            "stroke_type, form_score, max_velocity, duration, peak_frame, start_frame, end_frame, metrics"
+        ).eq("session_id", session_id).order("start_frame").execute()
+
+        if strokes.data:
+            parts.append(f"\n## Individual Strokes ({len(strokes.data)})")
+            for i, st in enumerate(strokes.data[:20], 1):
+                m = st.get("metrics") or {}
+                metrics_str = ""
+                if m:
+                    interesting = {k: v for k, v in m.items()
+                                   if v is not None and k in (
+                                       "elbow_angle_at_contact", "shoulder_rotation",
+                                       "hip_rotation", "wrist_snap_speed",
+                                       "contact_height", "follow_through_angle",
+                                       "stance_width", "knee_bend")}
+                    if interesting:
+                        metrics_str = " | " + ", ".join(f"{k}: {v}" for k, v in interesting.items())
+                parts.append(f"  {i}. {st['stroke_type']} — form: {st.get('form_score', 0):.0f} "
+                             f"vel: {st.get('max_velocity', 0):.1f} "
+                             f"dur: {st.get('duration', 0):.2f}s{metrics_str}")
+    except Exception as e:
+        logger.warning(f"Failed to get stroke analytics: {e}")
+
+    try:
+        # Pose analysis summary (sample a few frames)
+        pose = supabase.table("pose_analysis").select(
+            "frame_number, keypoints, joint_angles, body_metrics"
+        ).eq("session_id", session_id).order("frame_number").limit(5).execute()
+
+        if pose.data:
+            parts.append(f"\n## Pose Analysis (sampled {len(pose.data)} frames)")
+            for frame in pose.data[:3]:
+                ja = frame.get("joint_angles") or {}
+                bm = frame.get("body_metrics") or {}
+                if ja:
+                    angles_str = ", ".join(f"{k}: {v}" for k, v in list(ja.items())[:6])
+                    parts.append(f"  Frame {frame['frame_number']}: {angles_str}")
+                if bm:
+                    metrics_str = ", ".join(f"{k}: {v}" for k, v in list(bm.items())[:4])
+                    parts.append(f"    Body: {metrics_str}")
+    except Exception as e:
+        logger.warning(f"Failed to get pose analysis: {e}")
+
+    # Players in this session
+    try:
+        gp = supabase.table("game_players").select(
+            "players(id, name, handedness, team)"
+        ).eq("game_id", session_id).execute()
+
+        if gp.data:
+            parts.append("\n## Players in Session")
+            for g in gp.data:
+                p = g.get("players", {})
+                if isinstance(p, dict) and p.get("name"):
+                    parts.append(f"  - {p['name']} ({p.get('handedness', '?')}-handed, "
+                                 f"team: {p.get('team', 'none')})")
+    except Exception as e:
+        logger.warning(f"Failed to get players: {e}")
+
+    return "\n".join(parts) if parts else "No session data found."
+
+
 @router.post("/chat", response_model=ChatResponse)
 async def ai_chat(
     request: ChatRequest,
     user_id: str = Depends(get_current_user_id),
 ):
-    if not ANTHROPIC_API_KEY:
-        raise HTTPException(status_code=500, detail="ANTHROPIC_API_KEY not configured")
+    anthropic_key = os.getenv("ANTHROPIC_API_KEY", "")
+    if not anthropic_key:
+        raise HTTPException(
+            status_code=500,
+            detail="ANTHROPIC_API_KEY not configured. Add it to Infisical.",
+        )
 
-    import anthropic
-    client = anthropic.Anthropic(api_key=ANTHROPIC_API_KEY)
+    # Gather rich context from DB
+    context_parts = []
 
-    # Build messages from history
+    if request.player_id:
+        player_ctx = _gather_player_context(request.player_id, user_id)
+        context_parts.append(player_ctx)
+
+    if request.session_id:
+        session_ctx = _gather_session_context(request.session_id, user_id)
+        context_parts.append(session_ctx)
+
+    if request.context_summary:
+        context_parts.append(f"\n## Frontend Context\n{request.context_summary}")
+
+    full_context = "\n\n".join(context_parts) if context_parts else "No specific context available."
+
+    system_prompt = f"""{SYSTEM_PROMPT}
+
+--- DATA CONTEXT ---
+{full_context}
+--- END CONTEXT ---"""
+
+    # Build conversation messages
     messages = []
+
     if request.history:
-        for msg in request.history[-10:]:  # Last 10 messages for context
+        for msg in request.history[-12:]:
             if msg.get("role") in ("user", "assistant"):
                 messages.append({"role": msg["role"], "content": msg["content"]})
 
     messages.append({"role": "user", "content": request.message})
 
-    # Multi-round tool calling (up to 3 rounds)
-    all_tool_calls = []
-    for _ in range(3):
-        try:
-            response = client.messages.create(
-                model="claude-haiku-4-5-20251001",
-                max_tokens=1024,
-                system=SYSTEM_PROMPT + f"\n\nCurrent game session_id: {request.session_id}",
-                tools=TOOLS,
-                messages=messages,
-            )
-        except Exception as e:
-            raise HTTPException(status_code=500, detail=f"Anthropic API error: {str(e)}")
+    try:
+        import anthropic
 
-        # Check if there are tool calls
-        has_tool_use = any(block.type == "tool_use" for block in response.content)
+        client = anthropic.Anthropic(api_key=anthropic_key)
 
-        if not has_tool_use:
-            # Extract text response
-            text = "".join(block.text for block in response.content if block.type == "text")
-            return ChatResponse(response=text, tool_calls=all_tool_calls)
+        response = client.messages.create(
+            model="claude-3-5-haiku-latest",
+            max_tokens=2048,
+            system=system_prompt,
+            messages=messages,
+        )
 
-        # Process tool calls
-        messages.append({"role": "assistant", "content": response.content})
+        text = response.content[0].text if response.content else ""
+        logger.info("AI response via Anthropic")
+        return ChatResponse(response=text, tool_calls=[])
 
-        tool_results = []
-        for block in response.content:
-            if block.type == "tool_use":
-                tool_result = execute_tool(block.name, block.input, user_id)
-                all_tool_calls.append({
-                    "name": block.name,
-                    "input": block.input,
-                    "result": tool_result,
-                })
-                tool_results.append({
-                    "type": "tool_result",
-                    "tool_use_id": block.id,
-                    "content": tool_result,
-                })
-
-        messages.append({"role": "user", "content": tool_results})
-
-    # If we exhausted rounds, get final text
-    text = "".join(block.text for block in response.content if block.type == "text")
-    return ChatResponse(response=text or "I processed the data but couldn't generate a summary. Try asking a more specific question.", tool_calls=all_tool_calls)
+    except Exception as e:
+        logger.error(f"Anthropic API error: {e}")
+        raise HTTPException(status_code=500, detail=f"AI inference error: {str(e)}")

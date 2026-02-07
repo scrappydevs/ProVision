@@ -10,8 +10,8 @@ import { sessionKeys } from "@/hooks/useSessions";
 import { Button } from "@/components/ui/button";
 import {
   ArrowLeft, Crosshair, Loader2, ChevronRight, Play, Pause,
-  SkipBack, SkipForward, Volume2, VolumeX, Activity, Sparkles, LayoutGrid,
-  X, Send, Users, BarChart3, Copy, Check, RefreshCw,
+  SkipBack, SkipForward, Volume2, VolumeX, Activity, LayoutGrid,
+  Users, BarChart3, Copy, Check, RefreshCw,
 } from "lucide-react";
 import Link from "next/link";
 import dynamic from "next/dynamic";
@@ -19,7 +19,6 @@ import { cn } from "@/lib/utils";
 import { appSettingKeys, readStrokeDebugModeSetting } from "@/lib/appSettings";
 import {
   TrajectoryPoint,
-  aiChat,
   detectBalls,
   BallDetection,
   trackWithTrackNet,
@@ -31,6 +30,7 @@ import {
 import { generateTipsFromStrokes } from "@/lib/tipGenerator";
 import { PlayerSelection, PlayerSelectionOverlays } from "@/components/viewer/PlayerSelection";
 import { VideoTips, type VideoTip } from "@/components/viewer/VideoTips";
+import { useAIChat } from "@/contexts/AIChatContext";
 
 const BirdEyeView = dynamic(
   () => import("@/components/viewer/BirdEyeView").then((m) => m.BirdEyeView),
@@ -47,22 +47,19 @@ const AnalyticsDashboard = dynamic(
   { ssr: false }
 );
 
-type TabId = "pose" | "track" | "court" | "ai" | "analytics";
+type TabId = "pose" | "track" | "court" | "analytics";
 
 const tabs: { id: TabId; label: string; icon: React.ComponentType<{ className?: string }> }[] = [
   { id: "pose", label: "Pose", icon: Activity },
   { id: "track", label: "Track", icon: Crosshair },
   { id: "court", label: "Court", icon: LayoutGrid },
   { id: "analytics", label: "Analytics", icon: BarChart3 },
-  { id: "ai", label: "AI", icon: Sparkles },
 ];
 
 const PLAYER_COLORS = [
   { name: "Player", color: "#9B7B5B", rgb: "155, 123, 91" },
   { name: "Opponent", color: "#5B9B7B", rgb: "91, 155, 123" },
 ];
-
-interface ChatMessage { role: "user" | "assistant" | "tool"; content: string; toolName?: string; }
 
 export default function GameViewerPage() {
   const params = useParams();
@@ -85,14 +82,8 @@ export default function GameViewerPage() {
   const [playerSelectMode, setPlayerSelectMode] = useState(false);
   const [segmentedPlayers, setSegmentedPlayers] = useState<Array<{ id: number; name: string; color: string; rgb: string; visible: boolean; maskArea: number; clickX: number; clickY: number }>>([]);
 
-  // AI Chat state
-  const [aiOpen, setAiOpen] = useState(false);
-  const [chatInput, setChatInput] = useState("");
-  const [chatMessages, setChatMessages] = useState<ChatMessage[]>([
-    { role: "assistant", content: "I'm your AI sports analyst. Ask me about ball trajectory, spin, technique, or anything about this game." },
-  ]);
-  const [isAiThinking, setIsAiThinking] = useState(false);
-  const chatEndRef = useRef<HTMLDivElement>(null);
+  // AI Chat — use global sidebar
+  const { isOpen: aiChatOpen, setContext: setAIChatContext, clearContext: clearAIChatContext } = useAIChat();
 
   const videoRef = useRef<HTMLVideoElement>(null);
   const videoViewportRef = useRef<HTMLDivElement>(null);
@@ -382,7 +373,7 @@ export default function GameViewerPage() {
   const showCourt = activeTab === "court";
   const showAnalytics = activeTab === "analytics";
   const showSidePanel =
-    showTrack || showCourt || activeTab === "pose" || showAnalytics || aiOpen;
+    showTrack || showCourt || activeTab === "pose" || showAnalytics;
 
   const updateVideoDisplayWidth = useCallback(() => {
     const viewport = videoViewportRef.current;
@@ -678,7 +669,28 @@ export default function GameViewerPage() {
     });
   }, [showPlayerOverlay, segmentedPlayers, currentFrame]);
 
-  useEffect(() => { chatEndRef.current?.scrollIntoView({ behavior: "smooth" }); }, [chatMessages]);
+  // Set AI chat context when session loads
+  useEffect(() => {
+    if (!session) return;
+    const firstPlayer = session.players?.[0];
+    setAIChatContext({
+      sessionId: gameId,
+      sessionName: session.name,
+      playerId: firstPlayer?.id,
+      playerName: firstPlayer?.name,
+      strokeSummary: strokeSummary
+        ? {
+            total_strokes: strokeSummary.total_strokes ?? 0,
+            forehand_count: strokeSummary.forehand_count ?? 0,
+            backhand_count: strokeSummary.backhand_count ?? 0,
+            average_form_score: strokeSummary.average_form_score ?? 0,
+            best_form_score: strokeSummary.best_form_score ?? 0,
+            consistency_score: strokeSummary.consistency_score ?? 0,
+          }
+        : undefined,
+    });
+    return () => clearAIChatContext();
+  }, [session, strokeSummary, gameId, setAIChatContext, clearAIChatContext]);
 
   const handleFrameClick = useCallback((e: React.MouseEvent<HTMLDivElement>) => {
     if (!videoRef.current) return;
@@ -950,8 +962,6 @@ export default function GameViewerPage() {
   const handleTabClick = useCallback((tabId: TabId) => {
     setActiveTab(tabId);
     setPlayerSelectMode(false);
-    if (tabId === "ai") { setAiOpen((o) => !o); return; }
-    setAiOpen(false);
     if (tabId === "pose") {
       setShowPoseOverlay((p) => !p);
       if (!showPoseOverlay) handleDetectPose(); // detect on first enable
@@ -959,36 +969,12 @@ export default function GameViewerPage() {
     if (tabId === "track" && !hasTrajectory) handleTrackNetTrack();
   }, []);
 
-  const handleChatSend = useCallback(async () => {
-    if (!chatInput.trim() || isAiThinking) return;
-    const userMsg = chatInput.trim();
-    setChatInput("");
-    setChatMessages((m) => [...m, { role: "user", content: userMsg }]);
-    setIsAiThinking(true);
-    try {
-      const history = chatMessages.filter((m) => m.role === "user" || m.role === "assistant").map((m) => ({ role: m.role, content: m.content }));
-      const response = await aiChat({ message: userMsg, session_id: gameId, history });
-      const newMessages: ChatMessage[] = [];
-      if (response.data.tool_calls?.length) {
-        for (const tc of response.data.tool_calls) {
-          newMessages.push({ role: "tool", toolName: tc.name, content: tc.result.slice(0, 80) + (tc.result.length > 80 ? "..." : "") });
-        }
-      }
-      newMessages.push({ role: "assistant", content: response.data.response });
-      setChatMessages((m) => [...m, ...newMessages]);
-    } catch {
-      setChatMessages((m) => [...m, { role: "assistant", content: "Couldn't process request. Check backend is running with ANTHROPIC_API_KEY." }]);
-    }
-    setIsAiThinking(false);
-  }, [chatInput, isAiThinking, chatMessages, gameId]);
-
   // Auto-widen panel for court view and analytics
   useEffect(() => {
-    if (aiOpen) setPanelWidth(560); // Wider AI panel, expanding toward the video
-    else if (showCourt) setPanelWidth(480);
+    if (showCourt) setPanelWidth(480);
     else if (showAnalytics) setPanelWidth(800); // Wide panel for analytics
     else setPanelWidth(320);
-  }, [aiOpen, showCourt, showAnalytics]);
+  }, [showCourt, showAnalytics]);
 
   const handleResizeStart = useCallback((e: React.MouseEvent) => {
     e.preventDefault();
@@ -1011,7 +997,7 @@ export default function GameViewerPage() {
 
   const firstPlayer = session.players?.[0];
   const detection = detectionResult;
-  const isAnalyticsView = activeTab === "analytics" && !aiOpen;
+  const isAnalyticsView = activeTab === "analytics";
 
   return (
     <>
@@ -1037,10 +1023,18 @@ export default function GameViewerPage() {
           </>
         )}
 
-        {/* Main area */}
-        <div className={cn("flex flex-1 min-h-0", aiOpen ? "gap-6" : "gap-3")}>
+        {/* Main area — stacks vertically when AI sidebar is open */}
+        <div className={cn(
+          "gap-3 flex-1 min-h-0",
+          aiChatOpen ? "flex flex-col overflow-y-auto" : "flex"
+        )}>
           {/* Left: Video or Court (full area) */}
-          <div className={cn("flex flex-col min-h-0", showSidePanel ? "flex-1 min-w-0" : "w-full")}>
+          <div className={cn(
+            "flex flex-col min-h-0",
+            aiChatOpen
+              ? "w-full shrink-0"
+              : showSidePanel ? "flex-1 min-w-0" : "w-full"
+          )}>
             {/* Video / Court swap */}
             <div className="relative rounded-xl overflow-hidden bg-[#1E1D1F] flex-1 min-h-0">
               {/* Video always visible */}
@@ -1154,7 +1148,7 @@ export default function GameViewerPage() {
                   {tabs.map((tab) => {
                     const Icon = tab.icon;
                     const isActive = activeTab === tab.id;
-                    const isOn = (tab.id === "pose" && showPoseOverlay) || (tab.id === "track" && trackingMode) || (tab.id === "analytics" && activeTab === "analytics") || (tab.id === "ai" && aiOpen);
+                    const isOn = (tab.id === "pose" && showPoseOverlay) || (tab.id === "track" && trackingMode) || (tab.id === "analytics" && activeTab === "analytics");
                     return (
                       <button key={tab.id} onClick={() => handleTabClick(tab.id)} className={cn("glass-tab", (isActive || isOn) && "glass-tab-active")}>
                         <Icon className="w-3.5 h-3.5" />
@@ -1200,20 +1194,29 @@ export default function GameViewerPage() {
             </div>
           </div>
 
-          {/* Right Panel — Track results, Players, Court, Pose, or AI Chat */}
+          {/* Right Panel — Track results, Players, Court, Pose */}
           {showSidePanel && (
-            <div className="shrink-0 flex min-h-0 overflow-hidden" style={{ width: panelWidth }}>
-              {/* Resize handle */}
-              {!aiOpen && (
+            <div
+              className={cn(
+                "flex min-h-0 overflow-hidden",
+                aiChatOpen ? "w-full shrink-0" : "shrink-0"
+              )}
+              style={aiChatOpen ? undefined : { width: panelWidth }}
+            >
+              {/* Resize handle — hidden when stacked */}
+              {!aiChatOpen && (
                 <div
                   onMouseDown={handleResizeStart}
                   className="w-1.5 shrink-0 cursor-col-resize hover:bg-[#9B7B5B]/30 active:bg-[#9B7B5B]/50 transition-colors rounded-full self-stretch"
                 />
               )}
               <div className="flex-1 flex min-h-0 overflow-hidden">
-                <div className="w-full h-full max-w-[calc(100%-8px)] mx-auto flex flex-col min-h-0 overflow-hidden">
+                <div className={cn(
+                  "mx-auto flex flex-col min-h-0 overflow-hidden",
+                  aiChatOpen ? "w-full h-auto max-h-[50vh]" : "w-full h-full max-w-[calc(100%-8px)]"
+                )}>
                   {/* 3D Ball Trajectory Visualization */}
-                  {activeTab === "track" && !aiOpen && (
+                  {activeTab === "track" && (
                     <div className="flex-1 min-h-0 rounded-xl overflow-hidden flex flex-col">
                   {hasTrajectory ? (
                     <div className="space-y-3">
@@ -1245,7 +1248,7 @@ export default function GameViewerPage() {
               )}
 
               {/* Pose analysis panel */}
-              {activeTab === "pose" && showPoseOverlay && !aiOpen && (
+              {activeTab === "pose" && showPoseOverlay && (
                 <div className="glass-context rounded-xl flex flex-col h-full overflow-hidden">
                   <div className="px-3 py-2.5 border-b border-[#363436]/30 flex items-center justify-between">
                     <span className="text-xs font-medium text-[#E8E6E3]">Pose & Strokes</span>
@@ -1675,117 +1678,20 @@ export default function GameViewerPage() {
               )}
 
               {/* Court 3D view — side panel synced to video */}
-              {showCourt && !aiOpen && (
+              {showCourt && (
                 <div className="flex-1 min-h-0 rounded-xl overflow-hidden">
                   <BirdEyeView trajectoryData={session.trajectory_data} poseData={poseData} currentFrame={currentFrame} totalFrames={Math.floor(duration * fps)} isPlaying={isPlaying} />
                 </div>
               )}
 
               {/* Analytics Dashboard — full-width panel */}
-              {activeTab === "analytics" && !aiOpen && (
+              {activeTab === "analytics" && (
                 <div className="bg-background/60 dark:bg-content1/60 rounded-xl overflow-y-auto h-full">
                   <AnalyticsDashboard sessionId={gameId} />
                 </div>
               )}
 
-              {/* AI Chat — inline right panel */}
-              {aiOpen && (
-                <div className="h-full">
-                  <div className="relative h-full rounded-2xl border border-foreground/5 shadow-[0_4px_16px_rgba(0,0,0,0.12)] flex flex-col overflow-hidden">
-                    <div className="absolute inset-0 pointer-events-none">
-                      <div className="absolute inset-0 bg-[url('/background.jpeg')] bg-cover bg-center opacity-20" />
-                      <div className="absolute inset-0 bg-content1/75 backdrop-blur-xl" />
-                    </div>
-
-                    <div className="relative z-10 flex items-center justify-between px-4 py-3 border-b border-foreground/10">
-                      <div>
-                        <p className="text-sm font-semibold text-foreground/90">AI Analyst</p>
-                        <p className="text-[10px] text-foreground/50">Ask anything about this game</p>
-                      </div>
-                      <button
-                        onClick={() => setAiOpen(false)}
-                        className="w-7 h-7 rounded-full hover:bg-content2 flex items-center justify-center text-foreground/50 hover:text-foreground transition-colors"
-                        aria-label="Close AI analyst"
-                      >
-                        <X className="w-3.5 h-3.5" />
-                      </button>
-                    </div>
-
-                    {/* Messages */}
-                    <div className="relative z-10 flex-1 overflow-y-auto p-3 space-y-3">
-                      {chatMessages.map((msg, i) => (
-                        <div key={i} className={cn("flex", msg.role === "user" ? "justify-end" : "justify-start")}>
-                          {msg.role === "tool" ? (
-                            <div className="flex items-center gap-2 px-3 py-1.5 rounded-lg bg-primary/10 text-[10px] text-primary w-full">
-                              <Loader2 className="w-3 h-3 animate-spin shrink-0" />
-                              <span className="font-mono truncate">{msg.toolName}</span>
-                            </div>
-                          ) : (
-                            <div
-                              className={cn(
-                                "max-w-[90%] rounded-2xl px-3 py-2 text-xs leading-relaxed",
-                                msg.role === "user"
-                                  ? "bg-primary text-primary-foreground rounded-br-md"
-                                  : "bg-content2 text-foreground rounded-bl-md"
-                              )}
-                            >
-                              {msg.content.split("\n").map((line, j) => (
-                                <p key={j} className={j > 0 ? "mt-1" : ""}>
-                                  {line.split("**").map((part, k) =>
-                                    k % 2 === 1 ? (
-                                      <strong
-                                        key={k}
-                                        className={msg.role === "user" ? "font-semibold" : "text-primary font-medium"}
-                                      >
-                                        {part}
-                                      </strong>
-                                    ) : (
-                                      part
-                                    )
-                                  )}
-                                </p>
-                              ))}
-                            </div>
-                          )}
-                        </div>
-                      ))}
-                      {isAiThinking && (
-                        <div className="flex justify-start">
-                          <div className="bg-content2 rounded-2xl rounded-bl-md px-4 py-3 flex items-center gap-2">
-                            <div className="w-1.5 h-1.5 rounded-full bg-primary animate-pulse" />
-                            <div className="w-1.5 h-1.5 rounded-full bg-primary animate-pulse" style={{ animationDelay: "0.15s" }} />
-                            <div className="w-1.5 h-1.5 rounded-full bg-primary animate-pulse" style={{ animationDelay: "0.3s" }} />
-                          </div>
-                        </div>
-                      )}
-                      <div ref={chatEndRef} />
-                    </div>
-
-                    {/* Input */}
-                    <div className="relative z-10 border-t border-foreground/10 p-3">
-                      <div className="flex items-center gap-2 bg-content2/70 rounded-xl px-3 py-1 focus-within:ring-1 focus-within:ring-primary/30 transition-all">
-                        <input
-                          type="text"
-                          value={chatInput}
-                          onChange={(e) => setChatInput(e.target.value)}
-                          onKeyDown={(e) => {
-                            if (e.key === "Enter") handleChatSend();
-                          }}
-                          placeholder="Ask about the game..."
-                          className="flex-1 py-2 bg-transparent text-xs text-foreground placeholder:text-foreground/40 focus:outline-none"
-                        />
-                        <button
-                          onClick={handleChatSend}
-                          disabled={!chatInput.trim() || isAiThinking}
-                          className="w-7 h-7 rounded-full bg-primary flex items-center justify-center text-primary-foreground disabled:opacity-20 hover:opacity-90 transition-all shrink-0"
-                        >
-                          <Send className="w-3 h-3" />
-                        </button>
-                      </div>
-                    </div>
-                  </div>
-                </div>
-              )}
+              {/* AI Chat removed — now in global sidebar */}
               </div>
               </div>
             </div>
