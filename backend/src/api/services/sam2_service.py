@@ -3,15 +3,21 @@ SAM2 Service - Runs SAM2 tracking on RunPod GPU via SSH.
 Uses RemoteEngineRunner for GPU communication (like DeepGaitLab pattern).
 """
 
-import os
+import asyncio
 import math
+import os
 import logging
 from typing import Optional, List, Dict, Any
+
+from cachetools import TTLCache
 from pydantic import BaseModel
 
 from src.engines.remote_run import RemoteEngineRunner
 
 logger = logging.getLogger(__name__)
+
+# Cache remote video paths to avoid re-downloading same session within 10 min
+_VIDEO_PATH_CACHE: TTLCache[str, str] = TTLCache(maxsize=64, ttl=600)
 
 
 class TrajectoryPoint(BaseModel):
@@ -54,11 +60,15 @@ class SAM2Service:
             return {"status": "error", "message": str(e)}
     
     def _ensure_video_on_gpu(self, session_id: str, video_url: str) -> str:
-        """Download video to GPU if not already present. Returns remote path."""
+        """Download video to GPU if not already present. Returns remote path. Uses cache to skip re-downloads."""
+        cache_key = f"{session_id}:{video_url}"
+        if cache_key in _VIDEO_PATH_CACHE:
+            return _VIDEO_PATH_CACHE[cache_key]
+
         video_name = f"{session_id}.mp4"
         remote_video_dir = os.getenv("REMOTE_VIDEO_DIR", "/workspace/provision/data/videos")
         remote_video_path = f"{remote_video_dir}/{video_name}"
-        
+
         try:
             from ..database.supabase import get_supabase
             supabase = get_supabase()
@@ -68,11 +78,13 @@ class SAM2Service:
                 signed_url = signed.get("signedURL") or signed.get("signed_url") or signed.get("signedUrl")
                 if signed_url:
                     self.runner.download_videos_from_supabase({video_name: signed_url}, remote_video_dir)
+                    _VIDEO_PATH_CACHE[cache_key] = remote_video_path
                     return remote_video_path
         except Exception as e:
-            logger.warning(f"Signed URL download failed, falling back to direct: {e}")
-        
+            logger.warning("Signed URL download failed, falling back to direct: %s", e)
+
         self._download_via_url(remote_video_path, video_url)
+        _VIDEO_PATH_CACHE[cache_key] = remote_video_path
         return remote_video_path
 
     async def detect_balls(
@@ -84,17 +96,12 @@ class SAM2Service:
         """Auto-detect sports balls using YOLO on GPU."""
         if not self.is_available:
             raise Exception("GPU not configured")
-        
+
         remote_video_path = self._ensure_video_on_gpu(session_id, video_url)
-        
-        result = self.runner._call_model_server("/yolo/detect", {
-            "session_id": session_id,
-            "video_path": remote_video_path,
-            "init_point": {"x": 0, "y": 0},
-            "frame": frame,
-        })
-        
-        logger.info(f"YOLO detected {len(result.get('detections', []))} balls")
+        payload = {"session_id": session_id, "video_path": remote_video_path, "init_point": {"x": 0, "y": 0}, "frame": frame}
+        result = await asyncio.to_thread(self.runner._call_model_server, "/yolo/detect", payload)
+
+        logger.info("YOLO detected %d balls", len(result.get("detections", [])))
         return result
 
     async def detect_poses(
@@ -106,17 +113,12 @@ class SAM2Service:
         """Detect all persons with bounding boxes and keypoints using YOLO-pose on GPU."""
         if not self.is_available:
             raise Exception("GPU not configured")
-        
+
         remote_video_path = self._ensure_video_on_gpu(session_id, video_url)
-        
-        result = self.runner._call_model_server("/yolo/pose", {
-            "session_id": session_id,
-            "video_path": remote_video_path,
-            "init_point": {"x": 0, "y": 0},
-            "frame": frame,
-        })
-        
-        logger.info(f"YOLO-pose detected {len(result.get('persons', []))} persons")
+        payload = {"session_id": session_id, "video_path": remote_video_path, "init_point": {"x": 0, "y": 0}, "frame": frame}
+        result = await asyncio.to_thread(self.runner._call_model_server, "/yolo/pose", payload)
+
+        logger.info("YOLO-pose detected %d persons", len(result.get("persons", [])))
         return result
 
     async def track_with_tracknet(
@@ -128,19 +130,14 @@ class SAM2Service:
         """Track ball through entire video using TrackNet (temporal heatmaps)."""
         if not self.is_available:
             raise Exception("GPU not configured")
-        
+
         remote_video_path = self._ensure_video_on_gpu(session_id, video_url)
-        
-        result = self.runner._call_model_server("/tracknet/track", {
-            "session_id": session_id,
-            "video_path": remote_video_path,
-            "init_point": {"x": 0, "y": 0},
-            "frame": frame,
-        })
-        
+        payload = {"session_id": session_id, "video_path": remote_video_path, "init_point": {"x": 0, "y": 0}, "frame": frame}
+        result = await asyncio.to_thread(self.runner._call_model_server, "/tracknet/track", payload)
+
         trajectory = result.get("trajectory", [])
         video_info = result.get("video_info", {})
-        logger.info(f"TrackNet tracking complete: {len(trajectory)} frames detected")
+        logger.info("TrackNet tracking complete: %d frames detected", len(trajectory))
         return self._convert_result(trajectory), video_info
 
     async def preview_segmentation(
@@ -154,17 +151,10 @@ class SAM2Service:
         """Preview segmentation at click point before full tracking."""
         if not self.is_available:
             raise Exception("GPU not configured")
-        
+
         remote_video_path = self._ensure_video_on_gpu(session_id, video_url)
-        
-        result = self.runner._call_model_server("/sam2/preview", {
-            "session_id": session_id,
-            "video_path": remote_video_path,
-            "init_point": {"x": x, "y": y},
-            "frame": frame,
-        })
-        
-        return result
+        payload = {"session_id": session_id, "video_path": remote_video_path, "init_point": {"x": x, "y": y}, "frame": frame}
+        return await asyncio.to_thread(self.runner._call_model_server, "/sam2/preview", payload)
 
     async def init_and_track(
         self,
@@ -184,7 +174,7 @@ class SAM2Service:
         if not self.is_available:
             raise Exception("GPU not configured. Set SSH_HOST in .env")
         
-        logger.info(f"SAM2 tracking: session={session_id}, click=({x},{y}), frame={frame}")
+        logger.info("SAM2 tracking: session=%s, click=(%s,%s), frame=%s", session_id, x, y, frame)
         
         remote_video_path = self._ensure_video_on_gpu(session_id, video_url)
         
@@ -200,7 +190,7 @@ class SAM2Service:
             
             trajectory = result.get("trajectory", [])
             video_info = result.get("video_info", {})
-            logger.info(f"SAM2 tracking complete: {len(trajectory)} frames, video_info={video_info}")
+            logger.info("SAM2 tracking complete: %d frames", len(trajectory))
             return self._convert_result(trajectory), video_info
             
         except Exception as e:
@@ -215,25 +205,23 @@ class SAM2Service:
                 raise RuntimeError(f"Download failed: {stderr}")
     
     def _convert_result(self, trajectory: List[Dict]) -> TrajectoryData:
-        frames = []
-        for t in trajectory:
-            frames.append(TrajectoryPoint(
+        frames = [
+            TrajectoryPoint(
                 frame=t.get("frame", 0),
                 x=float(t.get("x", 0)),
                 y=float(t.get("y", 0)),
                 confidence=float(t.get("confidence", 1.0)),
                 bbox=t.get("bbox"),
-            ))
-        
-        # Compute velocities
-        velocities = []
-        for i in range(1, len(frames)):
-            dx = frames[i].x - frames[i-1].x
-            dy = frames[i].y - frames[i-1].y
-            velocities.append(round(math.sqrt(dx*dx + dy*dy), 2))
-        
+            )
+            for t in trajectory
+        ]
+
+        velocities = [
+            round(math.sqrt((frames[i].x - frames[i - 1].x) ** 2 + (frames[i].y - frames[i - 1].y) ** 2), 2)
+            for i in range(1, len(frames))
+        ]
+
         spin = self._estimate_spin(frames) if len(frames) > 10 else None
-        
         return TrajectoryData(frames=frames, velocity=velocities, spin_estimate=spin)
     
     def _estimate_spin(self, frames: List[TrajectoryPoint]) -> Optional[str]:

@@ -8,6 +8,29 @@ from ..services.sam2_service import sam2_service
 router = APIRouter()
 
 
+async def _get_session_with_video(session_id: str, user_id: str) -> tuple[dict, str]:
+    """Get session and video_path, raise HTTPException if not found. Reduces duplicate DB calls."""
+    supabase = get_supabase()
+    result = supabase.table("sessions").select("*").eq("id", session_id).eq("user_id", user_id).single().execute()
+    if not result.data:
+        raise HTTPException(status_code=404, detail="Session not found")
+    session = result.data
+    video_path = session.get("video_path")
+    if not video_path:
+        raise HTTPException(status_code=400, detail="Session has no video")
+    return session, video_path
+
+
+def _build_trajectory_dict(trajectory_data, video_info: dict) -> dict:
+    """Build trajectory dict for DB update. Avoids duplication."""
+    return {
+        "frames": [f.model_dump() for f in trajectory_data.frames],
+        "velocity": trajectory_data.velocity,
+        "spin_estimate": trajectory_data.spin_estimate,
+        "video_info": video_info,
+    }
+
+
 class InitRequest(BaseModel):
     session_id: str
 
@@ -51,17 +74,9 @@ async def track_with_tracknet(
     user_id: str = Depends(get_current_user_id),
 ):
     """Track ball through entire video using TrackNet (no click needed)."""
+    _, video_path = await _get_session_with_video(request.session_id, user_id)
     supabase = get_supabase()
-    
-    result = supabase.table("sessions").select("*").eq("id", request.session_id).eq("user_id", user_id).single().execute()
-    if not result.data:
-        raise HTTPException(status_code=404, detail="Session not found")
-    
-    session = result.data
-    video_path = session.get("video_path")
-    if not video_path:
-        raise HTTPException(status_code=400, detail="Session has no video")
-    
+
     try:
         trajectory_data, video_info = await sam2_service.track_with_tracknet(
             session_id=request.session_id,
@@ -70,18 +85,10 @@ async def track_with_tracknet(
         )
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"TrackNet tracking failed: {str(e)}")
-    
-    trajectory_dict = {
-        "frames": [f.model_dump() for f in trajectory_data.frames],
-        "velocity": trajectory_data.velocity,
-        "spin_estimate": trajectory_data.spin_estimate,
-        "video_info": video_info,
-    }
-    
-    supabase.table("sessions").update({
-        "trajectory_data": trajectory_dict,
-    }).eq("id", request.session_id).execute()
-    
+
+    trajectory_dict = _build_trajectory_dict(trajectory_data, video_info)
+    supabase.table("sessions").update({"trajectory_data": trajectory_dict}).eq("id", request.session_id).execute()
+
     return {
         "status": "tracked",
         "session_id": request.session_id,
@@ -96,16 +103,8 @@ async def pose_detect(
     user_id: str = Depends(get_current_user_id),
 ):
     """Detect all persons with bounding boxes and keypoints using YOLO-pose."""
-    supabase = get_supabase()
-    
-    result = supabase.table("sessions").select("*").eq("id", request.session_id).eq("user_id", user_id).single().execute()
-    if not result.data:
-        raise HTTPException(status_code=404, detail="Session not found")
-    
-    video_path = result.data.get("video_path")
-    if not video_path:
-        raise HTTPException(status_code=400, detail="Session has no video")
-    
+    _, video_path = await _get_session_with_video(request.session_id, user_id)
+
     try:
         poses = await sam2_service.detect_poses(
             session_id=request.session_id,
@@ -123,16 +122,8 @@ async def detect_balls(
     user_id: str = Depends(get_current_user_id),
 ):
     """Auto-detect sports balls in a video frame using YOLO on GPU."""
-    supabase = get_supabase()
-    
-    result = supabase.table("sessions").select("*").eq("id", request.session_id).eq("user_id", user_id).single().execute()
-    if not result.data:
-        raise HTTPException(status_code=404, detail="Session not found")
-    
-    video_path = result.data.get("video_path")
-    if not video_path:
-        raise HTTPException(status_code=400, detail="Session has no video")
-    
+    _, video_path = await _get_session_with_video(request.session_id, user_id)
+
     try:
         detections = await sam2_service.detect_balls(
             session_id=request.session_id,
@@ -150,16 +141,8 @@ async def preview_segmentation(
     user_id: str = Depends(get_current_user_id),
 ):
     """Preview segmentation at click point before full tracking."""
-    supabase = get_supabase()
-    
-    result = supabase.table("sessions").select("*").eq("id", request.session_id).eq("user_id", user_id).single().execute()
-    if not result.data:
-        raise HTTPException(status_code=404, detail="Session not found")
-    
-    video_path = result.data.get("video_path")
-    if not video_path:
-        raise HTTPException(status_code=400, detail="Session has no video")
-    
+    _, video_path = await _get_session_with_video(request.session_id, user_id)
+
     try:
         preview = await sam2_service.preview_segmentation(
             session_id=request.session_id,
@@ -179,18 +162,9 @@ async def track_ball(
     user_id: str = Depends(get_current_user_id),
 ):
     """Track ball from click point through video using SAM2 on GPU."""
+    _, video_path = await _get_session_with_video(request.session_id, user_id)
     supabase = get_supabase()
-    
-    result = supabase.table("sessions").select("*").eq("id", request.session_id).eq("user_id", user_id).single().execute()
-    if not result.data:
-        raise HTTPException(status_code=404, detail="Session not found")
-    
-    session = result.data
-    video_path = session.get("video_path")
-    
-    if not video_path:
-        raise HTTPException(status_code=400, detail="Session has no video")
-    
+
     try:
         trajectory_data, video_info = await sam2_service.init_and_track(
             session_id=request.session_id,
@@ -202,19 +176,10 @@ async def track_ball(
         )
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"SAM2 tracking failed: {str(e)}")
-    
-    # Store trajectory in database (include video_info for frame sync)
-    trajectory_dict = {
-        "frames": [f.model_dump() for f in trajectory_data.frames],
-        "velocity": trajectory_data.velocity,
-        "spin_estimate": trajectory_data.spin_estimate,
-        "video_info": video_info,
-    }
-    
-    supabase.table("sessions").update({
-        "trajectory_data": trajectory_dict,
-    }).eq("id", request.session_id).execute()
-    
+
+    trajectory_dict = _build_trajectory_dict(trajectory_data, video_info)
+    supabase.table("sessions").update({"trajectory_data": trajectory_dict}).eq("id", request.session_id).execute()
+
     return {
         "status": "tracked",
         "session_id": request.session_id,
