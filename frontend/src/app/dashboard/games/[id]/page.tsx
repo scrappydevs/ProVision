@@ -337,7 +337,8 @@ export default function GameViewerPage() {
       opponentContext = { playerPoses, opponentPoses };
     }
 
-    const tips = generateTipsFromStrokes(strokeSummary?.strokes || [], fps, opponentContext);
+    const firstPlayer = session?.players?.[0];
+    const tips = generateTipsFromStrokes(strokeSummary?.strokes || [], fps, opponentContext, firstPlayer?.name);
     console.log('[VideoTips] Generated tips:', {
       strokeCount: strokeSummary?.strokes?.length || 0,
       tipCount: tips.length,

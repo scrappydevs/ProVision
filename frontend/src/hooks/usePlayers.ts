@@ -14,12 +14,15 @@ import {
   createClip,
   analyzeRecording,
   searchITTFPlayers,
+  getPlayerInsights,
+  generatePlayerDescription,
   Player,
   PlayerCreate,
   PlayerUpdate,
   GamePlayerInfo,
   Recording,
   RecordingType,
+  PlayerInsights,
 } from "@/lib/api";
 
 export const playerKeys = {
@@ -259,8 +262,8 @@ export function useGenerateDescription() {
   
   return useMutation({
     mutationFn: (playerId: string) => generatePlayerDescription(playerId),
-    onSuccess: (data) => {
-      queryClient.invalidateQueries({ queryKey: playerKeys.detail(data.data.player_id) });
+    onSuccess: (_, playerId) => {
+      queryClient.invalidateQueries({ queryKey: playerKeys.detail(playerId) });
     },
   });
 }

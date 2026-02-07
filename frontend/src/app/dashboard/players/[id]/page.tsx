@@ -279,7 +279,7 @@ export default function PlayerProfilePage() {
     const results: Insight[] = [];
     
     // Add strengths from API
-    playerInsights.strengths.forEach((strength, idx) => {
+    playerInsights.strengths.forEach((strength: { title: string; summary: string; metric: string }, idx: number) => {
       results.push({
         id: `strength-${idx}`,
         kind: "strength",
@@ -292,7 +292,7 @@ export default function PlayerProfilePage() {
     });
     
     // Add weaknesses from API
-    playerInsights.weaknesses.forEach((weakness, idx) => {
+    playerInsights.weaknesses.forEach((weakness: { title: string; summary: string; metric: string }, idx: number) => {
       results.push({
         id: `weakness-${idx}`,
         kind: "weakness",
