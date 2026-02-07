@@ -9,6 +9,7 @@ from time import perf_counter
 
 from ..database.supabase import get_supabase, get_current_user_id
 from ..services.stroke_event_service import detect_strokes_hybrid
+from ..services.stroke_insight_service import generate_insights_for_session
 from ..services.stroke_debug_utils import debug_header, debug_info, debug_section_end
 
 router = APIRouter()
@@ -73,6 +74,8 @@ class StrokeResponse(BaseModel):
     max_velocity: float
     form_score: float
     metrics: dict
+    ai_insight: Optional[str] = None
+    ai_insight_data: Optional[dict] = None
 
 
 class StrokeSummaryResponse(BaseModel):
@@ -219,6 +222,7 @@ def process_stroke_detection(
             "infer_hitter",
             "build_final_strokes",
             "persist_results",
+            "generate_insights",
         ]
         stage_labels = {
             "load_session_metadata": "Load session metadata",
@@ -232,6 +236,7 @@ def process_stroke_detection(
             "infer_hitter": "Infer hitter (player/opponent)",
             "build_final_strokes": "Build final strokes",
             "persist_results": "Persist stroke analytics",
+            "generate_insights": "Generate AI insights",
         }
         stage_statuses: Dict[str, str] = {stage_id: "pending" for stage_id in stage_order}
         stage_timings_ms: Dict[str, float] = {}
@@ -543,6 +548,87 @@ def process_stroke_detection(
             extra_debug={"final_strokes": len(strokes)},
         )
 
+        # ── Generate AI insights (non-fatal) ──
+        _update_progress_stage("generate_insights", "running")
+        insight_started = perf_counter()
+        try:
+            supabase.table("sessions").update({
+                "insight_generation_status": "generating"
+            }).eq("id", session_id).execute()
+
+            def _insight_progress(update: Dict[str, Any]) -> None:
+                insights_prog = update.get("insights_progress")
+                _update_progress_stage(
+                    "generate_insights",
+                    "running",
+                    extra_debug={"insights_progress": insights_prog} if insights_prog else None,
+                )
+
+            insight_result = generate_insights_for_session(
+                supabase=supabase,
+                session_id=session_id,
+                video_url=video_url,
+                trajectory_data=trajectory_data,
+                handedness=handedness,
+                camera_facing=camera_facing,
+                progress_callback=_insight_progress,
+            )
+
+            insight_elapsed_ms = (perf_counter() - insight_started) * 1000.0
+
+            # Check if cancelled
+            cancel_check = supabase.table("sessions").select("insight_generation_status").eq("id", session_id).single().execute()
+            was_cancelled = cancel_check.data and cancel_check.data.get("insight_generation_status") == "cancelled"
+
+            if was_cancelled:
+                _update_progress_stage(
+                    "generate_insights",
+                    "completed",
+                    duration_ms=insight_elapsed_ms,
+                    extra_debug={"insight_result": "cancelled"},
+                )
+            elif insight_result.get("skipped"):
+                supabase.table("sessions").update({
+                    "insight_generation_status": "completed"
+                }).eq("id", session_id).execute()
+                _update_progress_stage(
+                    "generate_insights",
+                    "completed",
+                    duration_ms=insight_elapsed_ms,
+                    extra_debug={"insight_result": "skipped", "reason": insight_result.get("reason")},
+                )
+            else:
+                supabase.table("sessions").update({
+                    "insight_generation_status": "completed"
+                }).eq("id", session_id).execute()
+                _update_progress_stage(
+                    "generate_insights",
+                    "completed",
+                    duration_ms=insight_elapsed_ms,
+                    extra_debug={
+                        "insight_result": insight_result,
+                        "insights_completed": insight_result.get("completed", 0),
+                        "insights_total": insight_result.get("total", 0),
+                    },
+                )
+                print(f"[StrokeDetection] AI insights: {insight_result.get('completed', 0)}/{insight_result.get('total', 0)} completed")
+
+        except Exception as insight_exc:
+            insight_elapsed_ms = (perf_counter() - insight_started) * 1000.0
+            print(f"[StrokeDetection] AI insight generation failed (non-fatal): {insight_exc}")
+            try:
+                supabase.table("sessions").update({
+                    "insight_generation_status": "failed"
+                }).eq("id", session_id).execute()
+            except Exception:
+                pass
+            _update_progress_stage(
+                "generate_insights",
+                "failed",
+                duration_ms=insight_elapsed_ms,
+                extra_debug={"insight_error": str(insight_exc)},
+            )
+
         debug_strokes = [_serialize_stroke_for_debug(s) for s in strokes]
         run_completed_at = datetime.now(timezone.utc).isoformat()
         merged_debug_stats = dict(debug_stats or {})
@@ -743,6 +829,32 @@ async def analyze_strokes(
     }
 
 
+@router.post("/cancel-insights/{session_id}")
+async def cancel_stroke_insights(
+    session_id: str,
+    user_id: str = Depends(get_current_user_id),
+):
+    """
+    Cancel in-progress AI insight generation for a session.
+    The background loop checks this flag before each stroke and breaks out.
+    """
+    supabase = get_supabase()
+
+    # Verify session exists and belongs to user
+    result = supabase.table("sessions").select("id, insight_generation_status").eq("id", session_id).eq("user_id", user_id).single().execute()
+    if not result.data:
+        raise HTTPException(status_code=404, detail="Session not found")
+
+    if result.data.get("insight_generation_status") != "generating":
+        return {"status": "not_generating", "session_id": session_id}
+
+    supabase.table("sessions").update({
+        "insight_generation_status": "cancelled"
+    }).eq("id", session_id).execute()
+
+    return {"status": "cancelled", "session_id": session_id}
+
+
 @router.get("/summary/{session_id}", response_model=StrokeSummaryResponse)
 async def get_stroke_summary(
     session_id: str,
@@ -810,7 +922,9 @@ async def get_stroke_summary(
             duration=s["duration"],
             max_velocity=s["max_velocity"],
             form_score=s["form_score"],
-            metrics=s["metrics"]
+            metrics=s["metrics"],
+            ai_insight=s.get("ai_insight"),
+            ai_insight_data=s.get("ai_insight_data"),
         )
         for s in strokes_result.data
     ]

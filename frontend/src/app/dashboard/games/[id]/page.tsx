@@ -4,7 +4,7 @@ import { useState, useCallback, useRef, useEffect, useMemo } from "react";
 import { useParams, useRouter, useSearchParams } from "next/navigation";
 import { useSession, useTrackObject, useUpdateSession } from "@/hooks/useSessions";
 import { usePoseAnalysis } from "@/hooks/usePoseData";
-import { useStrokeSummary, useAnalyzeStrokes, useStrokeProgress, strokeKeys } from "@/hooks/useStrokeData";
+import { useStrokeSummary, useAnalyzeStrokes, useStrokeProgress, useCancelInsights, strokeKeys } from "@/hooks/useStrokeData";
 import { useAnalytics } from "@/hooks/useAnalytics";
 import { useQueryClient } from "@tanstack/react-query";
 import { sessionKeys } from "@/hooks/useSessions";
@@ -32,6 +32,7 @@ import {
   createSessionClip,
   ActivityRegion,
 } from "@/lib/api";
+import { motion, AnimatePresence } from "framer-motion";
 import { generateTipsFromStrokes } from "@/lib/tipGenerator";
 import { PlayerSelection, PlayerSelectionOverlays } from "@/components/viewer/PlayerSelection";
 import { VideoTips, type VideoTip } from "@/components/viewer/VideoTips";
@@ -153,10 +154,12 @@ export default function GameViewerPage() {
 
   const { data: session, isLoading } = useSession(gameId);
   const { data: poseData } = usePoseAnalysis(gameId);
-  const { data: strokeSummary } = useStrokeSummary(gameId);
+  const isInsightGenerating = session?.insight_generation_status === "generating";
+  const { data: strokeSummary } = useStrokeSummary(gameId, isInsightGenerating);
   const { data: analytics } = useAnalytics(gameId);
   const trackMutation = useTrackObject(gameId);
   const strokeMutation = useAnalyzeStrokes(gameId);
+  const cancelInsightsMutation = useCancelInsights(gameId);
   const updateSessionMutation = useUpdateSession(gameId);
 
   const hasPose = !!session?.pose_video_path;
@@ -165,7 +168,8 @@ export default function GameViewerPage() {
   const isStrokePipelineProcessing =
     isRecomputingAnalytics ||
     strokeMutation.isPending ||
-    session?.stroke_analysis_status === "processing";
+    session?.stroke_analysis_status === "processing" ||
+    isInsightGenerating;
   const { data: liveStrokeProgress } = useStrokeProgress(gameId, isStrokePipelineProcessing);
   const strokePipelineDebugStats = useMemo(() => {
     if (liveStrokeProgress?.debug_stats && typeof liveStrokeProgress.debug_stats === "object") {
@@ -185,6 +189,7 @@ export default function GameViewerPage() {
       "infer_hitter",
       "build_final_strokes",
       "persist_results",
+      "generate_insights",
     ];
     const defaultLabels: Record<string, string> = {
       load_session_metadata: "Load session metadata",
@@ -198,6 +203,7 @@ export default function GameViewerPage() {
       infer_hitter: "Infer hitter (player/opponent)",
       build_final_strokes: "Build final strokes",
       persist_results: "Persist stroke analytics",
+      generate_insights: "Generate AI insights",
     };
 
     const stageOrder = Array.isArray(strokePipelineDebugStats?.stage_order)
@@ -259,6 +265,27 @@ export default function GameViewerPage() {
     if (typeof raw === "number" && Number.isFinite(raw)) return raw;
     return strokePipelineStageRows.reduce((sum, stage) => sum + (stage.durationMs ?? 0), 0);
   }, [strokePipelineDebugStats, strokePipelineStageRows]);
+
+  // Insight generation progress from pipeline debug stats
+  const insightsProgress = useMemo(() => {
+    const prog = strokePipelineDebugStats?.insights_progress as { current?: number; total?: number; completed?: number } | undefined;
+    if (!prog) return null;
+    return {
+      current: typeof prog.current === "number" ? prog.current : 0,
+      total: typeof prog.total === "number" ? prog.total : 0,
+      completed: typeof prog.completed === "number" ? prog.completed : 0,
+    };
+  }, [strokePipelineDebugStats]);
+
+  // Strokes that have AI insights (for progressive rendering)
+  const aiInsightStrokes = useMemo(() => {
+    if (!strokeSummary?.strokes) return [];
+    return strokeSummary.strokes.filter((s) => s.ai_insight);
+  }, [strokeSummary?.strokes]);
+
+  // Whether any AI insights exist (to decide if we show AI vs rule-based tips)
+  const hasAiInsights = aiInsightStrokes.length > 0;
+
   // Pose processing: no pose_video_path yet AND status is processing
   const isPoseProcessing = session?.status === "processing" && !hasPose;
   // General processing for ball tracking / pending
@@ -1959,8 +1986,112 @@ export default function GameViewerPage() {
                               </div>
                             )}
 
-                            {/* All Insights throughout the video */}
-                            {videoTips.length > 0 && (
+                            {/* Insight Generation Progress */}
+                            {isInsightGenerating && (
+                              <div className="rounded-lg bg-[#1E1D1F] ring-1 ring-[#9B7B5B]/30 p-3">
+                                <div className="flex items-center justify-between">
+                                  <div className="flex items-center gap-2">
+                                    <Loader2 className="w-3.5 h-3.5 text-[#9B7B5B] animate-spin" />
+                                    <span className="text-xs font-medium text-[#E8E6E3]">
+                                      Generating AI insights
+                                      {insightsProgress ? ` — Stroke ${insightsProgress.current} of ${insightsProgress.total}` : ""}
+                                    </span>
+                                  </div>
+                                  <button
+                                    onClick={() => cancelInsightsMutation.mutate()}
+                                    disabled={cancelInsightsMutation.isPending}
+                                    className="text-[#6A6865] hover:text-[#C45C5C] transition-colors disabled:opacity-50"
+                                    title="Cancel insight generation"
+                                  >
+                                    <X className="w-3.5 h-3.5" />
+                                  </button>
+                                </div>
+                                {insightsProgress && insightsProgress.total > 0 && (
+                                  <div className="mt-2 h-1.5 rounded-full bg-[#363436] overflow-hidden">
+                                    <div
+                                      className="h-full bg-[#9B7B5B] transition-all duration-300"
+                                      style={{ width: `${(insightsProgress.completed / insightsProgress.total) * 100}%` }}
+                                    />
+                                  </div>
+                                )}
+                              </div>
+                            )}
+
+                            {/* AI Insight Cards (replace rule-based tips when available) */}
+                            {hasAiInsights ? (
+                              <div className="flex flex-col min-h-0 flex-1">
+                                <div className="flex items-center justify-between mb-1.5 shrink-0">
+                                  <p className="text-[11px] text-[#6A6865] uppercase tracking-wider">
+                                    Insights ({aiInsightStrokes.length})
+                                  </p>
+                                  {isInsightGenerating && (
+                                    <button
+                                      onClick={() => cancelInsightsMutation.mutate()}
+                                      disabled={cancelInsightsMutation.isPending}
+                                      className="text-[#6A6865] hover:text-[#C45C5C] transition-colors disabled:opacity-50"
+                                      title="Cancel insight generation"
+                                    >
+                                      <X className="w-3 h-3" />
+                                    </button>
+                                  )}
+                                </div>
+                                <div className="space-y-1.5 overflow-y-auto pr-1 flex-1">
+                                  <AnimatePresence mode="popLayout">
+                                    {aiInsightStrokes.map((stroke, idx) => {
+                                      const wasReclassified = stroke.ai_insight_data?.corrected_stroke_type &&
+                                        stroke.ai_insight_data.corrected_stroke_type !== stroke.ai_insight_data.original_stroke_type;
+                                      const strokeColor = stroke.stroke_type === "forehand" ? "#9B7B5B" : stroke.stroke_type === "backhand" ? "#5B9B7B" : "#8A8885";
+                                      const strokeTime = stroke.peak_frame / fps;
+                                      const isActive = activeStroke?.id === stroke.id;
+                                      return (
+                                        <motion.button
+                                          key={stroke.id}
+                                          initial={{ opacity: 0, y: 8 }}
+                                          animate={{ opacity: 1, y: 0 }}
+                                          exit={{ opacity: 0, y: -4 }}
+                                          transition={{ delay: idx * 0.05, duration: 0.2 }}
+                                          onClick={() => {
+                                            if (videoRef.current) {
+                                              videoRef.current.currentTime = stroke.start_frame / fps;
+                                              videoRef.current.pause();
+                                              setIsPlaying(false);
+                                            }
+                                          }}
+                                          className={cn(
+                                            "w-full text-left p-2.5 rounded-lg transition-all",
+                                            isActive
+                                              ? "bg-[#9B7B5B]/15 ring-1 ring-[#9B7B5B]/40"
+                                              : "bg-[#2D2C2E]/30 hover:bg-[#2D2C2E]"
+                                          )}
+                                        >
+                                          <div className="flex items-center gap-2">
+                                            <span className="text-[11px] font-mono shrink-0 text-[#6A6865]">
+                                              {fmtTime(strokeTime)}
+                                            </span>
+                                            <span
+                                              className="text-[10px] font-medium px-1.5 py-0.5 rounded capitalize"
+                                              style={{ backgroundColor: `${strokeColor}20`, color: strokeColor }}
+                                            >
+                                              {stroke.stroke_type}
+                                            </span>
+                                            {wasReclassified && (
+                                              <span className="text-[9px] text-[#C4A05C] bg-[#C4A05C]/15 px-1 py-0.5 rounded">
+                                                was {stroke.ai_insight_data?.original_stroke_type}
+                                              </span>
+                                            )}
+                                          </div>
+                                          {stroke.ai_insight && (
+                                            <p className="text-[11px] mt-1.5 line-clamp-3 leading-relaxed text-[#8A8885]">
+                                              {stroke.ai_insight}
+                                            </p>
+                                          )}
+                                        </motion.button>
+                                      );
+                                    })}
+                                  </AnimatePresence>
+                                </div>
+                              </div>
+                            ) : videoTips.length > 0 ? (
                               <div className="flex flex-col min-h-0 flex-1">
                                 <p className="text-[11px] text-[#6A6865] uppercase tracking-wider mb-1.5 shrink-0">
                                   Insights ({videoTips.filter(t => !t.id.includes("follow") && !t.id.includes("summary")).length})
@@ -2013,7 +2144,7 @@ export default function GameViewerPage() {
                                     })}
                                 </div>
                               </div>
-                            )}
+                            ) : null}
                           </div>
                         ) : (
                           <div className="text-center py-3">

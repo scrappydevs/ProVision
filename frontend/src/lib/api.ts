@@ -177,6 +177,7 @@ export interface Session {
   camera_facing?: "auto" | "toward" | "away";
   status: "pending" | "processing" | "completed" | "failed";
   stroke_analysis_status?: "pending" | "processing" | "completed" | "failed";
+  insight_generation_status?: "generating" | "completed" | "failed" | "cancelled" | null;
   created_at: string;
   players?: PlayerBrief[];
 }
@@ -306,6 +307,16 @@ export interface StrokeMetrics {
   event_frame?: number;
 }
 
+export interface StrokeInsightData {
+  corrected_stroke_type?: string | null;
+  original_stroke_type?: string | null;
+  classification_confidence?: number;
+  classification_reasoning?: string;
+  stroke_type_correct?: boolean;
+  model?: string;
+  generated_at?: string;
+}
+
 export interface Stroke {
   id: string;
   session_id: string;
@@ -317,6 +328,8 @@ export interface Stroke {
   max_velocity: number;
   form_score: number;
   metrics: StrokeMetrics;
+  ai_insight?: string | null;
+  ai_insight_data?: StrokeInsightData | null;
 }
 
 export interface StrokeSummary {
@@ -355,6 +368,12 @@ export interface StrokeDebugRunsResponse {
   runs: StrokeDebugRunSummary[];
 }
 
+export interface InsightsProgress {
+  current: number;
+  total: number;
+  completed: number;
+}
+
 export interface StrokePipelineProgress {
   run_id: string;
   session_id: string;
@@ -362,7 +381,7 @@ export interface StrokePipelineProgress {
   started_at?: string;
   completed_at?: string;
   use_claude_classifier?: boolean;
-  debug_stats?: Record<string, unknown>;
+  debug_stats?: Record<string, unknown> & { insights_progress?: InsightsProgress };
   error?: string;
 }
 
@@ -382,6 +401,9 @@ export const getStrokeDebugRuns = (sessionId: string, limit: number = 20) =>
 
 export const getStrokeProgress = (sessionId: string) =>
   api.get<StrokeProgressResponse>(`/api/stroke/progress/${sessionId}`);
+
+export const cancelStrokeInsights = (sessionId: string) =>
+  api.post(`/api/stroke/cancel-insights/${sessionId}`);
 
 export const getStrokes = (sessionId: string, strokeType?: string) =>
   api.get(`/api/stroke/strokes/${sessionId}`, {

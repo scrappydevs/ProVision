@@ -749,6 +749,40 @@ def _build_detection_events(
             )
         )
 
+    # Preserve every trajectory direction-change alert as its own processed event.
+    # If merge clustering shifted/dropped a trajectory frame center, add it back.
+    existing_frames = {event.frame for event in events}
+    for raw_frame in sorted({int(f) for f in trajectory_event_frames}):
+        center = max(0, min(max_frame, raw_frame))
+        if center in existing_frames:
+            continue
+
+        pre, post, speed = _adaptive_window(center, speed_by_frame)
+        matched_idx = _nearest_stroke_idx(center, pose_strokes, tolerance=14)
+        start_frame = max(0, center - pre)
+        end_frame = min(max_frame, center + post)
+        if matched_idx is not None:
+            matched = pose_strokes[matched_idx]
+            start_frame = min(start_frame, matched.start_frame)
+            end_frame = max(end_frame, matched.end_frame)
+            start_frame = max(0, start_frame)
+            end_frame = min(max_frame, end_frame)
+
+        events.append(
+            DetectionEvent(
+                frame=center,
+                start_frame=start_frame,
+                end_frame=end_frame,
+                pre_frames=pre,
+                post_frames=post,
+                sources=["trajectory"],
+                local_ball_speed=round(speed, 3),
+                matched_stroke_idx=matched_idx,
+            )
+        )
+        existing_frames.add(center)
+
+    events.sort(key=lambda e: e.frame)
     return events
 
 
@@ -1377,9 +1411,13 @@ def _build_final_strokes(
         confidence = _safe_float(classification.get("confidence"), 0.0)
         reason = str(classification.get("reason") or "")[:240]
 
-        # If classifier says it's not a shot, remove it completely from timeline/strokes.
+        # Keep trajectory direction-change events even if classifier returns no_hit.
         if label == "no_hit":
-            continue
+            if "trajectory" in event.sources:
+                label = "uncertain"
+                reason = (reason + "; override_keep_trajectory_event")[:240]
+            else:
+                continue
 
         # Classifier label is the source for stroke type.
         # If uncertain, keep as "unknown" (over-detect).

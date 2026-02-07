@@ -1,5 +1,5 @@
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
-import { analyzeStrokes, getStrokeDebugRuns, getStrokeProgress, getStrokeSummary } from "@/lib/api";
+import { analyzeStrokes, cancelStrokeInsights, getStrokeDebugRuns, getStrokeProgress, getStrokeSummary } from "@/lib/api";
 import { sessionKeys } from "@/hooks/useSessions";
 
 // Query key factory for stroke data
@@ -12,9 +12,10 @@ export const strokeKeys = {
 };
 
 /**
- * Hook to fetch stroke summary for a session
+ * Hook to fetch stroke summary for a session.
+ * When insight generation is active, polls frequently to pick up new ai_insight fields.
  */
-export function useStrokeSummary(sessionId: string) {
+export function useStrokeSummary(sessionId: string, insightGenerating: boolean = false) {
   return useQuery({
     queryKey: strokeKeys.summary(sessionId),
     queryFn: async () => {
@@ -23,7 +24,8 @@ export function useStrokeSummary(sessionId: string) {
     },
     enabled: !!sessionId,
     retry: false, // Don't retry if stroke analysis hasn't been run yet
-    staleTime: 5 * 60 * 1000, // 5 minutes
+    staleTime: insightGenerating ? 0 : 5 * 60 * 1000,
+    refetchInterval: insightGenerating ? 2000 : false,
   });
 }
 
@@ -42,6 +44,25 @@ export function useAnalyzeStrokes(sessionId: string) {
       // Re-sync session state so UI can immediately reflect processing status.
       queryClient.invalidateQueries({ queryKey: sessionKeys.detail(sessionId) });
       // Drop stale progress/summary while fresh recompute starts.
+      queryClient.invalidateQueries({ queryKey: strokeKeys.progress(sessionId) });
+      queryClient.invalidateQueries({ queryKey: strokeKeys.summary(sessionId) });
+    },
+  });
+}
+
+/**
+ * Hook to cancel in-progress AI insight generation
+ */
+export function useCancelInsights(sessionId: string) {
+  const queryClient = useQueryClient();
+
+  return useMutation({
+    mutationFn: async () => {
+      const response = await cancelStrokeInsights(sessionId);
+      return response.data;
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: sessionKeys.detail(sessionId) });
       queryClient.invalidateQueries({ queryKey: strokeKeys.progress(sessionId) });
       queryClient.invalidateQueries({ queryKey: strokeKeys.summary(sessionId) });
     },
