@@ -13,8 +13,7 @@ interface LiveDataOverlayProps {
 }
 
 /**
- * PlayVision-style persistent data overlay
- * Shows real-time player/ball metrics in corners
+ * Persistent data overlay showing real-time player/ball metrics in corners
  */
 export function LiveDataOverlay({
   currentFrame,

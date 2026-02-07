@@ -1182,7 +1182,7 @@ export default function GameViewerPage() {
                   />
                 )}
                 
-                {/* Video Tips - PlayVision AI style overlays */}
+                {/* Video Tips - AI-powered overlays */}
                 <VideoTips
                   currentTime={currentTime}
                   tips={videoTips}

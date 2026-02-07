@@ -395,9 +395,9 @@ async def process_sam2_tracking(
     detection_box: Optional[List[float]] = None
 ) -> Dict[str, Any]:
     """
-    Process SAM2 object tracking — matches modelhealthdemo's proven pattern exactly.
+    Process SAM2 object tracking with optimized frame extraction pattern.
     
-    Key differences from naive approach:
+    Key steps:
     1. Extract only frames starting from click frame (re-indexed to 0)
     2. Use add_new_points with frame_idx=0 (not add_new_points_or_box)
     3. No torch.autocast (can cause precision loss for small objects like ping pong balls)
@@ -416,7 +416,7 @@ async def process_sam2_tracking(
     output_dir = f"{config.results_dir}/{session_id}/sam2"
     os.makedirs(output_dir, exist_ok=True)
     
-    # Step 1: Extract frames starting from click frame (modelhealthdemo pattern)
+    # Step 1: Extract frames starting from click frame
     frames_dir = tempfile.mkdtemp(prefix="sam2_frames_")
     logger.info(f"Extracting frames from {video_path} starting at frame {frame}")
     

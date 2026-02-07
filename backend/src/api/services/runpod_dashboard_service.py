@@ -27,7 +27,7 @@ logger = logging.getLogger(__name__)
 
 
 class _DashboardEngineConfig:
-    """SSH config for the *dashboard / UpliftingTableTennis* RunPod pod.
+    """SSH config for the dashboard analysis RunPod pod.
 
     This is deliberately separate from the main ``RemoteEngineConfig`` used
     for tracking/SAM2/pose, because the two workloads run on different pods.
