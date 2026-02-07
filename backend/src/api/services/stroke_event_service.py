@@ -749,39 +749,6 @@ def _build_detection_events(
             )
         )
 
-    # Preserve every trajectory direction-change alert as its own processed event.
-    # If merge clustering shifted/dropped a trajectory frame center, add it back.
-    existing_frames = {event.frame for event in events}
-    for raw_frame in sorted({int(f) for f in trajectory_event_frames}):
-        center = max(0, min(max_frame, raw_frame))
-        if center in existing_frames:
-            continue
-
-        pre, post, speed = _adaptive_window(center, speed_by_frame)
-        matched_idx = _nearest_stroke_idx(center, pose_strokes, tolerance=14)
-        start_frame = max(0, center - pre)
-        end_frame = min(max_frame, center + post)
-        if matched_idx is not None:
-            matched = pose_strokes[matched_idx]
-            start_frame = min(start_frame, matched.start_frame)
-            end_frame = max(end_frame, matched.end_frame)
-            start_frame = max(0, start_frame)
-            end_frame = min(max_frame, end_frame)
-
-        events.append(
-            DetectionEvent(
-                frame=center,
-                start_frame=start_frame,
-                end_frame=end_frame,
-                pre_frames=pre,
-                post_frames=post,
-                sources=["trajectory"],
-                local_ball_speed=round(speed, 3),
-                matched_stroke_idx=matched_idx,
-            )
-        )
-        existing_frames.add(center)
-
     events.sort(key=lambda e: e.frame)
     return events
 
@@ -1120,12 +1087,17 @@ def _classify_single_event_with_elbow_trend(
 ) -> Dict[str, Any]:
     dominant_arm = "left" if str(handedness).lower() == "left" else "right"
     lookback_frames = max(4, _safe_int(os.getenv("STROKE_ELBOW_LOOKBACK_FRAMES", 10), 10))
+    lookahead_frames = max(1, _safe_int(os.getenv("STROKE_ELBOW_LOOKAHEAD_FRAMES", lookback_frames), lookback_frames))
     min_delta_deg = max(1.0, _safe_float(os.getenv("STROKE_ELBOW_MIN_DELTA_DEG", 5.0), 5.0))
 
     sampled_frames: List[int] = []
     sampled_angles: List[float] = []
 
-    for target_frame in range(max(0, event.frame - lookback_frames), event.frame + 1):
+    max_pose_frame = player_frame_numbers[-1] if player_frame_numbers else event.frame
+    start = max(0, event.frame - lookback_frames)
+    end = min(max_pose_frame, event.frame + lookahead_frames)
+
+    for target_frame in range(start, end + 1):
         nearest = _nearest_pose_frame_number(player_frame_numbers, target_frame, max_delta=2)
         if nearest is None:
             continue
@@ -1172,7 +1144,8 @@ def _classify_single_event_with_elbow_trend(
         "contact_frame": event.frame,
         "reason": (
             f"{dominant_arm}_elbow_delta_deg={delta:.2f}; "
-            f"threshold={min_delta_deg:.2f}; rule=increasing_backhand"
+            f"threshold={min_delta_deg:.2f}; lookback={lookback_frames}; "
+            f"lookahead={lookahead_frames}; rule=increasing_backhand"
         ),
         "frame_numbers": sampled_frames,
         "raw": "",
@@ -1244,6 +1217,16 @@ def _classify_events_with_elbow_trend(
         "reason": "ok",
         "source": "pose_elbow_trend",
         "lookback_frames": max(4, _safe_int(os.getenv("STROKE_ELBOW_LOOKBACK_FRAMES", 10), 10)),
+        "lookahead_frames": max(
+            1,
+            _safe_int(
+                os.getenv(
+                    "STROKE_ELBOW_LOOKAHEAD_FRAMES",
+                    str(max(4, _safe_int(os.getenv("STROKE_ELBOW_LOOKBACK_FRAMES", 10), 10))),
+                ),
+                max(4, _safe_int(os.getenv("STROKE_ELBOW_LOOKBACK_FRAMES", 10), 10)),
+            ),
+        ),
         "min_delta_deg": max(1.0, _safe_float(os.getenv("STROKE_ELBOW_MIN_DELTA_DEG", 5.0), 5.0)),
     }
 
@@ -1411,13 +1394,8 @@ def _build_final_strokes(
         confidence = _safe_float(classification.get("confidence"), 0.0)
         reason = str(classification.get("reason") or "")[:240]
 
-        # Keep trajectory direction-change events even if classifier returns no_hit.
         if label == "no_hit":
-            if "trajectory" in event.sources:
-                label = "uncertain"
-                reason = (reason + "; override_keep_trajectory_event")[:240]
-            else:
-                continue
+            continue
 
         # Classifier label is the source for stroke type.
         # If uncertain, keep as "unknown" (over-detect).
@@ -1824,6 +1802,16 @@ def detect_strokes_hybrid(
             "hit_frame_offset": _safe_int(os.getenv("STROKE_HIT_FRAME_OFFSET", 0), 0),
             "traj_direction_window_frames": _safe_int(os.getenv("STROKE_TRAJ_DIRECTION_WINDOW_FRAMES", 30), 30),
             "elbow_lookback_frames": max(4, _safe_int(os.getenv("STROKE_ELBOW_LOOKBACK_FRAMES", 10), 10)),
+            "elbow_lookahead_frames": max(
+                1,
+                _safe_int(
+                    os.getenv(
+                        "STROKE_ELBOW_LOOKAHEAD_FRAMES",
+                        str(max(4, _safe_int(os.getenv("STROKE_ELBOW_LOOKBACK_FRAMES", 10), 10))),
+                    ),
+                    max(4, _safe_int(os.getenv("STROKE_ELBOW_LOOKBACK_FRAMES", 10), 10)),
+                ),
+            ),
             "elbow_min_delta_deg": max(1.0, _safe_float(os.getenv("STROKE_ELBOW_MIN_DELTA_DEG", 5.0), 5.0)),
         },
         "classifier_meta": classifier_meta,

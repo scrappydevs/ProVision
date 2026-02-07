@@ -154,29 +154,43 @@ export default function GameViewerPage() {
 
   const { data: session, isLoading } = useSession(gameId);
   const { data: poseData } = usePoseAnalysis(gameId);
-  const isInsightGenerating = session?.insight_generation_status === "generating";
-  const { data: strokeSummary } = useStrokeSummary(gameId, isInsightGenerating);
   const { data: analytics } = useAnalytics(gameId);
   const trackMutation = useTrackObject(gameId);
   const strokeMutation = useAnalyzeStrokes(gameId);
   const cancelInsightsMutation = useCancelInsights(gameId);
   const updateSessionMutation = useUpdateSession(gameId);
 
-  const hasPose = !!session?.pose_video_path;
-  const hasStrokes = !!strokeSummary?.total_strokes;
-  const hasTrajectory = !!(session?.trajectory_data?.frames?.length);
-  const isStrokePipelineProcessing =
+  const sessionInsightGenerating = session?.insight_generation_status === "generating";
+  const isStrokeRecomputeProcessing =
     isRecomputingAnalytics ||
     strokeMutation.isPending ||
-    session?.stroke_analysis_status === "processing" ||
-    isInsightGenerating;
-  const { data: liveStrokeProgress } = useStrokeProgress(gameId, isStrokePipelineProcessing);
+    session?.stroke_analysis_status === "processing";
+  const shouldPollStrokeProgress = isStrokeRecomputeProcessing || sessionInsightGenerating;
+  const { data: liveStrokeProgress } = useStrokeProgress(gameId, shouldPollStrokeProgress);
   const strokePipelineDebugStats = useMemo(() => {
     if (liveStrokeProgress?.debug_stats && typeof liveStrokeProgress.debug_stats === "object") {
       return liveStrokeProgress.debug_stats as Record<string, unknown>;
     }
     return null;
   }, [liveStrokeProgress]);
+  const insightStageStatus = useMemo(() => {
+    const stageStatuses = (
+      strokePipelineDebugStats?.stage_statuses &&
+      typeof strokePipelineDebugStats.stage_statuses === "object"
+    )
+      ? (strokePipelineDebugStats.stage_statuses as Record<string, unknown>)
+      : null;
+    const raw = stageStatuses?.generate_insights;
+    return raw === "pending" || raw === "running" || raw === "completed" || raw === "failed" ? raw : null;
+  }, [strokePipelineDebugStats]);
+  const isInsightGenerating =
+    insightStageStatus === "running" ||
+    (sessionInsightGenerating && insightStageStatus !== "completed" && insightStageStatus !== "failed");
+  const { data: strokeSummary } = useStrokeSummary(gameId, isInsightGenerating);
+
+  const hasPose = !!session?.pose_video_path;
+  const hasStrokes = !!strokeSummary?.total_strokes;
+  const hasTrajectory = !!(session?.trajectory_data?.frames?.length);
   const strokePipelineStageRows = useMemo(() => {
     const defaultStageOrder = [
       "load_session_metadata",
@@ -458,7 +472,7 @@ export default function GameViewerPage() {
   }, [tipParam, videoTips]);
 
   const strokeMarkers = useMemo(() => {
-    if (isStrokePipelineProcessing) return [];
+    if (isStrokeRecomputeProcessing) return [];
     if (!strokeSummary?.strokes?.length) return [];
     return strokeSummary.strokes.map((stroke) => ({
       id: stroke.id,
@@ -467,17 +481,18 @@ export default function GameViewerPage() {
       formScore: stroke.form_score,
       frame: stroke.peak_frame,
     }));
-  }, [strokeSummary?.strokes, fps, isStrokePipelineProcessing]);
+  }, [strokeSummary?.strokes, fps, isStrokeRecomputeProcessing]);
 
   // Reversal markers sourced from backend stroke events.
   // This keeps UI aligned with the stroke pipeline instead of a separate client-only heuristic.
   const trajectoryReversalMarkers = useMemo(() => {
-    if (isStrokePipelineProcessing) return [];
+    if (isStrokeRecomputeProcessing) return [];
     if (!strokeSummary?.strokes?.length) return [];
     const out: Array<{ frame: number; time: number }> = [];
     const seen = new Set<number>();
 
     for (const stroke of strokeSummary.strokes) {
+      if (stroke.stroke_type !== "forehand" && stroke.stroke_type !== "backhand") continue;
       const sourcesRaw = stroke.metrics?.event_sources;
       const sources = Array.isArray(sourcesRaw)
         ? sourcesRaw
@@ -486,9 +501,7 @@ export default function GameViewerPage() {
           : [];
       if (!sources.includes("trajectory")) continue;
 
-      const frame = Number.isFinite(stroke.metrics?.event_frame)
-        ? Number(stroke.metrics?.event_frame)
-        : stroke.peak_frame;
+      const frame = stroke.peak_frame;
       if (!Number.isFinite(frame) || seen.has(frame)) continue;
       seen.add(frame);
       out.push({ frame, time: frame / fps });
@@ -496,7 +509,7 @@ export default function GameViewerPage() {
 
     out.sort((a, b) => a.frame - b.frame);
     return out;
-  }, [strokeSummary?.strokes, fps, isStrokePipelineProcessing]);
+  }, [strokeSummary?.strokes, fps, isStrokeRecomputeProcessing]);
 
   const autoSeekTime = startTimeParam ?? tipSeekTime;
   const shouldAutoPlay = startTimeParam !== null && startTimeParam !== undefined;
@@ -657,7 +670,11 @@ export default function GameViewerPage() {
         sessionKeys.detail(gameId),
         (prev: unknown) =>
           prev && typeof prev === "object"
-            ? { ...(prev as Record<string, unknown>), stroke_analysis_status: "processing" }
+            ? {
+                ...(prev as Record<string, unknown>),
+                stroke_analysis_status: "processing",
+                insight_generation_status: null,
+              }
             : prev
       );
 
@@ -673,9 +690,20 @@ export default function GameViewerPage() {
         const progressResponse = await getStrokeProgress(gameId);
         const progress = progressResponse.data?.progress;
         const status = progress?.status;
+        const stageStatuses = (
+          progress?.debug_stats?.stage_statuses &&
+          typeof progress.debug_stats.stage_statuses === "object"
+        )
+          ? (progress.debug_stats.stage_statuses as Record<string, unknown>)
+          : null;
+        const persistDone = stageStatuses?.persist_results === "completed";
 
-        if (status === "completed" || status === "failed") {
-          finalStatus = status;
+        if (status === "failed") {
+          finalStatus = "failed";
+          break;
+        }
+        if (status === "completed" || persistDone) {
+          finalStatus = "completed";
           break;
         }
         if (Date.now() - startedAt > timeoutMs) break;
@@ -692,13 +720,18 @@ export default function GameViewerPage() {
         );
       }
 
-      // 3) Force-refresh analytics and stroke/session caches
-      const analyticsResponse = await getSessionAnalytics(gameId, { force: true });
-      queryClient.setQueryData(["analytics", gameId], analyticsResponse.data);
+      // 3) Main stroke outputs are ready at persist_results; refresh UI immediately.
       await Promise.all([
         queryClient.invalidateQueries({ queryKey: strokeKeys.progress(gameId) }),
         queryClient.invalidateQueries({ queryKey: strokeKeys.summary(gameId) }),
         queryClient.invalidateQueries({ queryKey: sessionKeys.detail(gameId) }),
+      ]);
+      setIsRecomputingAnalytics(false);
+
+      // 4) Analytics refresh can continue in background while AI insights generate.
+      const analyticsResponse = await getSessionAnalytics(gameId, { force: true });
+      queryClient.setQueryData(["analytics", gameId], analyticsResponse.data);
+      await Promise.all([
         queryClient.invalidateQueries({ queryKey: ["analytics", gameId] }),
       ]);
 
@@ -710,7 +743,7 @@ export default function GameViewerPage() {
     } finally {
       setIsRecomputingAnalytics(false);
     }
-  }, [gameId, isRecomputingAnalytics, queryClient]);
+  }, [gameId, isRecomputingAnalytics, queryClient, strokeMutation]);
 
   // Keyboard shortcuts for debug mode
   useEffect(() => {
@@ -1886,7 +1919,7 @@ export default function GameViewerPage() {
                     {/* ── Stroke Summary Stats ── */}
                     {hasPose && !isPoseProcessing && (
                       <>
-                        {isStrokePipelineProcessing ? (
+                        {isStrokeRecomputeProcessing ? (
                           <div className="rounded-lg bg-[#1E1D1F] ring-1 ring-[#9B7B5B]/30 p-3">
                             <div className="flex items-center gap-2">
                               <Loader2 className="w-3.5 h-3.5 text-[#9B7B5B] animate-spin" />

@@ -27,6 +27,16 @@ from .stroke_event_service import (
 from ..utils.video_utils import cleanup_temp_file, download_video_from_storage, extract_video_path_from_url
 
 
+def _read_env_float(name: str, default: float) -> float:
+    raw = os.getenv(name)
+    if raw is None:
+        return default
+    try:
+        return float(raw.strip())
+    except (TypeError, ValueError):
+        return default
+
+
 def _extract_frames_for_insight(
     cap: Any,
     start_frame: int,
@@ -290,6 +300,7 @@ def generate_insights_for_session(
     cap = None
     completed = 0
     classifications_changed = False
+    min_conf_fh_to_bh = _read_env_float("STROKE_INSIGHT_MIN_CONFIDENCE_FH_TO_BH", 0.75)
 
     try:
         import anthropic
@@ -350,13 +361,49 @@ def generate_insights_for_session(
                     camera_facing=camera_facing,
                 )
 
+                original_type = str(stroke_row.get("stroke_type") or "").strip().lower()
+                suggested_corrected_type = result.get("corrected_stroke_type")
+                effective_corrected_type = suggested_corrected_type
+                reclassification_blocked_reason: Optional[str] = None
+                confidence = result.get("classification_confidence", 0.0)
+                try:
+                    confidence = float(confidence)
+                except (TypeError, ValueError):
+                    confidence = 0.0
+
+                apply_reclassification = bool(
+                    not result.get("stroke_type_correct", True) and effective_corrected_type
+                )
+                if (
+                    apply_reclassification
+                    and original_type == "forehand"
+                    and effective_corrected_type == "backhand"
+                    and confidence < min_conf_fh_to_bh
+                ):
+                    apply_reclassification = False
+                    effective_corrected_type = None
+                    reclassification_blocked_reason = (
+                        f"fh_to_bh_confidence_below_{min_conf_fh_to_bh:.2f}"
+                    )
+                    print(
+                        "[StrokeInsight]   Ignoring low-confidence forehand->backhand "
+                        f"reclassification (confidence={confidence:.3f}, threshold={min_conf_fh_to_bh:.3f})"
+                    )
+
                 # Build ai_insight_data
                 ai_insight_data = {
-                    "stroke_type_correct": result.get("stroke_type_correct", True),
-                    "corrected_stroke_type": result.get("corrected_stroke_type"),
+                    "stroke_type_correct": (
+                        result.get("stroke_type_correct", True)
+                        if reclassification_blocked_reason is None
+                        else True
+                    ),
+                    "corrected_stroke_type": effective_corrected_type,
                     "original_stroke_type": stroke_row.get("stroke_type"),
                     "classification_confidence": result.get("classification_confidence", 0.0),
                     "classification_reasoning": result.get("classification_reasoning", ""),
+                    "suggested_corrected_stroke_type": suggested_corrected_type,
+                    "reclassification_applied": apply_reclassification,
+                    "reclassification_blocked_reason": reclassification_blocked_reason,
                     "model": model,
                     "generated_at": datetime.now(timezone.utc).isoformat(),
                 }
@@ -368,11 +415,13 @@ def generate_insights_for_session(
                 }
 
                 # If classification was corrected, update stroke_type
-                corrected_type = result.get("corrected_stroke_type")
-                if not result.get("stroke_type_correct", True) and corrected_type:
-                    update_data["stroke_type"] = corrected_type
+                if apply_reclassification and effective_corrected_type:
+                    update_data["stroke_type"] = effective_corrected_type
                     classifications_changed = True
-                    print(f"[StrokeInsight]   Reclassified: {stroke_row.get('stroke_type')} -> {corrected_type}")
+                    print(
+                        "[StrokeInsight]   Reclassified: "
+                        f"{stroke_row.get('stroke_type')} -> {effective_corrected_type}"
+                    )
 
                 supabase.table("stroke_analytics").update(update_data).eq("id", stroke_id).execute()
                 completed += 1
