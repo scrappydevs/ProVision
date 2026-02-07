@@ -8,6 +8,8 @@ export interface VideoTip {
   duration: number;
   title: string;
   message: string;
+  strokeId?: string;
+  seekTime?: number;
 }
 
 interface VideoTipsProps {

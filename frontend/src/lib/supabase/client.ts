@@ -8,9 +8,22 @@ let configPromise: Promise<{ supabase_url: string; supabase_anon_key: string }> 
 
 async function fetchConfig() {
   if (!configPromise) {
-    configPromise = fetch(`${API_URL}/api/config`)
-      .then(res => res.json())
-      .catch(() => ({ supabase_url: '', supabase_anon_key: '' }))
+    configPromise = fetch(`${API_URL}/api/config`, {
+      cache: 'no-store',
+      headers: {
+        'Content-Type': 'application/json',
+      }
+    })
+      .then(res => {
+        if (!res.ok) {
+          throw new Error(`Failed to fetch config: ${res.status}`)
+        }
+        return res.json()
+      })
+      .catch((err) => {
+        console.error('Failed to fetch backend config:', err)
+        return { supabase_url: '', supabase_anon_key: '' }
+      })
   }
   return configPromise
 }
@@ -20,7 +33,9 @@ export async function getSupabaseClient(): Promise<SupabaseClient | null> {
 
   const config = await fetchConfig()
   if (!config.supabase_url || !config.supabase_anon_key) {
-    console.error('Supabase not configured — backend /api/config returned empty values')
+    console.error('Supabase not configured — backend /api/config returned empty values', config)
+    // Reset promise to allow retry
+    configPromise = null
     return null
   }
 
