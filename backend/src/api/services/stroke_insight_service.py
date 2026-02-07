@@ -13,6 +13,8 @@ from __future__ import annotations
 import json
 import math
 import os
+import random
+import re
 from datetime import datetime, timezone
 from time import perf_counter
 from typing import Any, Callable, Dict, List, Optional, Tuple
@@ -116,116 +118,76 @@ def _is_player_stroke(stroke_row: Dict[str, Any]) -> bool:
 
 def _generate_timeline_tips_from_insights(
     *,
-    client: Any,
-    model: str,
     session_id: str,
     strokes: List[Dict[str, Any]],
     trajectory_data: Optional[Dict[str, Any]],
 ) -> List[Dict[str, Any]]:
     """
-    Build one Claude summary recommendation for each 2-second video bucket.
+    Build one timeline tip per fixed-duration video bucket by sampling
+    from generated per-stroke AI insights.
     """
-    bucket_sec = 2.0
+    bucket_sec = max(0.5, min(5.0, _read_env_float("STROKE_TIMELINE_TIP_INTERVAL_SEC", 1.5)))
     duration_sec = _estimate_session_duration_seconds(trajectory_data, strokes)
     bucket_count = max(1, int(math.ceil(duration_sec / bucket_sec)))
 
-    compact_strokes: List[Dict[str, Any]] = []
+    def _normalize_tip_message(raw: str) -> str:
+        cleaned = " ".join(str(raw or "").split())
+        if not cleaned:
+            return "Recover to neutral quickly and prepare your next contact point."
+        parts = re.split(r"(?<=[.!?])\s+", cleaned, maxsplit=1)
+        first_sentence = parts[0].strip()
+        message = first_sentence or cleaned
+        return message[:220]
+
+    candidates: List[Dict[str, Any]] = []
     for s in strokes:
         if not _is_player_stroke(s):
             continue
         ai_insight = str(s.get("ai_insight") or "").strip()
         if not ai_insight:
             continue
-        compact_strokes.append(
+        stroke_type = str(s.get("stroke_type") or "").strip().lower()
+        if stroke_type in {"forehand", "backhand"}:
+            title = f"{stroke_type.title()} Insight"
+        else:
+            title = "AI Insight"
+        candidates.append(
             {
                 "id": s.get("id"),
-                "start_frame": int(s.get("start_frame", 0) or 0),
-                "peak_frame": int(s.get("peak_frame", 0) or 0),
-                "end_frame": int(s.get("end_frame", 0) or 0),
-                "stroke_type": s.get("stroke_type"),
-                "form_score": s.get("form_score"),
-                "insight": ai_insight[:320],
+                "title": title,
+                "message": _normalize_tip_message(ai_insight),
             }
         )
 
-    # We still emit buckets even if only a few stroke insights exist.
-    prompt_payload = {
-        "session_id": session_id,
-        "duration_sec": round(duration_sec, 3),
-        "bucket_size_sec": bucket_sec,
-        "bucket_count": bucket_count,
-        "stroke_insights": compact_strokes,
-    }
-
-    prompt = (
-        "You are creating timeline coaching overlays for a table tennis video.\n"
-        "Given per-stroke AI insights, generate EXACTLY one concise recommendation/observation "
-        "for each 2-second bucket across the full video.\n\n"
-        "Rules:\n"
-        "1. Return EXACTLY one tip per bucket_index from 0 to bucket_count-1.\n"
-        "2. Keep each title 2-6 words and each message 1 sentence (max 18 words).\n"
-        "3. Mention what was noticed and the most actionable adjustment.\n"
-        "4. If a bucket has little signal, provide a neutral rally habit tip.\n"
-        "5. Return ONLY valid JSON.\n\n"
-        "JSON schema:\n"
-        "{\n"
-        '  "tips": [\n'
-        '    {"bucket_index": 0, "title": "short title", "message": "one-sentence recommendation"}\n'
-        "  ]\n"
-        "}\n\n"
-        f"Data:\n{json.dumps(prompt_payload, ensure_ascii=True)}"
-    )
-
-    response = client.messages.create(
-        model=model,
-        max_tokens=min(4096, 600 + bucket_count * 70),
-        temperature=0,
-        messages=[{"role": "user", "content": [{"type": "text", "text": prompt}]}],
-    )
-    raw_text = _extract_text_from_anthropic_response(response)
-    parsed = _extract_first_json_object(raw_text) or {}
-    tips_raw = parsed.get("tips") if isinstance(parsed, dict) else None
-    tips_list = tips_raw if isinstance(tips_raw, list) else []
-
-    tip_by_bucket: Dict[int, Dict[str, Any]] = {}
-    for raw in tips_list:
-        if not isinstance(raw, dict):
-            continue
-        try:
-            bucket_index = int(raw.get("bucket_index"))
-        except (TypeError, ValueError):
-            continue
-        if bucket_index < 0 or bucket_index >= bucket_count:
-            continue
-        title = str(raw.get("title") or "").strip()
-        message = str(raw.get("message") or "").strip()
-        if not title:
-            title = "Rally Snapshot"
-        if not message:
-            message = "Recover balance early and prepare your next contact point."
-        tip_by_bucket[bucket_index] = {
-            "id": f"timeline-{bucket_index}",
-            "timestamp": round(bucket_index * bucket_sec, 3),
-            "duration": bucket_sec,
-            "seek_time": round(bucket_index * bucket_sec, 3),
-            "title": title[:64],
-            "message": message[:220],
-        }
-
-    # Guarantee one tip per bucket.
     out: List[Dict[str, Any]] = []
+    prev_candidate_id: Optional[str] = None
+    rng = random.Random()
+    rng.seed(f"{session_id}:{datetime.now(timezone.utc).isoformat()}")
     for bucket_index in range(bucket_count):
-        if bucket_index in tip_by_bucket:
-            out.append(tip_by_bucket[bucket_index])
-            continue
+        timestamp = round(bucket_index * bucket_sec, 3)
+        selected: Optional[Dict[str, Any]] = None
+
+        if candidates:
+            if len(candidates) == 1:
+                selected = candidates[0]
+            else:
+                selected = rng.choice(candidates)
+                # Avoid immediate repeats when possible.
+                if selected.get("id") == prev_candidate_id:
+                    alternatives = [c for c in candidates if c.get("id") != prev_candidate_id]
+                    if alternatives:
+                        selected = rng.choice(alternatives)
+            prev_candidate_id = str(selected.get("id")) if selected else None
+
         out.append(
             {
                 "id": f"timeline-{bucket_index}",
-                "timestamp": round(bucket_index * bucket_sec, 3),
+                "timestamp": timestamp,
                 "duration": bucket_sec,
-                "seek_time": round(bucket_index * bucket_sec, 3),
-                "title": "Rally Snapshot",
-                "message": "Recover to neutral quickly and set up your next swing path early.",
+                "seek_time": timestamp,
+                "title": str((selected or {}).get("title") or "Rally Snapshot")[:64],
+                "message": str((selected or {}).get("message") or "Recover to neutral quickly and set up your next swing path early.")[:220],
+                "source_stroke_id": (selected or {}).get("id"),
             }
         )
 
@@ -345,7 +307,9 @@ def generate_insight_for_stroke(
     for key in ["elbow_angle", "shoulder_angle", "knee_angle", "hip_rotation",
                  "elbow_range", "hip_rotation_range", "shoulder_rotation_range",
                  "spine_lean", "classifier_source", "classifier_confidence",
-                 "classifier_reason", "event_sources"]:
+                 "classifier_reason", "classifier_elbow_delta_deg",
+                 "classifier_elbow_reason", "classifier_elbow_frame_window",
+                 "classifier_elbow_hint", "event_sources"]:
         if key in metrics:
             metrics_summary[key] = metrics[key]
 
@@ -358,6 +322,14 @@ def generate_insight_for_stroke(
         f"Frames provided: {sent_frames}\n\n"
         f"Stroke metrics:\n{json.dumps(metrics_summary, indent=2, default=str)}\n\n"
         "The ball is marked with a GREEN bounding box labeled 'BALL' when detected.\n\n"
+        "Temporal reasoning requirement:\n"
+        "- Reconstruct the stroke as a time sequence using FRAME NUMBERS (and any frame labels in-image),\n"
+        "  not just the order the images appear in the prompt.\n"
+        "- Build a holistic motion picture of the hitting arm over time: backswing -> contact -> follow-through.\n"
+        "- Classify forehand/backhand only after this temporal reconstruction.\n\n"
+        "Heuristic weighting requirement:\n"
+        "- The metrics include elbow-trend diagnostics (delta, sampled frames, and reason).\n"
+        "- Give those diagnostics SOME weight as a secondary signal, but resolve conflicts using visual motion evidence.\n\n"
         "Your tasks:\n"
         "1. VERIFY or CORRECT the forehand/backhand classification. The heuristic may be wrong.\n"
         "   - FOREHAND: Racket on dominant-hand side (right for right-hander)\n"
@@ -690,7 +662,7 @@ def generate_insights_for_session(
             except Exception as exc:
                 print(f"[StrokeInsight] Failed to update stroke summary: {exc}")
 
-        # Build timeline-level tips from all stroke insights (one per 2 seconds),
+        # Build timeline-level tips from all stroke insights (one per time bucket),
         # then store them on session.stroke_summary for the top video overlay card.
         try:
             refreshed = (
@@ -702,8 +674,6 @@ def generate_insights_for_session(
             )
             refreshed_strokes = refreshed.data or []
             timeline_tips = _generate_timeline_tips_from_insights(
-                client=client,
-                model=model,
                 session_id=session_id,
                 strokes=refreshed_strokes,
                 trajectory_data=trajectory_data,
@@ -721,12 +691,19 @@ def generate_insights_for_session(
             summary.update(
                 {
                     "timeline_tips": timeline_tips,
-                    "timeline_tip_interval_sec": 2.0,
+                    "timeline_tip_interval_sec": (
+                        float(timeline_tips[0].get("duration"))
+                        if timeline_tips and isinstance(timeline_tips[0], dict)
+                        else max(0.5, min(5.0, _read_env_float("STROKE_TIMELINE_TIP_INTERVAL_SEC", 1.5)))
+                    ),
                     "timeline_tips_generated_at": datetime.now(timezone.utc).isoformat(),
                 }
             )
             supabase.table("sessions").update({"stroke_summary": summary}).eq("id", session_id).execute()
-            print(f"[StrokeInsight] Generated {timeline_tips_count} timeline tips (2s buckets)")
+            print(
+                "[StrokeInsight] Generated "
+                f"{timeline_tips_count} timeline tips ({summary.get('timeline_tip_interval_sec')}s buckets)"
+            )
         except Exception as exc:
             print(f"[StrokeInsight] Timeline tips generation failed: {exc}")
 

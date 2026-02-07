@@ -966,6 +966,7 @@ def _classify_single_event_with_claude(
     camera_facing: str,
     trajectory_by_frame: Optional[Dict[str, Any]] = None,
     session_id: str = "",
+    elbow_context: Optional[Dict[str, Any]] = None,
 ) -> Dict[str, Any]:
     debug_info(f"🎬 EXTRACTING FRAMES FOR EVENT at frame {event.frame}")
     frame_extract_start = perf_counter()
@@ -1023,6 +1024,21 @@ def _classify_single_event_with_claude(
             "raw": "",
         }
 
+    elbow_context_block = ""
+    if isinstance(elbow_context, dict) and elbow_context:
+        elbow_context_payload = {
+            "label": elbow_context.get("label"),
+            "confidence": elbow_context.get("confidence"),
+            "reason": elbow_context.get("reason"),
+            "frame_numbers": elbow_context.get("frame_numbers"),
+            "elbow_debug": elbow_context.get("elbow_debug"),
+        }
+        elbow_context_block = (
+            "Heuristic elbow-trend context (SECONDARY signal, use with moderate weight):\n"
+            f"{json.dumps(elbow_context_payload, ensure_ascii=True)}\n"
+            "Use this as a prior, but confirm classification from the visual motion in frames.\n\n"
+        )
+
     prompt = (
         "You are analyzing a table tennis video to classify a hit.\n\n"
         f"Candidate hit frame: {event.frame}\n"
@@ -1031,6 +1047,7 @@ def _classify_single_event_with_claude(
         f"Camera facing: {camera_facing}\n"
         f"Detection sources: {', '.join(event.sources)}\n\n"
         "The ball is marked with a GREEN bounding box labeled 'BALL' when detected.\n\n"
+        f"{elbow_context_block}"
         "Your task: Classify this event as FOREHAND, BACKHAND, or NO_HIT.\n\n"
         "CRITICAL RULES:\n"
         "1. Use 'no_hit' if this is not even close to a real shot/contact event.\n"
@@ -1126,6 +1143,7 @@ def _classify_single_event_with_claude(
         "contact_frame": contact_frame,
         "reason": reason or "no_reason_provided",
         "frame_numbers": sent_frames,
+        "elbow_context": elbow_context if isinstance(elbow_context, dict) else None,
         "raw": raw_text[:1200],
         "debug_path": debug_path,
     }
@@ -1307,6 +1325,50 @@ def _classify_events_with_elbow_trend(
     }
 
 
+def _compute_elbow_context_for_events(
+    events: List[DetectionEvent],
+    all_pose_frames: List[Dict[str, Any]],
+    video_width: int,
+    video_height: int,
+    handedness: str,
+) -> List[Dict[str, Any]]:
+    player_pose_by_frame: Dict[int, Dict[str, Any]] = {}
+    for pose_frame in all_pose_frames:
+        frame_number = pose_frame.get("frame_number")
+        if not isinstance(frame_number, int):
+            continue
+        if _safe_int(pose_frame.get("person_id"), 0) != 0:
+            continue
+        if frame_number not in player_pose_by_frame:
+            player_pose_by_frame[frame_number] = pose_frame
+
+    player_frame_numbers = sorted(player_pose_by_frame.keys())
+    if not player_frame_numbers:
+        return [{} for _ in events]
+
+    contexts: List[Dict[str, Any]] = []
+    for event in events:
+        classification = _classify_single_event_with_elbow_trend(
+            event=event,
+            player_pose_by_frame=player_pose_by_frame,
+            player_frame_numbers=player_frame_numbers,
+            video_width=video_width,
+            video_height=video_height,
+            handedness=handedness,
+        )
+        elbow_debug = classification.get("elbow_debug") if isinstance(classification.get("elbow_debug"), dict) else None
+        contexts.append(
+            {
+                "label": _normalize_label(classification.get("label")),
+                "confidence": round(max(0.0, min(1.0, _safe_float(classification.get("confidence"), 0.0))), 3),
+                "reason": str(classification.get("reason") or "")[:240],
+                "frame_numbers": classification.get("frame_numbers", []),
+                "elbow_debug": elbow_debug,
+            }
+        )
+    return contexts
+
+
 def _classify_events_with_claude(
     events: List[DetectionEvent],
     video_url: Optional[str],
@@ -1315,6 +1377,9 @@ def _classify_events_with_claude(
     camera_facing: str,
     trajectory_points: Optional[List[Dict[str, Any]]] = None,
     session_id: str = "",
+    all_pose_frames: Optional[List[Dict[str, Any]]] = None,
+    video_width: int = 0,
+    video_height: int = 0,
 ) -> Tuple[List[Dict[str, Any]], Dict[str, Any]]:
     debug_header(f"🎯 STARTING CLAUDE CLASSIFICATION - {len(events)} events")
 
@@ -1373,6 +1438,14 @@ def _classify_events_with_claude(
         if not cap.isOpened():
             raise RuntimeError("failed_to_open_local_video")
 
+        elbow_contexts = _compute_elbow_context_for_events(
+            events=events,
+            all_pose_frames=all_pose_frames or [],
+            video_width=video_width,
+            video_height=video_height,
+            handedness=handedness,
+        )
+
         results: List[Dict[str, Any]] = []
         total_claude_start = perf_counter()
 
@@ -1389,6 +1462,7 @@ def _classify_events_with_claude(
                     camera_facing=camera_facing,
                     trajectory_by_frame=trajectory_by_frame,
                     session_id=session_id,
+                    elbow_context=elbow_contexts[idx - 1] if (idx - 1) < len(elbow_contexts) else None,
                 )
             )
 
@@ -1469,6 +1543,7 @@ def _build_final_strokes(
         label = _normalize_label(classification.get("label"))
         confidence = _safe_float(classification.get("confidence"), 0.0)
         reason = str(classification.get("reason") or "")[:240]
+        elbow_context = classification.get("elbow_context") if isinstance(classification.get("elbow_context"), dict) else None
 
         if label == "no_hit":
             continue
@@ -1512,6 +1587,14 @@ def _build_final_strokes(
                         "claude_frame_window": classification.get("frame_numbers", []),
                     }
                 )
+            if elbow_context:
+                elbow_debug = elbow_context.get("elbow_debug") if isinstance(elbow_context.get("elbow_debug"), dict) else {}
+                metrics["classifier_elbow_hint"] = elbow_context
+                metrics["classifier_elbow_frame_window"] = elbow_context.get("frame_numbers", [])
+                metrics["classifier_elbow_reason"] = str(elbow_context.get("reason") or "")[:240]
+                delta = elbow_debug.get("delta_deg")
+                if isinstance(delta, (int, float)):
+                    metrics["classifier_elbow_delta_deg"] = round(float(delta), 3)
             _apply_hitter_inference_to_metrics(metrics, hitter_info)
 
             final.append(
@@ -1554,6 +1637,14 @@ def _build_final_strokes(
                     "claude_frame_window": classification.get("frame_numbers", []),
                 }
             )
+        if elbow_context:
+            elbow_debug = elbow_context.get("elbow_debug") if isinstance(elbow_context.get("elbow_debug"), dict) else {}
+            metrics["classifier_elbow_hint"] = elbow_context
+            metrics["classifier_elbow_frame_window"] = elbow_context.get("frame_numbers", [])
+            metrics["classifier_elbow_reason"] = str(elbow_context.get("reason") or "")[:240]
+            delta = elbow_debug.get("delta_deg")
+            if isinstance(delta, (int, float)):
+                metrics["classifier_elbow_delta_deg"] = round(float(delta), 3)
         _apply_hitter_inference_to_metrics(metrics, hitter_info)
         final.append(
             Stroke(
@@ -1711,6 +1802,9 @@ def detect_strokes_hybrid(
                 camera_facing=camera_facing,
                 trajectory_points=trajectory_points,
                 session_id=session_id,
+                all_pose_frames=all_pose_frames,
+                video_width=video_width,
+                video_height=video_height,
             ),
         )
     else:

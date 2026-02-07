@@ -151,7 +151,7 @@ export default function GameViewerPage() {
   const [videoBounds, setVideoBounds] = useState<{ top: number; left: number; right: number; width: number; height: number } | null>(null);
   const [videoReady, setVideoReady] = useState(false);
   const isResizing = useRef(false);
-  const [activeTip, setActiveTip] = useState<VideoTip | null>(null);
+  const [, setActiveTip] = useState<VideoTip | null>(null);
 
   const [showPlayerSelection, setShowPlayerSelection] = useState(false);
   const playerSelectionAutoOpened = useRef(false);
@@ -1365,7 +1365,13 @@ export default function GameViewerPage() {
     // ctx.clearRect(0, 0, vw, vh); — removed to allow layering
 
     for (const person of detectedPersons) {
-      const color = PERSON_COLORS[(person.id - 1) % PERSON_COLORS.length];
+      const selectionIndex = selectedPersonIds.indexOf(person.id);
+      const color =
+        selectionIndex === 1
+          ? OPPONENT_SHOT_COLOR
+          : selectionIndex === 0
+            ? "#9B7B5B"
+            : PERSON_COLORS[(person.id - 1) % PERSON_COLORS.length];
       const isSelected = selectedPersonIds.includes(person.id);
       const alpha = isSelected ? 1.0 : 0.4;
 
@@ -1383,7 +1389,6 @@ export default function GameViewerPage() {
       ctx.globalAlpha = alpha;
       ctx.font = "bold 14px sans-serif";
       ctx.fillStyle = color;
-      const selectionIndex = selectedPersonIds.indexOf(person.id);
       const label = selectionIndex === 0 ? "Player" : selectionIndex === 1 ? "Opponent" : `P${person.id}`;
       ctx.fillText(label, x1 + 4, y1 - 6);
 
@@ -1493,13 +1498,6 @@ export default function GameViewerPage() {
     if (!Number.isFinite(targetTime)) return;
     handleAnalyticsSeek(targetTime);
   }, [handleAnalyticsSeek]);
-  const handleTipSeek = useCallback((tip: VideoTip) => {
-    if (!videoRef.current) return;
-    const targetTime = tip.seekTime ?? tip.timestamp;
-    videoRef.current.currentTime = targetTime;
-    videoRef.current.pause();
-    setIsPlaying(false);
-  }, []);
 
   // Smart clip pre-fill: find highest-scoring activity region near current time
   const clipPrefill = useMemo(() => {
@@ -1865,7 +1863,7 @@ export default function GameViewerPage() {
               <div className="flex items-center gap-3 mb-1.5">
                 <span className="text-[10px] text-[#6A6865] w-10">{fmtTime(currentTime)}</span>
                 <div className="relative flex-1">
-                  <div className="absolute inset-x-0 -top-1.5 h-2 pointer-events-none">
+                  <div className="absolute inset-x-0 -top-1.5 h-2 pt-0.5 pointer-events-none">
                     {duration > 0 && strokeMarkers.map((marker) => {
                       const pct = Math.min(1, Math.max(0, marker.time / duration));
                       const isActive = activeStroke?.id === marker.id;
@@ -1900,30 +1898,6 @@ export default function GameViewerPage() {
                     onChange={handleSeek}
                     className="w-full h-1 bg-[#363436] rounded-full appearance-none cursor-pointer [&::-webkit-slider-thumb]:appearance-none [&::-webkit-slider-thumb]:w-2.5 [&::-webkit-slider-thumb]:h-2.5 [&::-webkit-slider-thumb]:bg-[#9B7B5B] [&::-webkit-slider-thumb]:rounded-full"
                   />
-                  {/* Trajectory reversal markers (blue dots below slider) */}
-                  {trajectoryReversalMarkers.length > 0 && (
-                    <div className="absolute inset-x-0 top-2.5 h-2 pointer-events-none">
-                      {duration > 0 && trajectoryReversalMarkers.map((marker, i) => {
-                        const pct = Math.min(1, Math.max(0, marker.time / duration));
-                        return (
-                          <button
-                            key={`rev-${marker.frame}-${i}`}
-                            onClick={() => {
-                              if (videoRef.current) videoRef.current.currentTime = marker.time;
-                            }}
-                            className="absolute top-0 -translate-x-1/2 w-2 h-2 rounded-full pointer-events-auto hover:scale-150 transition-transform"
-                            style={{
-                              left: `${pct * 100}%`,
-                              backgroundColor: "#7B9BC4",
-                              boxShadow: "0 0 4px rgba(123, 155, 196, 0.5)",
-                            }}
-                            title={`Ball direction change — Frame ${marker.frame}`}
-                            aria-label={`Trajectory reversal at ${fmtTime(marker.time)}`}
-                          />
-                        );
-                      })}
-                    </div>
-                  )}
                 </div>
                 <span className="text-[10px] text-[#6A6865] w-10 text-right">{fmtTime(duration)}</span>
               </div>
@@ -2336,59 +2310,6 @@ export default function GameViewerPage() {
                                       );
                                     })}
                                   </AnimatePresence>
-                                </div>
-                              </div>
-                            ) : videoTips.length > 0 ? (
-                              <div className="flex flex-col min-h-0 flex-1">
-                                <p className="text-[11px] text-[#6A6865] uppercase tracking-wider mb-1.5 shrink-0">
-                                  Insights ({videoTips.filter(t => !t.id.includes("follow") && !t.id.includes("summary")).length})
-                                </p>
-                                <div className="space-y-1.5 overflow-y-auto pr-1 flex-1">
-                                  {videoTips
-                                    .filter(t => !t.id.includes("follow") && !t.id.includes("summary"))
-                                    .map((tip) => {
-                                      const isActive = activeTip?.id === tip.id;
-                                      const isPast = currentTime > tip.timestamp + tip.duration;
-                                      return (
-                                        <button
-                                          key={tip.id}
-                                          onClick={() => {
-                                            handleTipSeek(tip);
-                                          }}
-                                          className={cn(
-                                            "w-full text-left p-2.5 rounded-lg transition-all",
-                                            isActive
-                                              ? "bg-[#9B7B5B]/15 ring-1 ring-[#9B7B5B]/40"
-                                              : isPast
-                                                ? "bg-[#2D2C2E]/50 hover:bg-[#2D2C2E]"
-                                                : "bg-[#2D2C2E]/30 hover:bg-[#2D2C2E]"
-                                          )}
-                                        >
-                                          <div className="flex items-center gap-2">
-                                            <span className={cn(
-                                              "text-[11px] font-mono shrink-0",
-                                              isActive ? "text-[#9B7B5B]" : "text-[#6A6865]"
-                                            )}>
-                                              {fmtTime(tip.timestamp)}
-                                            </span>
-                                            <span className={cn(
-                                              "text-xs font-medium truncate",
-                                              isActive ? "text-[#E8E6E3]" : isPast ? "text-[#8A8885]" : "text-[#E8E6E3]"
-                                            )}>
-                                              {tip.title}
-                                            </span>
-                                          </div>
-                                          {tip.message && (
-                                            <p className={cn(
-                                              "text-[11px] mt-1 line-clamp-3 leading-relaxed",
-                                              isActive ? "text-[#8A8885]" : "text-[#6A6865]"
-                                            )}>
-                                              {tip.message}
-                                            </p>
-                                          )}
-                                        </button>
-                                      );
-                                    })}
                                 </div>
                               </div>
                             ) : null}
