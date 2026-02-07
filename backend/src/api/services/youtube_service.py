@@ -58,15 +58,39 @@ def extract_youtube_id(url: str) -> Optional[str]:
     return None
 
 
+def _extract_metadata_from_info(info: dict) -> dict:
+    """Convert yt-dlp info dict to our metadata format."""
+    duration_secs = info.get("duration", 0)
+    hours = duration_secs // 3600
+    minutes = (duration_secs % 3600) // 60
+    seconds = duration_secs % 60
+    if hours > 0:
+        duration_str = f"{hours}:{minutes:02d}:{seconds:02d}"
+    else:
+        duration_str = f"{minutes}:{seconds:02d}"
+
+    return {
+        "title": info.get("title"),
+        "thumbnail_url": info.get("thumbnail"),
+        "duration": duration_str,
+        "duration_seconds": duration_secs,
+        "channel": info.get("uploader") or info.get("channel"),
+        "view_count": info.get("view_count"),
+        "upload_date": info.get("upload_date"),
+        "description": (info.get("description") or "")[:500],
+        "youtube_video_id": info.get("id"),
+    }
+
+
 def get_youtube_metadata(url: str) -> Optional[dict]:
     video_id = extract_youtube_id(url)
     if not video_id:
         return None
 
-    # Try yt-dlp first (full metadata)
-    try:
-        import yt_dlp
+    import yt_dlp
 
+    # Try yt-dlp with cookies first (full metadata, authenticated)
+    try:
         ydl_opts = _inject_cookies({
             "quiet": True,
             "no_warnings": True,
@@ -76,28 +100,25 @@ def get_youtube_metadata(url: str) -> Optional[dict]:
         with yt_dlp.YoutubeDL(ydl_opts) as ydl:
             info = ydl.extract_info(url, download=False)
             if info:
-                duration_secs = info.get("duration", 0)
-                hours = duration_secs // 3600
-                minutes = (duration_secs % 3600) // 60
-                seconds = duration_secs % 60
-                if hours > 0:
-                    duration_str = f"{hours}:{minutes:02d}:{seconds:02d}"
-                else:
-                    duration_str = f"{minutes}:{seconds:02d}"
-
-                return {
-                    "title": info.get("title"),
-                    "thumbnail_url": info.get("thumbnail"),
-                    "duration": duration_str,
-                    "duration_seconds": duration_secs,
-                    "channel": info.get("uploader") or info.get("channel"),
-                    "view_count": info.get("view_count"),
-                    "upload_date": info.get("upload_date"),
-                    "description": (info.get("description") or "")[:500],
-                    "youtube_video_id": info.get("id"),
-                }
+                return _extract_metadata_from_info(info)
     except Exception as e:
-        logger.warning(f"yt-dlp metadata extraction failed for {url}: {e}")
+        logger.warning(f"yt-dlp metadata (with cookies) failed for {url}: {e}")
+
+    # Try yt-dlp WITHOUT cookies (avoids premium format issues)
+    try:
+        ydl_opts = {
+            "quiet": True,
+            "no_warnings": True,
+            "skip_download": True,
+        }
+
+        with yt_dlp.YoutubeDL(ydl_opts) as ydl:
+            info = ydl.extract_info(url, download=False)
+            if info:
+                logger.info(f"yt-dlp metadata succeeded WITHOUT cookies for {url}")
+                return _extract_metadata_from_info(info)
+    except Exception as e:
+        logger.warning(f"yt-dlp metadata (no cookies) also failed for {url}: {e}")
 
     # Fallback: use YouTube oEmbed API (not blocked by bot detection)
     logger.info(f"Falling back to oEmbed for metadata: {video_id}")
@@ -203,24 +224,40 @@ def download_youtube_video(
 
         # Fallback: Download full video
         output_path = os.path.join(temp_dir, "video.mp4")
-        ydl_opts = _inject_cookies({
+        base_opts = {
             "format": "best[ext=mp4][height<=720]/best[ext=mp4]/bestvideo[height<=720]+bestaudio/best",
             "merge_output_format": "mp4",
             "outtmpl": output_path,
             "quiet": True,
             "no_warnings": True,
             "max_filesize": 500 * 1024 * 1024,
-        })
+        }
 
-        with yt_dlp.YoutubeDL(ydl_opts) as ydl:
-            ydl.download([url])
+        # Try with cookies first, then without if cookies cause format issues
+        for attempt, use_cookies in enumerate(["cookies", "no_cookies"]):
+            try:
+                opts = _inject_cookies(dict(base_opts)) if use_cookies == "cookies" else dict(base_opts)
+                logger.info(f"[VideoDownload] Attempt {attempt+1} ({use_cookies}) for {url}")
+                with yt_dlp.YoutubeDL(opts) as ydl:
+                    ydl.download([url])
 
-        downloaded = _find_downloaded_file(temp_dir, output_path)
-        if not downloaded:
-            logger.error("Download completed but no video file found")
-            return None
+                downloaded = _find_downloaded_file(temp_dir, output_path)
+                if downloaded:
+                    return downloaded
+                logger.error(f"Download completed ({use_cookies}) but no video file found")
+            except Exception as dl_err:
+                logger.warning(f"[VideoDownload] {use_cookies} failed: {dl_err}")
+                # Clean up partial downloads before retry
+                for f in os.listdir(temp_dir):
+                    try:
+                        os.unlink(os.path.join(temp_dir, f))
+                    except Exception:
+                        pass
+                if use_cookies == "no_cookies":
+                    raise  # both attempts failed, re-raise
 
-        return downloaded
+        logger.error("All download attempts failed")
+        return None
     except Exception as e:
         logger.error(f"Failed to download YouTube video {url}: {e}")
         return None
