@@ -196,6 +196,8 @@ class SessionResponse(BaseModel):
     pose_data: Optional[dict] = None
     camera_facing: str = "auto"
     status: str
+    stroke_analysis_status: Optional[str] = None
+    insight_generation_status: Optional[str] = None
     created_at: str
     players: Optional[List[PlayerBrief]] = None
 

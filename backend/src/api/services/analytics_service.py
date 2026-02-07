@@ -221,83 +221,9 @@ def compute_ball_speed_analytics(trajectory_data: Dict[str, Any], fps: float = 3
 
 def detect_bounces(frames: List[Dict[str, Any]], velocity: List[float]) -> Tuple[List[int], List[Dict[str, Any]]]:
     """
-    Detect ball bounces and segment into rallies.
-    
-    Bounce detection logic:
-    - Y-velocity reversal (going down → going up)
-    - Y-position local minimum
-    - Confidence > 0.3
-    
-    Returns:
-        (bounce_frames, rallies)
+    Bounce detection is disabled.
     """
-    if len(frames) < 10:
-        return [], []
-    
-    bounces = []
-    
-    # Compute y-velocity (change in y position)
-    y_velocities = []
-    for i in range(1, len(frames)):
-        dy = frames[i].get("y", 0) - frames[i - 1].get("y", 0)
-        y_velocities.append(dy)
-    
-    # Find local minima in y (ball at lowest point) with velocity reversal
-    for i in range(2, len(frames) - 2):
-        y_curr = frames[i].get("y", 0)
-        y_prev = frames[i - 1].get("y", 0)
-        y_next = frames[i + 1].get("y", 0)
-        conf = frames[i].get("confidence", 0)
-        
-        # Local minimum in y position
-        if y_curr > y_prev and y_curr > y_next and conf > 0.3:
-            # Check if velocity reversed (was going down, now going up)
-            if i - 1 < len(y_velocities) and i < len(y_velocities):
-                if y_velocities[i - 1] > 0 and y_velocities[i] < 0:
-                    bounces.append(frames[i].get("frame", i))
-    
-    # Segment into rallies (bounce to bounce)
-    rallies = []
-    if bounces:
-        # First rally: start to first bounce
-        if bounces[0] > 5:
-            rally_frames = frames[0:bounces[0]]
-            rally_velocities = velocity[0:bounces[0]] if bounces[0] <= len(velocity) else []
-            if rally_velocities:
-                rallies.append({
-                    "start_frame": frames[0].get("frame", 0),
-                    "end_frame": bounces[0],
-                    "length": bounces[0],
-                    "avg_speed": round(sum(rally_velocities) / len(rally_velocities), 1)
-                })
-        
-        # Middle rallies: bounce to bounce
-        for i in range(len(bounces) - 1):
-            start_idx = bounces[i]
-            end_idx = bounces[i + 1]
-            if end_idx - start_idx > 2:
-                rally_velocities = velocity[start_idx:end_idx] if end_idx <= len(velocity) else []
-                if rally_velocities:
-                    rallies.append({
-                        "start_frame": bounces[i],
-                        "end_frame": bounces[i + 1],
-                        "length": end_idx - start_idx,
-                        "avg_speed": round(sum(rally_velocities) / len(rally_velocities), 1)
-                    })
-        
-        # Last rally: last bounce to end
-        last_bounce_idx = bounces[-1]
-        if last_bounce_idx < len(frames) - 5:
-            rally_velocities = velocity[last_bounce_idx:] if last_bounce_idx < len(velocity) else []
-            if rally_velocities:
-                rallies.append({
-                    "start_frame": bounces[-1],
-                    "end_frame": frames[-1].get("frame", len(frames)),
-                    "length": len(frames) - last_bounce_idx,
-                    "avg_speed": round(sum(rally_velocities) / len(rally_velocities), 1)
-                })
-    
-    return bounces, rallies
+    return [], []
 
 
 def compute_trajectory_analytics(trajectory_data: Dict[str, Any]) -> TrajectoryStats:
@@ -330,8 +256,9 @@ def compute_trajectory_analytics(trajectory_data: Dict[str, Any]) -> TrajectoryS
         dist = math.sqrt((x2 - x1) ** 2 + (y2 - y1) ** 2)
         total_distance += dist
     
-    # Detect bounces and rallies
-    bounces, rallies = detect_bounces(frames, velocity)
+    # Bounce and rally detection intentionally disabled.
+    bounces: List[int] = []
+    rallies: List[Dict[str, Any]] = []
     
     # Direction changes (x-velocity sign changes)
     direction_changes = 0
@@ -341,16 +268,8 @@ def compute_trajectory_analytics(trajectory_data: Dict[str, Any]) -> TrajectoryS
         if (dx_prev > 0 and dx_next < 0) or (dx_prev < 0 and dx_next > 0):
             direction_changes += 1
     
-    # Arc heights per rally
-    arc_heights = []
-    for rally in rallies:
-        start = rally["start_frame"]
-        end = rally["end_frame"]
-        rally_frames = [f for f in frames if start <= f.get("frame", 0) <= end]
-        if rally_frames:
-            y_positions = [f.get("y", 0) for f in rally_frames]
-            arc_height = max(y_positions) - min(y_positions)
-            arc_heights.append(round(arc_height, 1))
+    # Arc heights per rally (empty because rally detection is disabled).
+    arc_heights: List[float] = []
     
     return TrajectoryStats(
         total_distance=round(total_distance, 1),
@@ -572,109 +491,10 @@ def detect_point_events(
     min_separation_frames: int = 15
 ) -> List[Dict[str, Any]]:
     """
-    Detect point-scoring events using ball trajectory and pose-based contacts.
-    
-    Heuristics:
-    - A bounce with no subsequent contact within a short window ends the point.
-    - Large tracking gaps after a recent contact imply the ball went out of play.
-    - Trajectory end shortly after a contact is treated as a point end.
+    Point-scored detection is disabled.
     """
-    if not trajectory_frames or not pose_data:
-        logger.info(
-            "Point detection skipped: trajectory_frames=%s pose_data=%s",
-            bool(trajectory_frames),
-            bool(pose_data),
-        )
-        return []
-    
-    # Parse and order frames defensively
-    parsed_frames = []
-    for frame in trajectory_frames:
-        if isinstance(frame, str):
-            try:
-                parsed_frames.append(json.loads(frame))
-            except Exception:
-                continue
-        elif isinstance(frame, dict):
-            parsed_frames.append(frame)
-    
-    frames = sorted(parsed_frames, key=lambda f: f.get("frame", 0))
-    if not frames:
-        logger.info("Point detection skipped: no parsed trajectory frames")
-        return []
-    
-    # Build contact list (requires pose data)
-    if contact_moments is None:
-        contact_moments = detect_ball_contacts(frames, pose_data, velocity).contact_moments
-    contact_frames = sorted({c.get("frame") for c in contact_moments if isinstance(c.get("frame"), int)})
-    if not contact_frames:
-        logger.info("Point detection skipped: no contact frames found")
-        return []
-    
-    bounce_frames, _ = detect_bounces(frames, velocity)
-    frame_numbers = [f.get("frame", 0) for f in frames if isinstance(f.get("frame"), int)]
-    
-    logger.info(
-        "Point detection inputs: frames=%d contacts=%d bounces=%d",
-        len(frame_numbers),
-        len(contact_frames),
-        len(bounce_frames),
-    )
-    
-    events: List[Dict[str, Any]] = []
-    
-    def add_event(frame_num: int, reason: str, last_contact: Optional[int] = None, bounce_frame: Optional[int] = None):
-        if frame_num is None:
-            return
-        if any(abs(frame_num - e["frame"]) <= min_separation_frames for e in events):
-            return
-        events.append({
-            "frame": frame_num,
-            "timestamp": round(frame_num / fps, 2) if fps else 0,
-            "reason": reason,
-            "last_contact_frame": last_contact,
-            "bounce_frame": bounce_frame
-        })
-    
-    def recent_contact_before(frame_num: int, window: int) -> Optional[int]:
-        candidates = [c for c in contact_frames if c <= frame_num and (frame_num - c) <= window]
-        return max(candidates) if candidates else None
-    
-    def has_contact_after(frame_num: int, window: int) -> bool:
-        return any((c > frame_num and (c - frame_num) <= window) for c in contact_frames)
-    
-    # Bounce-based point ends
-    for bounce_frame in bounce_frames:
-        last_contact = recent_contact_before(bounce_frame, pre_contact_window)
-        if last_contact and not has_contact_after(bounce_frame, post_contact_window):
-            add_event(bounce_frame, "bounce_no_return", last_contact=last_contact, bounce_frame=bounce_frame)
-    
-    # Tracking gaps after contact imply out-of-play
-    for i in range(1, len(frame_numbers)):
-        gap = frame_numbers[i] - frame_numbers[i - 1]
-        if gap > gap_threshold_frames:
-            last_frame = frame_numbers[i - 1]
-            last_contact = recent_contact_before(last_frame, pre_contact_window)
-            if last_contact:
-                add_event(last_frame, "tracking_gap", last_contact=last_contact)
-    
-    # Trajectory end shortly after contact
-    last_frame = frame_numbers[-1] if frame_numbers else None
-    if last_frame is not None:
-        last_contact = recent_contact_before(last_frame, pre_contact_window)
-        if last_contact:
-            add_event(last_frame, "trajectory_end", last_contact=last_contact)
-    
-    events_sorted = sorted(events, key=lambda e: e["frame"])
-    if events_sorted:
-        logger.info(
-            "Point detection complete: events=%d last=%s",
-            len(events_sorted),
-            events_sorted[-1],
-        )
-    else:
-        logger.info("Point detection complete: no events detected")
-    return events_sorted
+    logger.info("Point detection disabled")
+    return []
 
 
 def compute_correlations(
@@ -926,14 +746,8 @@ async def compute_session_analytics(
     velocity = trajectory_data.get("velocity", [])
     contact_stats = detect_ball_contacts(frames, pose_data, velocity)
     
-    # Point detection (uses ball tracking + pose-based contacts)
-    point_events = detect_point_events(
-        trajectory_frames=frames,
-        velocity=velocity,
-        pose_data=pose_data,
-        fps=fps,
-        contact_moments=contact_stats.contact_moments
-    )
+    # Point-scored detection intentionally disabled.
+    point_events: List[Dict[str, Any]] = []
     
     # Correlations
     correlations = compute_correlations(

@@ -1,6 +1,21 @@
 import { VideoTip } from "@/components/viewer/VideoTips";
 import { Stroke } from "@/lib/api";
 
+function isReliableOpponentStroke(stroke: Stroke): boolean {
+  const owner = String(stroke.ai_insight_data?.shot_owner ?? stroke.metrics?.event_hitter ?? "").toLowerCase();
+  if (owner !== "opponent") return false;
+
+  const method = String(stroke.ai_insight_data?.shot_owner_method ?? stroke.metrics?.event_hitter_method ?? "").toLowerCase();
+  const reason = String(stroke.ai_insight_data?.shot_owner_reason ?? stroke.metrics?.event_hitter_reason ?? "").toLowerCase();
+  if (method === "proximity_10_percent" && reason.startsWith("player_outside_")) {
+    return false;
+  }
+
+  const rawConfidence = stroke.ai_insight_data?.shot_owner_confidence ?? stroke.metrics?.event_hitter_confidence;
+  const confidence = typeof rawConfidence === "number" ? rawConfidence : Number(rawConfidence);
+  return Number.isFinite(confidence) && confidence >= 0.75;
+}
+
 /**
  * Generate coaching tips from strokes — natural language, actionable feedback.
  * Tips are generated for strokes that are notably good, notably weak, or have
@@ -19,6 +34,8 @@ export function generateTipsFromStrokes(
   }
 
   strokes.forEach((stroke) => {
+    if (isReliableOpponentStroke(stroke)) return;
+
     const contactTime = stroke.peak_frame / fps;
 
     const contactTip = generateStrokeTip(stroke, playerName);

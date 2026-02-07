@@ -4,7 +4,7 @@ import { useState, useCallback, useRef, useEffect, useMemo } from "react";
 import { useParams, useRouter, useSearchParams } from "next/navigation";
 import { useSession, useTrackObject, useUpdateSession } from "@/hooks/useSessions";
 import { usePoseAnalysis } from "@/hooks/usePoseData";
-import { useStrokeSummary, useAnalyzeStrokes } from "@/hooks/useStrokeData";
+import { useStrokeSummary, useAnalyzeStrokes, useStrokeProgress, useCancelInsights, strokeKeys } from "@/hooks/useStrokeData";
 import { useAnalytics } from "@/hooks/useAnalytics";
 import { useQueryClient } from "@tanstack/react-query";
 import { sessionKeys } from "@/hooks/useSessions";
@@ -17,7 +17,7 @@ import {
 import Link from "next/link";
 import dynamic from "next/dynamic";
 import { cn } from "@/lib/utils";
-import { appSettingKeys, readStrokeDebugModeSetting } from "@/lib/appSettings";
+import { appSettingKeys, readStrokeDebugModeSetting, readStrokeClaudeClassifierEnabledSetting } from "@/lib/appSettings";
 import {
   TrajectoryPoint,
   detectBalls,
@@ -28,9 +28,11 @@ import {
   Stroke,
   getDebugFrame,
   getSessionAnalytics,
+  getStrokeProgress,
   createSessionClip,
   ActivityRegion,
 } from "@/lib/api";
+import { motion, AnimatePresence } from "framer-motion";
 import { generateTipsFromStrokes } from "@/lib/tipGenerator";
 import { PlayerSelection, PlayerSelectionOverlays } from "@/components/viewer/PlayerSelection";
 import { VideoTips, type VideoTip } from "@/components/viewer/VideoTips";
@@ -70,6 +72,43 @@ const PLAYER_COLORS = [
   { name: "Player", color: "#9B7B5B", rgb: "155, 123, 91" },
   { name: "Opponent", color: "#5B9B7B", rgb: "91, 155, 123" },
 ];
+const SHOT_FLASH_WINDOW_FRAMES = 5;
+const HEAD_BADGE_SMOOTHING_ALPHA = 0.28;
+const HEAD_BADGE_VERTICAL_OFFSET_PX = 40;
+const OPPONENT_SHOT_COLOR = "#C45C5C";
+
+const isReliableOpponentOwner = (stroke: Stroke | null | undefined): boolean => {
+  if (!stroke) return false;
+
+  const owner = String(stroke.ai_insight_data?.shot_owner ?? stroke.metrics?.event_hitter ?? "").toLowerCase();
+  if (owner !== "opponent") return false;
+
+  const method = String(stroke.ai_insight_data?.shot_owner_method ?? stroke.metrics?.event_hitter_method ?? "").toLowerCase();
+  const reason = String(stroke.ai_insight_data?.shot_owner_reason ?? stroke.metrics?.event_hitter_reason ?? "").toLowerCase();
+  if (method === "proximity_10_percent" && reason.startsWith("player_outside_")) {
+    return false;
+  }
+
+  const rawConfidence = stroke.ai_insight_data?.shot_owner_confidence ?? stroke.metrics?.event_hitter_confidence;
+  const confidence = typeof rawConfidence === "number" ? rawConfidence : Number(rawConfidence);
+  return Number.isFinite(confidence) && confidence >= 0.75;
+};
+
+const getStrokeOwner = (stroke: Stroke | null | undefined): "player" | "opponent" | "unknown" => {
+  if (!stroke) return "unknown";
+  const owner = String(stroke.ai_insight_data?.shot_owner ?? stroke.metrics?.event_hitter ?? "").toLowerCase();
+  if (owner === "opponent") return isReliableOpponentOwner(stroke) ? "opponent" : "unknown";
+  if (owner === "player") return "player";
+  return "unknown";
+};
+
+const getStrokeColor = (stroke: Stroke | null | undefined): string => {
+  if (!stroke) return "#8A8885";
+  if (getStrokeOwner(stroke) === "opponent") return OPPONENT_SHOT_COLOR;
+  if (stroke.stroke_type === "forehand") return "#9B7B5B";
+  if (stroke.stroke_type === "backhand") return "#5B9B7B";
+  return "#8A8885";
+};
 
 export default function GameViewerPage() {
   const params = useParams();
@@ -112,11 +151,12 @@ export default function GameViewerPage() {
   const [videoBounds, setVideoBounds] = useState<{ top: number; left: number; right: number; width: number; height: number } | null>(null);
   const [videoReady, setVideoReady] = useState(false);
   const isResizing = useRef(false);
-  const [activeTip, setActiveTip] = useState<VideoTip | null>(null);
+  const [, setActiveTip] = useState<VideoTip | null>(null);
 
   const [showPlayerSelection, setShowPlayerSelection] = useState(false);
   const playerSelectionAutoOpened = useRef(false);
   const hasAutoSeeked = useRef(false);
+  const wasInsightGeneratingRef = useRef(false);
 
   // Clip selector state
   const [showClipSelector, setShowClipSelector] = useState(false);
@@ -124,33 +164,203 @@ export default function GameViewerPage() {
 
   // Debug mode state
   const [debugMode, setDebugMode] = useState(false);
+  const [strokeClaudeClassifierEnabled, setStrokeClaudeClassifierEnabled] = useState(true);
   const [debugLog, setDebugLog] = useState<Array<{ label: string; [key: string]: unknown }>>([]);
   const [debugLoading, setDebugLoading] = useState(false);
   const [debugFlash, setDebugFlash] = useState<string | null>(null);
   const [debugCopied, setDebugCopied] = useState(false);
   const [isRecomputingAnalytics, setIsRecomputingAnalytics] = useState(false);
+  const [smoothedHeadAnchor, setSmoothedHeadAnchor] = useState<{ x: number; y: number } | null>(null);
 
   useEffect(() => {
     setDebugMode(readStrokeDebugModeSetting());
+    setStrokeClaudeClassifierEnabled(readStrokeClaudeClassifierEnabledSetting());
     const syncDebugSetting = (event: StorageEvent) => {
       if (event.key && event.key !== appSettingKeys.strokeDebugMode) return;
       setDebugMode(readStrokeDebugModeSetting());
     };
+    const syncClaudeSetting = (event: StorageEvent) => {
+      if (event.key && event.key !== appSettingKeys.strokeClaudeClassifier) return;
+      setStrokeClaudeClassifierEnabled(readStrokeClaudeClassifierEnabledSetting());
+    };
     window.addEventListener("storage", syncDebugSetting);
-    return () => window.removeEventListener("storage", syncDebugSetting);
+    window.addEventListener("storage", syncClaudeSetting);
+    return () => {
+      window.removeEventListener("storage", syncDebugSetting);
+      window.removeEventListener("storage", syncClaudeSetting);
+    };
   }, []);
 
   const { data: session, isLoading } = useSession(gameId);
   const { data: poseData } = usePoseAnalysis(gameId);
-  const { data: strokeSummary } = useStrokeSummary(gameId);
   const { data: analytics } = useAnalytics(gameId);
   const trackMutation = useTrackObject(gameId);
   const strokeMutation = useAnalyzeStrokes(gameId);
+  const cancelInsightsMutation = useCancelInsights(gameId);
   const updateSessionMutation = useUpdateSession(gameId);
 
+  const sessionInsightGenerating = session?.insight_generation_status === "generating";
+  const isStrokeRecomputeProcessing =
+    isRecomputingAnalytics ||
+    strokeMutation.isPending ||
+    session?.stroke_analysis_status === "processing";
+  const shouldPollStrokeProgress = isStrokeRecomputeProcessing || sessionInsightGenerating;
+  const { data: liveStrokeProgress } = useStrokeProgress(gameId, shouldPollStrokeProgress);
+  const strokePipelineDebugStats = useMemo(() => {
+    if (liveStrokeProgress?.debug_stats && typeof liveStrokeProgress.debug_stats === "object") {
+      return liveStrokeProgress.debug_stats as Record<string, unknown>;
+    }
+    return null;
+  }, [liveStrokeProgress]);
+  const insightStageStatus = useMemo(() => {
+    const stageStatuses = (
+      strokePipelineDebugStats?.stage_statuses &&
+      typeof strokePipelineDebugStats.stage_statuses === "object"
+    )
+      ? (strokePipelineDebugStats.stage_statuses as Record<string, unknown>)
+      : null;
+    const raw = stageStatuses?.generate_insights;
+    return raw === "pending" || raw === "running" || raw === "completed" || raw === "failed" ? raw : null;
+  }, [strokePipelineDebugStats]);
+  const isInsightGenerating =
+    (shouldPollStrokeProgress && insightStageStatus === "running") ||
+    (
+      sessionInsightGenerating &&
+      (isStrokeRecomputeProcessing || liveStrokeProgress?.status === "processing") &&
+      insightStageStatus !== "completed" &&
+      insightStageStatus !== "failed"
+    );
+  const { data: strokeSummary } = useStrokeSummary(gameId, isInsightGenerating);
+
+  useEffect(() => {
+    if (wasInsightGeneratingRef.current && !isInsightGenerating && gameId) {
+      queryClient.invalidateQueries({ queryKey: strokeKeys.summary(gameId) });
+    }
+    wasInsightGeneratingRef.current = isInsightGenerating;
+  }, [isInsightGenerating, gameId, queryClient]);
+
   const hasPose = !!session?.pose_video_path;
-  const hasStrokes = !!strokeSummary?.total_strokes;
+  const hasStrokes = (strokeSummary?.strokes?.length ?? 0) > 0;
   const hasTrajectory = !!(session?.trajectory_data?.frames?.length);
+  const strokePipelineStageRows = useMemo(() => {
+    const defaultStageOrder = [
+      "load_session_metadata",
+      "load_pose_data",
+      "detect_pose_strokes",
+      "detect_trajectory_reversals",
+      "detect_contacts",
+      "merge_detection_events",
+      strokeClaudeClassifierEnabled ? "classify_events_claude" : "classify_events_elbow",
+      "infer_hitter",
+      "build_final_strokes",
+      "persist_results",
+      "generate_insights",
+    ];
+    const defaultLabels: Record<string, string> = {
+      load_session_metadata: "Load session metadata",
+      load_pose_data: "Load pose frames",
+      detect_pose_strokes: "Detect pose stroke proposals",
+      detect_trajectory_reversals: "Detect trajectory reversals",
+      detect_contacts: "Detect wrist-ball contacts",
+      merge_detection_events: "Merge detection events",
+      classify_events_claude: "Classify events (Claude)",
+      classify_events_elbow: "Classify events (Elbow trend)",
+      infer_hitter: "Infer hitter (player/opponent)",
+      build_final_strokes: "Build final strokes",
+      persist_results: "Persist stroke analytics",
+      generate_insights: "Generate AI insights",
+    };
+
+    const stageOrder = Array.isArray(strokePipelineDebugStats?.stage_order)
+      ? strokePipelineDebugStats.stage_order.filter((id): id is string => typeof id === "string" && id.length > 0)
+      : defaultStageOrder;
+    const stageLabelsFromStats = (
+      strokePipelineDebugStats?.stage_labels &&
+      typeof strokePipelineDebugStats.stage_labels === "object"
+    )
+      ? (strokePipelineDebugStats.stage_labels as Record<string, unknown>)
+      : {};
+    const stageStatusFromStats = (
+      strokePipelineDebugStats?.stage_statuses &&
+      typeof strokePipelineDebugStats.stage_statuses === "object"
+    )
+      ? (strokePipelineDebugStats.stage_statuses as Record<string, unknown>)
+      : {};
+    const stageTimingsFromStats = (
+      strokePipelineDebugStats?.stage_timings_ms &&
+      typeof strokePipelineDebugStats.stage_timings_ms === "object"
+    )
+      ? (strokePipelineDebugStats.stage_timings_ms as Record<string, unknown>)
+      : {};
+    const currentStage = typeof strokePipelineDebugStats?.current_stage === "string"
+      ? strokePipelineDebugStats.current_stage
+      : null;
+
+    const seen = new Set<string>();
+    return stageOrder
+      .filter((stageId) => {
+        if (seen.has(stageId)) return false;
+        seen.add(stageId);
+        return true;
+      })
+      .map((stageId) => {
+        const labelRaw = stageLabelsFromStats[stageId];
+        const label = typeof labelRaw === "string" && labelRaw.trim().length > 0
+          ? labelRaw
+          : (defaultLabels[stageId] ?? stageId.replace(/_/g, " "));
+        const statusRaw = stageStatusFromStats[stageId];
+        let status: "pending" | "running" | "completed" | "failed" = "pending";
+        if (statusRaw === "running" || statusRaw === "completed" || statusRaw === "failed") {
+          status = statusRaw;
+        } else if (statusRaw === "pending") {
+          status = "pending";
+        } else if (currentStage === stageId) {
+          status = "running";
+        }
+        const durationRaw = stageTimingsFromStats[stageId];
+        const durationMs = (typeof durationRaw === "number" && Number.isFinite(durationRaw)) ? durationRaw : null;
+        if (durationMs !== null && status === "pending") {
+          status = "completed";
+        }
+        return { id: stageId, label, status, durationMs };
+      });
+  }, [strokePipelineDebugStats, strokeClaudeClassifierEnabled]);
+  const strokePipelineElapsedMs = useMemo(() => {
+    const raw = strokePipelineDebugStats?.pipeline_elapsed_ms;
+    if (typeof raw === "number" && Number.isFinite(raw)) return raw;
+    return strokePipelineStageRows.reduce((sum, stage) => sum + (stage.durationMs ?? 0), 0);
+  }, [strokePipelineDebugStats, strokePipelineStageRows]);
+
+  // Insight generation progress from pipeline debug stats
+  const insightsProgress = useMemo(() => {
+    const prog = strokePipelineDebugStats?.insights_progress as { current?: number; total?: number; completed?: number } | undefined;
+    if (!prog) return null;
+    return {
+      current: typeof prog.current === "number" ? prog.current : 0,
+      total: typeof prog.total === "number" ? prog.total : 0,
+      completed: typeof prog.completed === "number" ? prog.completed : 0,
+    };
+  }, [strokePipelineDebugStats]);
+
+  // Strokes that have AI insights (for progressive rendering)
+  const aiInsightStrokes = useMemo(() => {
+    if (!strokeSummary?.strokes) return [];
+    return strokeSummary.strokes.filter((s) => s.ai_insight);
+  }, [strokeSummary?.strokes]);
+
+  const playerOwnedStrokes = useMemo(() => {
+    if (!strokeSummary?.strokes) return [];
+    return strokeSummary.strokes.filter((stroke) => getStrokeOwner(stroke) !== "opponent");
+  }, [strokeSummary?.strokes]);
+
+  const opponentStrokeCount = useMemo(
+    () => (strokeSummary?.strokes ?? []).filter((stroke) => getStrokeOwner(stroke) === "opponent").length,
+    [strokeSummary?.strokes]
+  );
+
+  // Whether any AI insights exist (to decide if we show AI vs rule-based tips)
+  const hasAiInsights = aiInsightStrokes.length > 0;
+
   // Pose processing: no pose_video_path yet AND status is processing
   const isPoseProcessing = session?.status === "processing" && !hasPose;
   // General processing for ball tracking / pending
@@ -226,6 +436,29 @@ export default function GameViewerPage() {
     return past.length > 0 ? past[past.length - 1] : null;
   }, [strokeSummary?.strokes, currentFrame]);
 
+  // Highlight only around contact so the label flickers near the hit moment.
+  const shotFlashStroke = useMemo((): Stroke | null => {
+    if (!strokeSummary?.strokes?.length) return null;
+    let best: Stroke | null = null;
+    let bestDist = Number.POSITIVE_INFINITY;
+    for (const stroke of strokeSummary.strokes) {
+      if (stroke.stroke_type !== "forehand" && stroke.stroke_type !== "backhand") continue;
+      const dist = Math.abs(currentFrame - stroke.peak_frame);
+      if (dist <= SHOT_FLASH_WINDOW_FRAMES && dist < bestDist) {
+        best = stroke;
+        bestDist = dist;
+      }
+    }
+    return best;
+  }, [strokeSummary?.strokes, currentFrame]);
+
+  const lastClassifiedStroke = useMemo((): Stroke | null => {
+    if (!strokeSummary?.strokes?.length) return null;
+    const past = strokeSummary.strokes
+      .filter((s) => (s.stroke_type === "forehand" || s.stroke_type === "backhand") && s.peak_frame <= currentFrame);
+    return past.length > 0 ? past[past.length - 1] : null;
+  }, [strokeSummary?.strokes, currentFrame]);
+
 
 
   const computedTrajectoryFps = useMemo(() => {
@@ -246,7 +479,6 @@ export default function GameViewerPage() {
       return videoFps;
     } catch { return videoFps; }
   }, [session?.trajectory_data, videoFps, computedTrajectoryFps]);
-
 
   const frameFromTime = useCallback(
     (time: number) => Math.max(0, Math.round(time * fps)),
@@ -272,15 +504,38 @@ export default function GameViewerPage() {
 
   // Generate video tips from stroke data
   const videoTips = useMemo(() => {
+    const serverTips = strokeSummary?.timeline_tips;
+    if (Array.isArray(serverTips) && serverTips.length > 0) {
+      const normalized = serverTips
+        .map((tip, index) => ({
+          id: String(tip.id || `timeline-${index}`),
+          timestamp: Number.isFinite(tip.timestamp) ? Number(tip.timestamp) : 0,
+          duration: Number.isFinite(tip.duration) ? Number(tip.duration) : 2,
+          title: String(tip.title || "Rally Snapshot"),
+          message: String(tip.message || ""),
+          seekTime: Number.isFinite(tip.seek_time ?? undefined)
+            ? Number(tip.seek_time)
+            : (Number.isFinite(tip.timestamp) ? Number(tip.timestamp) : 0),
+        }))
+        .sort((a, b) => a.timestamp - b.timestamp);
+
+      console.log("[VideoTips] Using server timeline tips", {
+        tipCount: normalized.length,
+        videoDuration: duration,
+        tips: normalized.map((t) => ({ id: t.id, ts: t.timestamp.toFixed(2), title: t.title })),
+      });
+      return normalized;
+    }
+
     const firstPlayer = session?.players?.[0];
     const tipFps = poseBasedFps ?? fps;
-    const tips = generateTipsFromStrokes(strokeSummary?.strokes || [], tipFps, firstPlayer?.name);
+    const tips = generateTipsFromStrokes(playerOwnedStrokes, tipFps, firstPlayer?.name);
 
     // Fix timestamps by looking up actual pose-data timestamps (bypasses fps math)
-    if (poseData?.frames?.length && strokeSummary?.strokes?.length) {
+    if (poseData?.frames?.length && playerOwnedStrokes.length) {
       const playerFrames = poseData.frames.filter((f) => (f.person_id ?? 0) === 0);
       for (const tip of tips) {
-        const stroke = strokeSummary.strokes.find((s) => tip.strokeId === s.id);
+        const stroke = playerOwnedStrokes.find((s) => tip.strokeId === s.id);
         if (!stroke) continue;
         // Find closest pose frame to peak_frame / start_frame and use its timestamp
         let peakDist = Infinity;
@@ -303,7 +558,7 @@ export default function GameViewerPage() {
     const filtered = tips.filter((t) => t.timestamp <= cutoff);
 
     console.log('[VideoTips] Generated tips:', {
-      strokeCount: strokeSummary?.strokes?.length || 0,
+      strokeCount: playerOwnedStrokes.length,
       tipCount: filtered.length,
       dropped: tips.length - filtered.length,
       tipFps,
@@ -312,7 +567,7 @@ export default function GameViewerPage() {
       tips: filtered.map(t => ({ id: t.id, ts: t.timestamp.toFixed(2), title: t.title }))
     });
     return filtered;
-  }, [strokeSummary?.strokes, fps, poseBasedFps, selectedPersonIds, poseData?.frames, videoW, videoH, session?.trajectory_data, duration]);
+  }, [strokeSummary?.timeline_tips, playerOwnedStrokes, fps, poseBasedFps, selectedPersonIds, poseData?.frames, videoW, videoH, session?.trajectory_data, duration]);
 
 
   const tipSeekTime = useMemo(() => {
@@ -323,10 +578,62 @@ export default function GameViewerPage() {
     return match?.seekTime ?? match?.timestamp ?? null;
   }, [tipParam, videoTips]);
 
-  // strokeMarkers and pointMarkers removed — ActivityTimeline handles visualization directly
+  const strokeMarkers = useMemo(() => {
+    if (isStrokeRecomputeProcessing) return [];
+    if (!strokeSummary?.strokes?.length) return [];
+    return strokeSummary.strokes.map((stroke) => ({
+      id: stroke.id,
+      time: stroke.peak_frame / fps,
+      type: stroke.stroke_type,
+      owner: getStrokeOwner(stroke),
+      formScore: stroke.form_score,
+      frame: stroke.peak_frame,
+    }));
+  }, [strokeSummary?.strokes, fps, isStrokeRecomputeProcessing]);
+
+  // Reversal markers sourced from backend stroke events.
+  // This keeps UI aligned with the stroke pipeline instead of a separate client-only heuristic.
+  const trajectoryReversalMarkers = useMemo(() => {
+    if (isStrokeRecomputeProcessing) return [];
+    if (!strokeSummary?.strokes?.length) return [];
+    const out: Array<{ frame: number; time: number }> = [];
+    const seen = new Set<number>();
+
+    for (const stroke of strokeSummary.strokes) {
+      if (stroke.stroke_type !== "forehand" && stroke.stroke_type !== "backhand") continue;
+      const sourcesRaw = stroke.metrics?.event_sources;
+      const sources = Array.isArray(sourcesRaw)
+        ? sourcesRaw
+        : typeof sourcesRaw === "string"
+          ? [sourcesRaw]
+          : [];
+      if (!sources.includes("trajectory")) continue;
+
+      const frame = stroke.peak_frame;
+      if (!Number.isFinite(frame) || seen.has(frame)) continue;
+      seen.add(frame);
+      out.push({ frame, time: frame / fps });
+    }
+
+    out.sort((a, b) => a.frame - b.frame);
+    return out;
+  }, [strokeSummary?.strokes, fps, isStrokeRecomputeProcessing]);
 
   const autoSeekTime = startTimeParam ?? tipSeekTime;
   const shouldAutoPlay = startTimeParam !== null && startTimeParam !== undefined;
+
+  const playVideoSafely = useCallback(async () => {
+    const video = videoRef.current;
+    if (!video) return;
+    try {
+      await video.play();
+    } catch (error) {
+      if (error instanceof DOMException && error.name === "AbortError") {
+        return;
+      }
+      console.error("Video play failed:", error);
+    }
+  }, []);
 
   useEffect(() => {
     hasAutoSeeked.current = false;
@@ -344,8 +651,7 @@ export default function GameViewerPage() {
       video.currentTime = safeTime;
       hasAutoSeeked.current = true;
       if (shouldAutoPlay) {
-        video.play().catch(() => undefined);
-        setIsPlaying(true);
+        void playVideoSafely();
       } else {
         video.pause();
         setIsPlaying(false);
@@ -359,7 +665,7 @@ export default function GameViewerPage() {
 
     video.addEventListener("loadedmetadata", seekAndPlay, { once: true });
     return () => video.removeEventListener("loadedmetadata", seekAndPlay);
-  }, [autoSeekTime, videoUrl, shouldAutoPlay]);
+  }, [autoSeekTime, videoUrl, shouldAutoPlay, playVideoSafely]);
 
   // Handle tip state changes - pause video when tip appears, user resumes manually
   const handleTipChange = useCallback((tip: VideoTip | null) => {
@@ -467,14 +773,85 @@ export default function GameViewerPage() {
     if (!gameId || isRecomputingAnalytics) return;
     setIsRecomputingAnalytics(true);
     try {
-      const response = await getSessionAnalytics(gameId, { force: true });
-      queryClient.setQueryData(["analytics", gameId], response.data);
+      // Reflect processing state immediately in UI.
+      queryClient.setQueryData(
+        sessionKeys.detail(gameId),
+        (prev: unknown) =>
+          prev && typeof prev === "object"
+            ? {
+                ...(prev as Record<string, unknown>),
+                stroke_analysis_status: "processing",
+                insight_generation_status: null,
+              }
+            : prev
+      );
+
+      // 1) Trigger stroke analysis
+      await strokeMutation.mutateAsync();
+
+      // 2) Wait until backend stroke job completes/fails
+      const timeoutMs = 5 * 60 * 1000;
+      const pollMs = 1000;
+      const startedAt = Date.now();
+      let finalStatus: string | undefined;
+      while (true) {
+        const progressResponse = await getStrokeProgress(gameId);
+        const progress = progressResponse.data?.progress;
+        const status = progress?.status;
+        const stageStatuses = (
+          progress?.debug_stats?.stage_statuses &&
+          typeof progress.debug_stats.stage_statuses === "object"
+        )
+          ? (progress.debug_stats.stage_statuses as Record<string, unknown>)
+          : null;
+        const persistDone = stageStatuses?.persist_results === "completed";
+
+        if (status === "failed") {
+          finalStatus = "failed";
+          break;
+        }
+        if (status === "completed" || persistDone) {
+          finalStatus = "completed";
+          break;
+        }
+        if (Date.now() - startedAt > timeoutMs) break;
+        await new Promise((resolve) => setTimeout(resolve, pollMs));
+      }
+
+      if (finalStatus) {
+        queryClient.setQueryData(
+          sessionKeys.detail(gameId),
+          (prev: unknown) =>
+            prev && typeof prev === "object"
+              ? { ...(prev as Record<string, unknown>), stroke_analysis_status: finalStatus }
+              : prev
+        );
+      }
+
+      // 3) Main stroke outputs are ready at persist_results; refresh UI immediately.
+      await Promise.all([
+        queryClient.invalidateQueries({ queryKey: strokeKeys.progress(gameId) }),
+        queryClient.invalidateQueries({ queryKey: strokeKeys.summary(gameId) }),
+        queryClient.invalidateQueries({ queryKey: sessionKeys.detail(gameId) }),
+      ]);
+      setIsRecomputingAnalytics(false);
+
+      // 4) Analytics refresh can continue in background while AI insights generate.
+      const analyticsResponse = await getSessionAnalytics(gameId, { force: true });
+      queryClient.setQueryData(["analytics", gameId], analyticsResponse.data);
+      await Promise.all([
+        queryClient.invalidateQueries({ queryKey: ["analytics", gameId] }),
+      ]);
+
+      if (finalStatus === "failed") {
+        console.error("Stroke recompute finished with status=failed");
+      }
     } catch (err) {
       console.error("Analytics recompute failed:", err);
     } finally {
       setIsRecomputingAnalytics(false);
     }
-  }, [gameId, isRecomputingAnalytics, queryClient]);
+  }, [gameId, isRecomputingAnalytics, queryClient, strokeMutation]);
 
   // Keyboard shortcuts for debug mode
   useEffect(() => {
@@ -529,6 +906,7 @@ export default function GameViewerPage() {
     };
 
     const onPlay = () => {
+      setIsPlaying(true);
       if ("requestVideoFrameCallback" in video) {
         vfcId = (video as HTMLVideoElement & { requestVideoFrameCallback: (cb: any) => number })
           .requestVideoFrameCallback(frameLoop);
@@ -537,6 +915,7 @@ export default function GameViewerPage() {
       }
     };
     const onPause = () => {
+      setIsPlaying(false);
       cancelAnimationFrame(rafId);
       if (vfcId !== null && "cancelVideoFrameCallback" in video) {
         (video as HTMLVideoElement & { cancelVideoFrameCallback: (id: number) => void }).cancelVideoFrameCallback(vfcId);
@@ -791,7 +1170,7 @@ export default function GameViewerPage() {
   const hasStoredPose = !!(poseData?.frames?.length);
 
   // How many players did the user actually select? (1 = player only, 2 = player + opponent)
-  const selectedPlayerCount = session?.players?.length ?? 1;
+  const selectedPlayerCount = Math.max(1, session?.players?.length ?? 1);
 
   // Convert stored pose data to PersonPose[] for the current frame
   // Only include persons the user selected (person_id 0 = player, 1 = opponent)
@@ -832,6 +1211,14 @@ export default function GameViewerPage() {
           maxX = Math.max(maxX, px); maxY = Math.max(maxY, py);
         }
       }
+      if (!Number.isFinite(minX) || !Number.isFinite(minY) || maxX <= minX || maxY <= minY) {
+        const fallbackPoints = keypointsList.filter((kp) => Number.isFinite(kp.x) && Number.isFinite(kp.y));
+        if (fallbackPoints.length === 0) continue;
+        minX = Math.min(...fallbackPoints.map((kp) => kp.x));
+        minY = Math.min(...fallbackPoints.map((kp) => kp.y));
+        maxX = Math.max(...fallbackPoints.map((kp) => kp.x));
+        maxY = Math.max(...fallbackPoints.map((kp) => kp.y));
+      }
       // Compute bbox from keypoint extremes with padding
       const pad = 20;
       const bbox: [number, number, number, number] = [
@@ -842,6 +1229,76 @@ export default function GameViewerPage() {
     }
     return persons;
   }, [hasStoredPose, poseData, currentFrame, videoW, videoH, selectedPlayerCount]);
+
+  const playerPoseForBadge = useMemo((): PersonPose | null => {
+    const source = storedPersonsForFrame.length > 0 ? storedPersonsForFrame : detectedPersons;
+    if (source.length === 0) return null;
+    const preferredPlayerId = selectedPersonIds.length > 0 ? selectedPersonIds[0] : source[0].id;
+    return source.find((p) => p.id === preferredPlayerId) ?? source[0] ?? null;
+  }, [storedPersonsForFrame, detectedPersons, selectedPersonIds]);
+
+  const rawHeadAnchor = useMemo((): { x: number; y: number } | null => {
+    const person = playerPoseForBadge;
+    if (person?.keypoints?.length) {
+      const normalize = (name: string) => name.trim().toLowerCase().replace(/\s+/g, "_");
+      const keypointsByName = new Map(
+        person.keypoints.map((kp) => [normalize(kp.name || ""), kp] as const)
+      );
+      const headNames = ["nose", "head", "forehead", "left_eye", "right_eye", "left_ear", "right_ear"];
+      const points: Array<{ x: number; y: number }> = [];
+      for (const name of headNames) {
+        const kp = keypointsByName.get(name);
+        if (!kp || (kp.conf ?? 0) < 0.2) continue;
+        points.push({ x: kp.x, y: kp.y });
+      }
+      if (points.length > 0) {
+        const avgX = points.reduce((sum, p) => sum + p.x, 0) / points.length;
+        const minY = points.reduce((min, p) => Math.min(min, p.y), Number.POSITIVE_INFINITY);
+        return { x: avgX, y: Number.isFinite(minY) ? minY : points[0].y };
+      }
+      if (Array.isArray(person.bbox) && person.bbox.length === 4) {
+        const [x1, y1, x2] = person.bbox;
+        if ([x1, y1, x2].every((v) => Number.isFinite(v))) {
+          return { x: (x1 + x2) / 2, y: y1 };
+        }
+      }
+    }
+
+    const fallback = segmentedPlayers.find((p) => p.visible);
+    if (fallback) {
+      return { x: fallback.clickX, y: fallback.clickY };
+    }
+
+    return null;
+  }, [playerPoseForBadge, segmentedPlayers]);
+
+  useEffect(() => {
+    if (!rawHeadAnchor) return;
+    setSmoothedHeadAnchor((prev) => {
+      if (!prev) return rawHeadAnchor;
+      return {
+        x: prev.x + (rawHeadAnchor.x - prev.x) * HEAD_BADGE_SMOOTHING_ALPHA,
+        y: prev.y + (rawHeadAnchor.y - prev.y) * HEAD_BADGE_SMOOTHING_ALPHA,
+      };
+    });
+  }, [rawHeadAnchor, currentFrame]);
+
+  useEffect(() => {
+    setSmoothedHeadAnchor(null);
+  }, [videoUrl]);
+
+  const floatingShotBadge = useMemo((): { x: number; y: number } | null => {
+    if (!videoBounds || !smoothedHeadAnchor || videoW <= 0 || videoH <= 0) return null;
+    const nx = smoothedHeadAnchor.x / videoW;
+    const ny = smoothedHeadAnchor.y / videoH;
+    if (!Number.isFinite(nx) || !Number.isFinite(ny)) return null;
+
+    const rawX = videoBounds.left + nx * videoBounds.width;
+    const rawY = videoBounds.top + ny * videoBounds.height - HEAD_BADGE_VERTICAL_OFFSET_PX;
+    const x = Math.max(videoBounds.left + 52, Math.min(videoBounds.right - 52, rawX));
+    const y = Math.max(videoBounds.top + 14, rawY);
+    return { x, y };
+  }, [videoBounds, smoothedHeadAnchor, videoW, videoH]);
 
   // Use stored data when available, otherwise fall back to live detection
   useEffect(() => {
@@ -908,7 +1365,13 @@ export default function GameViewerPage() {
     // ctx.clearRect(0, 0, vw, vh); — removed to allow layering
 
     for (const person of detectedPersons) {
-      const color = PERSON_COLORS[(person.id - 1) % PERSON_COLORS.length];
+      const selectionIndex = selectedPersonIds.indexOf(person.id);
+      const color =
+        selectionIndex === 1
+          ? OPPONENT_SHOT_COLOR
+          : selectionIndex === 0
+            ? "#9B7B5B"
+            : PERSON_COLORS[(person.id - 1) % PERSON_COLORS.length];
       const isSelected = selectedPersonIds.includes(person.id);
       const alpha = isSelected ? 1.0 : 0.4;
 
@@ -926,7 +1389,6 @@ export default function GameViewerPage() {
       ctx.globalAlpha = alpha;
       ctx.font = "bold 14px sans-serif";
       ctx.fillStyle = color;
-      const selectionIndex = selectedPersonIds.indexOf(person.id);
       const label = selectionIndex === 0 ? "Player" : selectionIndex === 1 ? "Opponent" : `P${person.id}`;
       ctx.fillText(label, x1 + 4, y1 - 6);
 
@@ -1011,8 +1473,15 @@ export default function GameViewerPage() {
     });
   }, [detectionResult, currentFrame, trackMutation, queryClient, gameId]);
 
-  const togglePlay = useCallback(() => { if (isPlaying) videoRef.current?.pause(); else videoRef.current?.play(); setIsPlaying((p) => !p); }, [isPlaying]);
-  // handleSeek removed — ActivityTimeline handles seeking via onSeek callback
+  const togglePlay = useCallback(() => {
+    const video = videoRef.current;
+    if (!video) return;
+    if (video.paused) {
+      void playVideoSafely();
+    } else {
+      video.pause();
+    }
+  }, [playVideoSafely]);
   const skipFrames = useCallback((n: number) => { const t = Math.max(0, Math.min(duration, currentTime + n / fps)); if (videoRef.current) videoRef.current.currentTime = t; }, [duration, currentTime, fps]);
   const fmtTime = (t: number) => `${Math.floor(t / 60)}:${Math.floor(t % 60).toString().padStart(2, "0")}`;
   const handleAnalyticsSeek = useCallback((targetTime: number) => {
@@ -1024,13 +1493,11 @@ export default function GameViewerPage() {
     setCurrentTime(safeTime);
     setCurrentFrame(frameFromTime(safeTime));
   }, [duration, frameFromTime]);
-  const handleTipSeek = useCallback((tip: VideoTip) => {
-    if (!videoRef.current) return;
-    const targetTime = tip.seekTime ?? tip.timestamp;
-    videoRef.current.currentTime = targetTime;
-    videoRef.current.pause();
-    setIsPlaying(false);
-  }, []);
+  const handleSeek = useCallback((e: React.ChangeEvent<HTMLInputElement>) => {
+    const targetTime = Number(e.target.value);
+    if (!Number.isFinite(targetTime)) return;
+    handleAnalyticsSeek(targetTime);
+  }, [handleAnalyticsSeek]);
 
   // Smart clip pre-fill: find highest-scoring activity region near current time
   const clipPrefill = useMemo(() => {
@@ -1208,33 +1675,42 @@ export default function GameViewerPage() {
                   onTipChange={handleTipChange}
                 />
 
-                {/* Live Stroke Indicator - Top-left of video */}
-                {(hasStrokes || poseData?.frames?.length) && (
+                {/* Floating shot label above player's head */}
+                {(hasStrokes || poseData?.frames?.length) && floatingShotBadge && (
                   <div
-                    className="absolute top-1/3 left-4 pointer-events-none"
-                    style={{ zIndex: 100 }}
+                    className="fixed pointer-events-none"
+                    style={{
+                      zIndex: 110,
+                      left: `${floatingShotBadge.x}px`,
+                      top: `${floatingShotBadge.y}px`,
+                      transform: "translate(-50%, -100%)",
+                    }}
                   >
-                    <div className="glass-shot-card px-4 py-2">
-                      <div className="flex items-center gap-2.5">
-                        <div className={cn(
-                          "w-2 h-2 rounded-full shrink-0",
-                          activeStroke
-                            ? activeStroke.stroke_type === "forehand"
-                              ? "bg-[#9B7B5B] animate-pulse"
-                              : "bg-[#5B9B7B] animate-pulse"
-                            : lastStroke
-                              ? lastStroke.stroke_type === "forehand"
-                                ? "bg-[#9B7B5B]"
-                                : "bg-[#5B9B7B]"
-                              : "bg-[#363436]"
-                        )} />
-                        <span className="text-xs font-medium text-[#E8E6E3] leading-tight capitalize whitespace-nowrap">
-                          {activeStroke
-                            ? activeStroke.stroke_type
-                            : lastStroke
-                              ? `Last ${lastStroke.stroke_type}`
-                              : "Ready"
-                          }
+                    <div className="glass-shot-card px-3.5 py-1.5">
+                      <div className="flex items-center gap-2">
+                        <div
+                          className={cn(
+                            "w-2 h-2 rounded-full shrink-0",
+                            shotFlashStroke
+                              ? "animate-pulse"
+                              : lastClassifiedStroke
+                                ? ""
+                                : "bg-[#4A4947]"
+                          )}
+                          style={{
+                            backgroundColor: shotFlashStroke
+                              ? getStrokeColor(shotFlashStroke)
+                              : lastClassifiedStroke
+                                ? getStrokeColor(lastClassifiedStroke)
+                                : undefined,
+                          }}
+                        />
+                        <span className="text-[11px] font-medium text-[#E8E6E3] leading-tight capitalize whitespace-nowrap">
+                          {shotFlashStroke
+                            ? `${getStrokeOwner(shotFlashStroke) === "opponent" ? "Opponent " : ""}${shotFlashStroke.stroke_type}`
+                            : lastClassifiedStroke
+                              ? `Last ${getStrokeOwner(lastClassifiedStroke) === "opponent" ? "opponent " : ""}${lastClassifiedStroke.stroke_type}`
+                              : "Ready"}
                         </span>
                       </div>
                     </div>
@@ -1384,23 +1860,48 @@ export default function GameViewerPage() {
             {/* Controls */}
             <div className="mx-auto mt-2 shrink-0 w-full" style={videoDisplayWidth ? { width: `${videoDisplayWidth}px` } : undefined}>
               <div className="rounded-xl bg-[#282729] p-2.5">
-              {/* Activity Timeline — waveform seek bar */}
-              <ActivityTimeline
-                currentTime={currentTime}
-                duration={duration}
-                strokes={strokeSummary?.strokes ?? []}
-                velocities={session?.trajectory_data?.velocity}
-                activityRegions={analytics?.activity_regions}
-                fps={fps}
-                totalFrames={Math.floor(duration * fps)}
-                onSeek={(time) => {
-                  if (videoRef.current) videoRef.current.currentTime = time;
-                  setCurrentTime(time);
-                  setCurrentFrame(frameFromTime(time));
-                }}
-              />
-              {/* Time labels + controls */}
-              <div className="flex items-center justify-between mt-1.5">
+              <div className="flex items-center gap-3 mb-1.5">
+                <span className="text-[10px] text-[#6A6865] w-10">{fmtTime(currentTime)}</span>
+                <div className="relative flex-1">
+                  <div className="absolute inset-x-0 -top-1.5 h-2 pt-0.5 pointer-events-none">
+                    {duration > 0 && strokeMarkers.map((marker) => {
+                      const pct = Math.min(1, Math.max(0, marker.time / duration));
+                      const isActive = activeStroke?.id === marker.id;
+                      const color = marker.owner === "opponent" ? OPPONENT_SHOT_COLOR
+                        : marker.type === "forehand" ? "#9B7B5B"
+                        : marker.type === "backhand" ? "#5B9B7B"
+                        : "#8A8885";
+                      const ownerLabel = marker.owner === "opponent" ? "Opponent " : "";
+                      return (
+                        <button
+                          key={marker.id}
+                          onClick={() => {
+                            if (videoRef.current) videoRef.current.currentTime = marker.time;
+                          }}
+                          className={cn(
+                            "absolute top-0 -translate-x-1/2 h-3 w-1.5 rounded-full pointer-events-auto transition-transform",
+                            isActive ? "scale-125" : "hover:scale-125"
+                          )}
+                          style={{ left: `${pct * 100}%`, backgroundColor: color }}
+                          title={`${ownerLabel}${marker.type} — Frame ${marker.frame} — Form ${marker.formScore.toFixed(0)}`}
+                          aria-label={`${ownerLabel}${marker.type} stroke at ${fmtTime(marker.time)}`}
+                        />
+                      );
+                    })}
+                  </div>
+                  <input
+                    type="range"
+                    min={0}
+                    max={duration || 100}
+                    step={0.01}
+                    value={currentTime}
+                    onChange={handleSeek}
+                    className="w-full h-1 bg-[#363436] rounded-full appearance-none cursor-pointer [&::-webkit-slider-thumb]:appearance-none [&::-webkit-slider-thumb]:w-2.5 [&::-webkit-slider-thumb]:h-2.5 [&::-webkit-slider-thumb]:bg-[#9B7B5B] [&::-webkit-slider-thumb]:rounded-full"
+                  />
+                </div>
+                <span className="text-[10px] text-[#6A6865] w-10 text-right">{fmtTime(duration)}</span>
+              </div>
+              <div className="flex items-center justify-between">
                 <div className="flex items-center gap-1">
                   <span className="text-[10px] text-[#6A6865] w-10 tabular-nums">{fmtTime(currentTime)}</span>
                   <Button variant="ghost" size="icon" className="h-7 w-7" onClick={() => skipFrames(-10)}><SkipBack className="w-3 h-3" /></Button>
@@ -1537,10 +2038,112 @@ export default function GameViewerPage() {
                       </>
                     )}
 
+                    {/* ── Live Stroke Indicator (synced to video frame) ── */}
+                    {hasStrokes && (
+                      <div className={cn(
+                        "p-2.5 rounded-lg transition-all duration-200",
+                        activeStroke
+                          ? getStrokeOwner(activeStroke) === "opponent" ? "bg-[#C45C5C]/15 ring-1 ring-[#C45C5C]/40"
+                          : activeStroke.stroke_type === "forehand" ? "bg-[#9B7B5B]/15 ring-1 ring-[#9B7B5B]/40"
+                          : activeStroke.stroke_type === "backhand" ? "bg-[#5B9B7B]/15 ring-1 ring-[#5B9B7B]/40"
+                          : "bg-[#1E1D1F]"
+                          : "bg-[#1E1D1F]"
+                      )}>
+                        {activeStroke ? (
+                          <div className="flex items-center gap-2">
+                            <div className={cn(
+                              "w-2 h-2 rounded-full animate-pulse",
+                              getStrokeOwner(activeStroke) === "opponent" ? "bg-[#C45C5C]"
+                              : activeStroke.stroke_type === "forehand" ? "bg-[#9B7B5B]"
+                              : activeStroke.stroke_type === "backhand" ? "bg-[#5B9B7B]"
+                              : "bg-[#8A8885]"
+                            )} />
+                            <span className={cn(
+                              "text-xs font-medium capitalize",
+                              getStrokeOwner(activeStroke) === "opponent" ? "text-[#C45C5C]"
+                              : activeStroke.stroke_type === "forehand" ? "text-[#9B7B5B]"
+                              : activeStroke.stroke_type === "backhand" ? "text-[#5B9B7B]"
+                              : "text-[#8A8885]"
+                            )}>
+                              {getStrokeOwner(activeStroke) === "opponent" ? `Opponent ${activeStroke.stroke_type}` : activeStroke.stroke_type}
+                            </span>
+                            <span className="text-[10px] text-[#6A6865] ml-auto">
+                              Form {activeStroke.form_score.toFixed(0)}
+                            </span>
+                          </div>
+                        ) : lastStroke ? (
+                          <div className="flex items-center gap-2">
+                            <div className="w-2 h-2 rounded-full bg-[#363436]" />
+                            <span className="text-xs text-[#6A6865]">
+                              Last: <span className={cn(
+                                "capitalize",
+                                getStrokeOwner(lastStroke) === "opponent" ? "text-[#C45C5C]"
+                                : lastStroke.stroke_type === "forehand" ? "text-[#9B7B5B]"
+                                : lastStroke.stroke_type === "backhand" ? "text-[#5B9B7B]"
+                                : "text-[#8A8885]"
+                              )}>{getStrokeOwner(lastStroke) === "opponent" ? `opponent ${lastStroke.stroke_type}` : lastStroke.stroke_type}</span>
+                            </span>
+                            <span className="text-[10px] text-[#6A6865] ml-auto">
+                              Form {lastStroke.form_score.toFixed(0)}
+                            </span>
+                          </div>
+                        ) : null}
+                      </div>
+                    )}
+
                     {/* ── Stroke Summary Stats ── */}
                     {hasPose && !isPoseProcessing && (
                       <>
-                        {hasStrokes ? (
+                        {isStrokeRecomputeProcessing ? (
+                          <div className="rounded-lg bg-[#1E1D1F] ring-1 ring-[#9B7B5B]/30 p-3">
+                            <div className="flex items-center gap-2">
+                              <Loader2 className="w-3.5 h-3.5 text-[#9B7B5B] animate-spin" />
+                              <span className="text-xs font-medium text-[#E8E6E3]">Recomputing stroke insights</span>
+                            </div>
+                            <p className="text-[10px] text-[#8A8885] mt-1">
+                              {strokeClaudeClassifierEnabled
+                                ? "Waiting for Claude classifications, then refreshing timeline and AI insights."
+                                : "Waiting for vision analysis, then refreshing timeline and AI insights."}
+                            </p>
+                            <div className="mt-2 space-y-1.5">
+                              {strokePipelineStageRows.map((stage) => (
+                                <div key={stage.id} className="flex items-center justify-between gap-2 text-[10px]">
+                                  <div className="flex items-center gap-1.5 min-w-0">
+                                    {stage.status === "completed" ? (
+                                      <Check className="w-3 h-3 text-[#5B9B7B] shrink-0" />
+                                    ) : stage.status === "running" ? (
+                                      <Loader2 className="w-3 h-3 text-[#9B7B5B] animate-spin shrink-0" />
+                                    ) : stage.status === "failed" ? (
+                                      <X className="w-3 h-3 text-[#C45C5C] shrink-0" />
+                                    ) : (
+                                      <div className="w-3 h-3 rounded-full bg-[#363436] shrink-0" />
+                                    )}
+                                    <span
+                                      className={cn(
+                                        "truncate",
+                                        stage.status === "running" ? "text-[#E8E6E3]"
+                                        : stage.status === "completed" ? "text-[#8A8885]"
+                                        : stage.status === "failed" ? "text-[#C45C5C]"
+                                        : "text-[#6A6865]"
+                                      )}
+                                    >
+                                      {stage.label}
+                                    </span>
+                                  </div>
+                                  <span className="text-[#6A6865] tabular-nums shrink-0">
+                                    {stage.durationMs !== null ? `${(stage.durationMs / 1000).toFixed(stage.durationMs >= 10000 ? 1 : 2)}s` : "—"}
+                                  </span>
+                                </div>
+                              ))}
+                            </div>
+                            <div className="mt-2 pt-2 border-t border-[#363436]/40 flex items-center justify-between text-[10px]">
+                              <span className="text-[#6A6865]">Elapsed</span>
+                              <span className="text-[#8A8885] tabular-nums">
+                                {(strokePipelineElapsedMs / 1000).toFixed(strokePipelineElapsedMs >= 10000 ? 1 : 2)}s
+                              </span>
+                            </div>
+                          </div>
+                        ) : hasStrokes ? (
                           <div className="flex flex-col gap-2 min-h-0 flex-1">
                             {/* Camera facing toggle + Re-analyze */}
                             <div className="flex items-center justify-between shrink-0">
@@ -1585,67 +2188,131 @@ export default function GameViewerPage() {
                                   <div className="bg-[#5B9B7B] transition-all" style={{ width: `${((strokeSummary?.backhand_count ?? 0) / (strokeSummary?.total_strokes ?? 1)) * 100}%` }} />
                                 </div>
                                 <div className="flex justify-between mt-2 gap-2">
-                                  <span className="text-sm font-medium text-[#9B7B5B]">Forehand ({strokeSummary?.forehand_count ?? 0}) - {Math.round(((strokeSummary?.forehand_count ?? 0) / (strokeSummary?.total_strokes ?? 1)) * 100)}%</span>
-                                  <span className="text-sm font-medium text-[#5B9B7B]">Backhand ({strokeSummary?.backhand_count ?? 0}) - {Math.round(((strokeSummary?.backhand_count ?? 0) / (strokeSummary?.total_strokes ?? 1)) * 100)}%</span>
+                                  <span className="text-[13px] font-medium text-[#9B7B5B]">Forehand ({strokeSummary?.forehand_count ?? 0}) - {Math.round(((strokeSummary?.forehand_count ?? 0) / (strokeSummary?.total_strokes ?? 1)) * 100)}%</span>
+                                  <span className="text-[13px] font-medium text-[#5B9B7B]">Backhand ({strokeSummary?.backhand_count ?? 0}) - {Math.round(((strokeSummary?.backhand_count ?? 0) / (strokeSummary?.total_strokes ?? 1)) * 100)}%</span>
                                 </div>
+                                {opponentStrokeCount > 0 && (
+                                  <p className="mt-1.5 text-[10px] text-[#C45C5C]">
+                                    {opponentStrokeCount} opponent stroke{opponentStrokeCount === 1 ? "" : "s"} excluded from this breakdown.
+                                  </p>
+                                )}
                               </div>
                             )}
 
-                            {/* All Insights throughout the video */}
-                            {videoTips.length > 0 && (
+                            {/* Insight Generation Progress */}
+                            {isInsightGenerating && (
+                              <div className="rounded-lg bg-[#1E1D1F] ring-1 ring-[#9B7B5B]/30 p-3">
+                                <div className="flex items-center justify-between">
+                                  <div className="flex items-center gap-2">
+                                    <Loader2 className="w-3.5 h-3.5 text-[#9B7B5B] animate-spin" />
+                                    <span className="text-xs font-medium text-[#E8E6E3]">
+                                      Generating AI insights
+                                      {insightsProgress ? ` — Stroke ${insightsProgress.current} of ${insightsProgress.total}` : ""}
+                                    </span>
+                                  </div>
+                                  <button
+                                    onClick={() => cancelInsightsMutation.mutate()}
+                                    disabled={cancelInsightsMutation.isPending}
+                                    className="text-[#6A6865] hover:text-[#C45C5C] transition-colors disabled:opacity-50"
+                                    title="Cancel insight generation"
+                                  >
+                                    <X className="w-3.5 h-3.5" />
+                                  </button>
+                                </div>
+                                {insightsProgress && insightsProgress.total > 0 && (
+                                  <div className="mt-2 h-1.5 rounded-full bg-[#363436] overflow-hidden">
+                                    <div
+                                      className="h-full bg-[#9B7B5B] transition-all duration-300"
+                                      style={{ width: `${(insightsProgress.completed / insightsProgress.total) * 100}%` }}
+                                    />
+                                  </div>
+                                )}
+                              </div>
+                            )}
+
+                            {/* AI Insight Cards (replace rule-based tips when available) */}
+                            {hasAiInsights ? (
                               <div className="flex flex-col min-h-0 flex-1">
-                                <p className="text-[11px] text-[#6A6865] uppercase tracking-wider mb-1.5 shrink-0">
-                                  Insights ({videoTips.filter(t => !t.id.includes("follow") && !t.id.includes("summary")).length})
-                                </p>
+                                <div className="flex items-center justify-between mb-1.5 shrink-0">
+                                  <p className="text-[11px] text-[#6A6865] uppercase tracking-wider">
+                                    Insights ({aiInsightStrokes.length})
+                                  </p>
+                                  {isInsightGenerating && (
+                                    <button
+                                      onClick={() => cancelInsightsMutation.mutate()}
+                                      disabled={cancelInsightsMutation.isPending}
+                                      className="text-[#6A6865] hover:text-[#C45C5C] transition-colors disabled:opacity-50"
+                                      title="Cancel insight generation"
+                                    >
+                                      <X className="w-3 h-3" />
+                                    </button>
+                                  )}
+                                </div>
                                 <div className="space-y-1.5 overflow-y-auto pr-1 flex-1">
-                                  {videoTips
-                                    .filter(t => !t.id.includes("follow") && !t.id.includes("summary"))
-                                    .map((tip) => {
-                                      const isActive = activeTip?.id === tip.id;
-                                      const isPast = currentTime > tip.timestamp + tip.duration;
+                                  <AnimatePresence mode="popLayout">
+                                    {aiInsightStrokes.map((stroke, idx) => {
+                                      const wasReclassified = stroke.ai_insight_data?.corrected_stroke_type &&
+                                        stroke.ai_insight_data.corrected_stroke_type !== stroke.ai_insight_data.original_stroke_type;
+                                      const strokeOwner = getStrokeOwner(stroke);
+                                      const strokeColor = getStrokeColor(stroke);
+                                      const strokeTime = stroke.peak_frame / fps;
+                                      const isActive = activeStroke?.id === stroke.id;
                                       return (
-                                        <button
-                                          key={tip.id}
+                                        <motion.button
+                                          key={stroke.id}
+                                          initial={{ opacity: 0, y: 8 }}
+                                          animate={{ opacity: 1, y: 0 }}
+                                          exit={{ opacity: 0, y: -4 }}
+                                          transition={{ delay: idx * 0.05, duration: 0.2 }}
                                           onClick={() => {
-                                            handleTipSeek(tip);
+                                            if (videoRef.current) {
+                                              videoRef.current.currentTime = stroke.start_frame / fps;
+                                              videoRef.current.pause();
+                                              setIsPlaying(false);
+                                            }
                                           }}
                                           className={cn(
                                             "w-full text-left p-2.5 rounded-lg transition-all",
                                             isActive
-                                              ? "bg-[#9B7B5B]/15 ring-1 ring-[#9B7B5B]/40"
-                                              : isPast
-                                                ? "bg-[#2D2C2E]/50 hover:bg-[#2D2C2E]"
-                                                : "bg-[#2D2C2E]/30 hover:bg-[#2D2C2E]"
+                                              ? strokeOwner === "opponent"
+                                                ? "bg-[#C45C5C]/15 ring-1 ring-[#C45C5C]/40"
+                                                : "bg-[#9B7B5B]/15 ring-1 ring-[#9B7B5B]/40"
+                                              : "bg-[#2D2C2E]/30 hover:bg-[#2D2C2E]"
                                           )}
                                         >
                                           <div className="flex items-center gap-2">
-                                            <span className={cn(
-                                              "text-[11px] font-mono shrink-0",
-                                              isActive ? "text-[#9B7B5B]" : "text-[#6A6865]"
-                                            )}>
-                                              {fmtTime(tip.timestamp)}
+                                            <span className="text-[11px] font-mono shrink-0 text-[#6A6865]">
+                                              {fmtTime(strokeTime)}
                                             </span>
-                                            <span className={cn(
-                                              "text-xs font-medium truncate",
-                                              isActive ? "text-[#E8E6E3]" : isPast ? "text-[#8A8885]" : "text-[#E8E6E3]"
-                                            )}>
-                                              {tip.title}
+                                            <span
+                                              className="text-[10px] font-medium px-1.5 py-0.5 rounded capitalize"
+                                              style={{ backgroundColor: `${strokeColor}20`, color: strokeColor }}
+                                            >
+                                              {stroke.stroke_type}
                                             </span>
+                                            {strokeOwner === "opponent" && (
+                                              <span className="text-[9px] text-[#C45C5C] bg-[#C45C5C]/15 px-1 py-0.5 rounded">
+                                                Opponent
+                                              </span>
+                                            )}
+                                            {wasReclassified && (
+                                              <span className="text-[9px] text-[#C4A05C] bg-[#C4A05C]/15 px-1 py-0.5 rounded">
+                                                was {stroke.ai_insight_data?.original_stroke_type}
+                                              </span>
+                                            )}
                                           </div>
-                                          {tip.message && (
-                                            <p className={cn(
-                                              "text-[11px] mt-1 line-clamp-3 leading-relaxed",
-                                              isActive ? "text-[#8A8885]" : "text-[#6A6865]"
-                                            )}>
-                                              {tip.message}
+                                          {stroke.ai_insight && (
+                                            <p className="text-[11px] mt-1.5 line-clamp-3 leading-relaxed text-[#8A8885]">
+                                              {stroke.ai_insight}
                                             </p>
                                           )}
-                                        </button>
+                                        </motion.button>
                                       );
                                     })}
+                                  </AnimatePresence>
                                 </div>
                               </div>
-                            )}
+                            ) : null}
                           </div>
                         ) : (
                           <div className="text-center py-3">

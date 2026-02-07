@@ -314,40 +314,60 @@ export function AnalyticsDashboard({ sessionId, onSeekToTime, playerName }: Anal
 
   // --- Derived stats ---
 
+  const playerOwnedStrokeRows = useMemo(() => {
+    if (!strokeSummary?.strokes) return [];
+    return strokeSummary.strokes.filter((stroke) => {
+      const owner = String(stroke.ai_insight_data?.shot_owner ?? stroke.metrics?.event_hitter ?? "").toLowerCase();
+      if (owner !== "opponent") return true;
+
+      const method = String(stroke.ai_insight_data?.shot_owner_method ?? stroke.metrics?.event_hitter_method ?? "").toLowerCase();
+      const reason = String(stroke.ai_insight_data?.shot_owner_reason ?? stroke.metrics?.event_hitter_reason ?? "").toLowerCase();
+      if (method === "proximity_10_percent" && reason.startsWith("player_outside_")) return true;
+
+      const rawConfidence = stroke.ai_insight_data?.shot_owner_confidence ?? stroke.metrics?.event_hitter_confidence;
+      const confidence = typeof rawConfidence === "number" ? rawConfidence : Number(rawConfidence);
+      return !(Number.isFinite(confidence) && confidence >= 0.75);
+    });
+  }, [strokeSummary?.strokes]);
+
   // Shot mix from stroke summary
   const shotMix = useMemo(() => {
-    if (!strokeSummary?.total_strokes) return null;
-    const total = strokeSummary.total_strokes;
-    const fhPct = Math.round((strokeSummary.forehand_count / total) * 100);
+    if (!playerOwnedStrokeRows.length) return null;
+    const total = playerOwnedStrokeRows.length;
+    const fhStrokes = playerOwnedStrokeRows.filter((s) => s.stroke_type === "forehand");
+    const bhStrokes = playerOwnedStrokeRows.filter((s) => s.stroke_type === "backhand");
+    const fhCount = fhStrokes.length;
+    const bhCount = bhStrokes.length;
+    const fhPct = Math.round((fhCount / total) * 100);
     const bhPct = 100 - fhPct;
-    const fhStrokes = strokeSummary.strokes.filter((s) => s.stroke_type === "forehand");
-    const bhStrokes = strokeSummary.strokes.filter((s) => s.stroke_type === "backhand");
     const fhAvgForm = fhStrokes.length ? fhStrokes.reduce((sum, s) => sum + s.form_score, 0) / fhStrokes.length : 0;
     const bhAvgForm = bhStrokes.length ? bhStrokes.reduce((sum, s) => sum + s.form_score, 0) / bhStrokes.length : 0;
-    const bestForm = strokeSummary.best_form_score;
+    const formScores = playerOwnedStrokeRows.map((s) => s.form_score);
+    const avgForm = formScores.length ? formScores.reduce((sum, score) => sum + score, 0) / formScores.length : 0;
+    const bestForm = formScores.length ? Math.max(...formScores) : 0;
     const fhSpeeds = fhStrokes.map((s) => s.max_velocity);
     const bhSpeeds = bhStrokes.map((s) => s.max_velocity);
     const fhAvgSpeed = fhSpeeds.length ? fhSpeeds.reduce((a, b) => a + b, 0) / fhSpeeds.length : 0;
     const bhAvgSpeed = bhSpeeds.length ? bhSpeeds.reduce((a, b) => a + b, 0) / bhSpeeds.length : 0;
     return {
-      total, fhCount: strokeSummary.forehand_count, bhCount: strokeSummary.backhand_count,
+      total, fhCount, bhCount,
       fhPct, bhPct, fhAvgForm: Math.round(fhAvgForm), bhAvgForm: Math.round(bhAvgForm),
-      avgForm: Math.round(strokeSummary.average_form_score), bestForm: Math.round(bestForm),
+      avgForm: Math.round(avgForm), bestForm: Math.round(bestForm),
       fhAvgSpeed: Math.round(fhAvgSpeed), bhAvgSpeed: Math.round(bhAvgSpeed),
     };
-  }, [strokeSummary]);
+  }, [playerOwnedStrokeRows]);
 
   // Stroke consistency
   const consistency = useMemo(() => {
-    if (!strokeSummary?.strokes?.length || strokeSummary.strokes.length < 2) return null;
-    const scores = strokeSummary.strokes.map((s) => s.form_score);
+    if (playerOwnedStrokeRows.length < 2) return null;
+    const scores = playerOwnedStrokeRows.map((s) => s.form_score);
     const mean = scores.reduce((a, b) => a + b, 0) / scores.length;
     const variance = scores.reduce((sum, s) => sum + (s - mean) ** 2, 0) / scores.length;
     const stddev = Math.sqrt(variance);
     const cv = mean > 0 ? stddev / mean : 0;
     const score = Math.round(Math.max(0, Math.min(100, (1 - cv * 2) * 100)));
     return { score, stddev: Math.round(stddev), mean: Math.round(mean) };
-  }, [strokeSummary]);
+  }, [playerOwnedStrokeRows]);
 
   // Contact height analysis
   const contactAnalysis = useMemo(() => {

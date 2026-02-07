@@ -176,6 +176,8 @@ export interface Session {
   };
   camera_facing?: "auto" | "toward" | "away";
   status: "pending" | "processing" | "completed" | "failed";
+  stroke_analysis_status?: "pending" | "processing" | "completed" | "failed";
+  insight_generation_status?: "generating" | "completed" | "failed" | "cancelled" | null;
   created_at: string;
   players?: PlayerBrief[];
 }
@@ -301,6 +303,26 @@ export interface StrokeMetrics {
   elbow_range: number;
   hip_rotation_range: number;
   shoulder_rotation_range: number;
+  event_sources?: string | string[];
+  event_frame?: number;
+  event_hitter?: "player" | "opponent" | "unknown" | string;
+  event_hitter_confidence?: number;
+  event_hitter_reason?: string;
+  event_hitter_method?: string;
+}
+
+export interface StrokeInsightData {
+  corrected_stroke_type?: string | null;
+  original_stroke_type?: string | null;
+  classification_confidence?: number;
+  classification_reasoning?: string;
+  stroke_type_correct?: boolean;
+  shot_owner?: "player" | "opponent" | "unknown" | string;
+  shot_owner_confidence?: number;
+  shot_owner_reason?: string;
+  shot_owner_method?: string;
+  model?: string;
+  generated_at?: string;
 }
 
 export interface Stroke {
@@ -314,6 +336,17 @@ export interface Stroke {
   max_velocity: number;
   form_score: number;
   metrics: StrokeMetrics;
+  ai_insight?: string | null;
+  ai_insight_data?: StrokeInsightData | null;
+}
+
+export interface TimelineTip {
+  id: string;
+  timestamp: number;
+  duration: number;
+  title: string;
+  message: string;
+  seek_time?: number | null;
 }
 
 export interface StrokeSummary {
@@ -325,13 +358,70 @@ export interface StrokeSummary {
   forehand_count: number;
   backhand_count: number;
   strokes: Stroke[];
+  timeline_tips?: TimelineTip[];
 }
 
-export const analyzeStrokes = (sessionId: string) =>
-  api.post(`/api/stroke/analyze/${sessionId}`);
+export interface AnalyzeStrokesRequest {
+  use_claude_classifier?: boolean;
+}
+
+export interface StrokeDebugRunSummary {
+  id: string;
+  session_id: string;
+  status: "processing" | "completed" | "failed";
+  started_at?: string;
+  completed_at?: string;
+  handedness?: string;
+  camera_facing?: string;
+  debug_stats?: Record<string, unknown>;
+  storage_path?: string;
+  storage_url?: string;
+  created_at?: string;
+  error?: string;
+}
+
+export interface StrokeDebugRunsResponse {
+  session_id: string;
+  count: number;
+  runs: StrokeDebugRunSummary[];
+}
+
+export interface InsightsProgress {
+  current: number;
+  total: number;
+  completed: number;
+}
+
+export interface StrokePipelineProgress {
+  run_id: string;
+  session_id: string;
+  status: "processing" | "completed" | "failed";
+  started_at?: string;
+  completed_at?: string;
+  use_claude_classifier?: boolean;
+  debug_stats?: Record<string, unknown> & { insights_progress?: InsightsProgress };
+  error?: string;
+}
+
+export interface StrokeProgressResponse {
+  session_id: string;
+  progress: StrokePipelineProgress | null;
+}
+
+export const analyzeStrokes = (sessionId: string, data?: AnalyzeStrokesRequest) =>
+  api.post(`/api/stroke/analyze/${sessionId}`, data ?? {});
 
 export const getStrokeSummary = (sessionId: string) =>
   api.get<StrokeSummary>(`/api/stroke/summary/${sessionId}`);
+
+export const getStrokeDebugRuns = (sessionId: string, limit: number = 20) =>
+  api.get<StrokeDebugRunsResponse>(`/api/stroke/debug-runs/${sessionId}`, { params: { limit } });
+
+export const getStrokeProgress = (sessionId: string) =>
+  api.get<StrokeProgressResponse>(`/api/stroke/progress/${sessionId}`);
+
+export const cancelStrokeInsights = (sessionId: string) =>
+  api.post(`/api/stroke/cancel-insights/${sessionId}`);
 
 export const getStrokes = (sessionId: string, strokeType?: string) =>
   api.get(`/api/stroke/strokes/${sessionId}`, {

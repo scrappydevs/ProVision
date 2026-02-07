@@ -18,6 +18,8 @@ import {
   SAM3DJob,
 } from "@/lib/api";
 
+const SESSION_POLL_INTERVAL_MS = 3000;
+
 // ============================================================================
 // Query Key Factory
 // Centralized key management for cache invalidation
@@ -55,6 +57,7 @@ export function useSessions() {
 
 /**
  * Fetch a single session by ID
+ * Auto-refetches while session status is processing/pending.
  */
 export function useSession(id: string) {
   return useQuery({
@@ -65,6 +68,19 @@ export function useSession(id: string) {
     },
     staleTime: 60 * 1000, // 1 minute
     enabled: !!id,
+    // Poll at 3s for core processing states; stroke recompute uses dedicated progress polling.
+    refetchInterval: (query) => {
+      const data = query.state.data as Session | undefined;
+      const status = data?.status;
+      const strokeStatus = data?.stroke_analysis_status;
+      const insightStatus = data?.insight_generation_status;
+      const isProcessing =
+        status === "processing" ||
+        status === "pending" ||
+        strokeStatus === "processing" ||
+        insightStatus === "generating";
+      return isProcessing ? SESSION_POLL_INTERVAL_MS : false;
+    },
   });
 }
 

@@ -9,6 +9,7 @@ from dataclasses import dataclass
 import math
 
 from .stroke_classifier import detect_camera_facing, _normalize_angle_delta
+from .stroke_debug_utils import debug_header, debug_info, debug_section_end
 
 
 @dataclass
@@ -87,24 +88,47 @@ class StrokeDetector:
         Returns:
             List of detected Stroke objects
         """
+        debug_header(f"🎾 STARTING POSE-BASED STROKE DETECTION")
+        debug_info("Input parameters",
+                   Frames=len(pose_frames),
+                   Velocity_Threshold=self.velocity_threshold,
+                   Min_Duration=self.min_stroke_duration,
+                   Max_Duration=self.max_stroke_duration)
+
         if len(pose_frames) < 2:
+            print(f"[STROKE DETECTOR] ⚠️ INSUFFICIENT FRAMES (<2), returning empty")
             return []
 
         # Resolve facing once for the whole video
         self._resolve_facing(pose_frames)
+        print(f"[STROKE DETECTOR] 📹 Camera facing resolved: {self._resolved_facing}")
 
         # Calculate wrist velocities
+        print(f"[STROKE DETECTOR] 📊 Calculating wrist velocities...")
         velocities = self._calculate_wrist_velocities(pose_frames)
+        max_velocity = max(velocities) if velocities else 0
+        print(f"[STROKE DETECTOR]    Max velocity: {max_velocity:.1f}")
 
         # Find velocity peaks (potential strokes)
+        print(f"[STROKE DETECTOR] 🔍 Finding velocity peaks...")
         peaks = self._find_velocity_peaks(velocities)
+        print(f"[STROKE DETECTOR]    Found {len(peaks)} velocity peaks")
 
         # Analyze each peak to determine stroke boundaries
+        print(f"[STROKE DETECTOR] 🎯 Analyzing peaks for valid strokes...")
         strokes = []
-        for peak_idx in peaks:
+        for idx, peak_idx in enumerate(peaks, 1):
             stroke = self._analyze_stroke(pose_frames, velocities, peak_idx)
             if stroke:
+                print(f"[STROKE DETECTOR]    Peak {idx}/{len(peaks)}: ✅ Valid stroke at frame {stroke.peak_frame} ({stroke.stroke_type})")
                 strokes.append(stroke)
+            else:
+                print(f"[STROKE DETECTOR]    Peak {idx}/{len(peaks)}: ❌ Filtered out (wind-up or invalid duration)")
+
+        debug_section_end(f"POSE-BASED DETECTION COMPLETE",
+                         Valid_Strokes=len(strokes),
+                         Total_Peaks=len(peaks),
+                         Filter_Rate=f"{100*(1-len(strokes)/max(1,len(peaks))):.1f}%")
 
         return strokes
 
@@ -408,17 +432,53 @@ class StrokeDetector:
 
     def calculate_overall_form_score(self, strokes: List[Stroke]) -> Dict[str, float]:
         """
-        Calculate overall statistics from all detected strokes.
+        Calculate overall statistics from player-owned strokes.
+        Opponent strokes are excluded when hitter inference marks them explicitly.
         """
         if not strokes:
             return {
                 'average_form_score': 0,
                 'best_form_score': 0,
                 'consistency_score': 0,
-                'total_strokes': 0
+                'total_strokes': 0,
+                'forehand_count': 0,
+                'backhand_count': 0,
             }
 
-        form_scores = [s.form_score for s in strokes]
+        def _is_player_stroke(stroke: Stroke) -> bool:
+            metrics = stroke.metrics if isinstance(stroke.metrics, dict) else {}
+            hitter = str(metrics.get("event_hitter") or "").strip().lower()
+            if hitter != "opponent":
+                # Backward compatibility: unknown/missing ownership stays player-owned.
+                return True
+
+            method = str(metrics.get("event_hitter_method") or "").strip().lower()
+            reason = str(metrics.get("event_hitter_reason") or "").strip().lower()
+            if method == "proximity_10_percent" and reason.startswith("player_outside_"):
+                # Legacy heuristic was overly aggressive toward opponent.
+                return True
+
+            confidence_raw = metrics.get("event_hitter_confidence")
+            try:
+                confidence = float(confidence_raw)
+            except (TypeError, ValueError):
+                confidence = 0.0
+
+            # Only trust opponent ownership when confidence is solid.
+            return confidence < 0.75
+
+        player_strokes = [s for s in strokes if _is_player_stroke(s)]
+        if not player_strokes:
+            return {
+                'average_form_score': 0,
+                'best_form_score': 0,
+                'consistency_score': 0,
+                'total_strokes': 0,
+                'forehand_count': 0,
+                'backhand_count': 0,
+            }
+
+        form_scores = [s.form_score for s in player_strokes]
 
         avg_score = sum(form_scores) / len(form_scores)
         best_score = max(form_scores)
@@ -432,7 +492,7 @@ class StrokeDetector:
             'average_form_score': round(avg_score, 1),
             'best_form_score': round(best_score, 1),
             'consistency_score': round(consistency, 1),
-            'total_strokes': len(strokes),
-            'forehand_count': sum(1 for s in strokes if s.stroke_type == 'forehand'),
-            'backhand_count': sum(1 for s in strokes if s.stroke_type == 'backhand'),
+            'total_strokes': len(player_strokes),
+            'forehand_count': sum(1 for s in player_strokes if s.stroke_type == 'forehand'),
+            'backhand_count': sum(1 for s in player_strokes if s.stroke_type == 'backhand'),
         }
