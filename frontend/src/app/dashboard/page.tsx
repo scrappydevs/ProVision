@@ -33,11 +33,22 @@ export default function DashboardPage() {
 
   const handleCreatePlayer = async (data: PlayerCreate, avatarFile?: File) => {
     const player = await createMutation.mutateAsync(data);
-    if (avatarFile && player.id) {
-      await uploadAvatarMutation.mutateAsync({
-        playerId: player.id,
-        file: avatarFile,
-      });
+    if (player.id) {
+      if (avatarFile) {
+        await uploadAvatarMutation.mutateAsync({
+          playerId: player.id,
+          file: avatarFile,
+        });
+      } else {
+        // Use default player image when none selected
+        const res = await fetch("/player1.png");
+        const blob = await res.blob();
+        const defaultFile = new File([blob], "player1.png", { type: blob.type });
+        await uploadAvatarMutation.mutateAsync({
+          playerId: player.id,
+          file: defaultFile,
+        });
+      }
     }
     setFormOpen(false);
   };
