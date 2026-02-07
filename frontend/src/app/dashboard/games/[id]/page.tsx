@@ -99,6 +99,7 @@ export default function GameViewerPage() {
   const [playbackRate, setPlaybackRate] = useState(1);
   const [panelWidth, setPanelWidth] = useState(320);
   const [videoDisplayWidth, setVideoDisplayWidth] = useState<number | null>(null);
+  const [videoBounds, setVideoBounds] = useState<{ top: number; right: number; width: number; height: number } | null>(null);
   const isResizing = useRef(false);
   const [activeTip, setActiveTip] = useState<VideoTip | null>(null);
   const [tipPausedVideo, setTipPausedVideo] = useState(false);
@@ -383,15 +384,34 @@ export default function GameViewerPage() {
     const containerWidth = viewport.clientWidth;
     const containerHeight = viewport.clientHeight;
     let nextWidth = containerWidth;
+    let nextHeight = containerHeight;
 
     if (video?.videoWidth && video?.videoHeight && containerHeight > 0) {
       const videoAspect = video.videoWidth / video.videoHeight;
       const containerAspect = containerWidth / containerHeight;
-      nextWidth = containerAspect > videoAspect ? containerHeight * videoAspect : containerWidth;
+      if (containerAspect > videoAspect) {
+        nextWidth = containerHeight * videoAspect;
+        nextHeight = containerHeight;
+      } else {
+        nextWidth = containerWidth;
+        nextHeight = containerWidth / videoAspect;
+      }
     }
 
     const rounded = Math.max(0, Math.round(nextWidth));
     setVideoDisplayWidth((prev) => (prev === rounded ? prev : rounded));
+
+    // Calculate video element bounds for overlay positioning
+    const viewportRect = viewport.getBoundingClientRect();
+    const videoLeft = viewportRect.left + (containerWidth - nextWidth) / 2;
+    const videoTop = viewportRect.top + (containerHeight - nextHeight) / 2;
+    
+    setVideoBounds({
+      top: videoTop,
+      right: videoLeft + nextWidth,
+      width: nextWidth,
+      height: nextHeight,
+    });
   }, []);
 
   useEffect(() => {
@@ -1082,17 +1102,17 @@ export default function GameViewerPage() {
                 />
 
                 {/* Tracking Statistics Overlay - Top Right */}
-                {(showPoseOverlay || showTrack || showCourt) && (
+                {(showPoseOverlay || showTrack || showCourt) && videoBounds && (
                   <div 
-                    className="absolute top-4 right-4 z-30 flex flex-col gap-2 pointer-events-none"
+                    className="fixed z-30 flex flex-col gap-2 pointer-events-none"
                     style={{
-                      maxWidth: videoDisplayWidth ? `${videoDisplayWidth - 32}px` : 'calc(100% - 32px)',
+                      top: `${videoBounds.top + 12}px`,
+                      right: `${window.innerWidth - videoBounds.right + 12}px`,
                     }}
                   >
                     {/* Pose Track Status */}
                     {showPoseOverlay && (
-                      <div className="glass-toolbar px-3 py-2 w-[160px]">
-                        <div className="glass-shimmer" />
+                      <div className="rounded-lg bg-black/40 backdrop-blur-md border border-white/10 px-3 py-2 w-[160px]">
                         <div className="relative z-10">
                           <div className="flex items-center gap-2 mb-1">
                             <Activity className="w-3 h-3 text-[#9B7B5B]" />
@@ -1124,8 +1144,7 @@ export default function GameViewerPage() {
 
                     {/* Ball Track Status */}
                     {showTrack && (
-                      <div className="glass-toolbar px-3 py-2 w-[160px]">
-                        <div className="glass-shimmer" />
+                      <div className="rounded-lg bg-black/40 backdrop-blur-md border border-white/10 px-3 py-2 w-[160px]">
                         <div className="relative z-10">
                           <div className="flex items-center gap-2 mb-1">
                             <Crosshair className="w-3 h-3 text-[#9B7B5B]" />
@@ -1161,8 +1180,7 @@ export default function GameViewerPage() {
 
                     {/* Court Analytics Status */}
                     {showCourt && (
-                      <div className="glass-toolbar px-3 py-2 w-[160px]">
-                        <div className="glass-shimmer" />
+                      <div className="rounded-lg bg-black/40 backdrop-blur-md border border-white/10 px-3 py-2 w-[160px]">
                         <div className="relative z-10">
                           <div className="flex items-center gap-2 mb-1">
                             <LayoutGrid className="w-3 h-3 text-[#9B7B5B]" />
@@ -1778,13 +1796,6 @@ export default function GameViewerPage() {
             </div>
           )}
         </div>
-
-        {(isTracking || isDetecting) && (
-          <div className="glass-context p-3.5 flex items-center gap-3 mt-2 shrink-0 bg-[#9B7B5B]/10">
-            <Loader2 className="w-4 h-4 text-[#9B7B5B] animate-spin" />
-            <span className="text-sm text-[#E8E6E3] font-medium">Tracking ball...</span>
-          </div>
-        )}
       </div>
       {/* YOLO Detection result modal */}
       {detection && (
