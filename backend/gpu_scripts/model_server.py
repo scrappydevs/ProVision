@@ -1128,18 +1128,88 @@ async def tracknet_track(request: SAM2TrackRequest):
         ball_subtrack = interpolation(ball_subtrack)
         ball_track[r[0]:r[1]] = ball_subtrack
     
-    # === Exponential Moving Average Smoothing (reduce jitter) ===
-    # Apply EMA to smooth out small jitters while preserving actual motion
-    alpha = 0.3  # Smoothing factor (0 = no smoothing, 1 = no smoothing)
-    for i in range(1, n):
-        if ball_track[i][0] is not None and ball_track[i-1][0] is not None:
-            # Only smooth if positions are close (< 50px) - don't smooth across large jumps
-            dist = distance.euclidean(ball_track[i], ball_track[i-1])
-            if dist < 50:
-                ball_track[i] = (
-                    alpha * ball_track[i][0] + (1 - alpha) * ball_track[i-1][0],
-                    alpha * ball_track[i][1] + (1 - alpha) * ball_track[i-1][1]
-                )
+    # === One Euro Filter Smoothing (adaptive + responsive) ===
+    # Replaces EMA with One Euro Filter for better jitter reduction while preserving fast motion
+    class LowPassFilter:
+        def __init__(self, alpha: float):
+            self.alpha = alpha
+            self.s = None
+
+        def __call__(self, value: float) -> float:
+            if self.s is None:
+                self.s = value
+            else:
+                self.s = self.alpha * value + (1 - self.alpha) * self.s
+            return self.s
+
+        def reset(self):
+            self.s = None
+
+    class OneEuroFilter:
+        def __init__(self, min_cutoff: float = 1.0, beta: float = 0.0, d_cutoff: float = 1.0):
+            self.min_cutoff = min_cutoff
+            self.beta = beta
+            self.d_cutoff = d_cutoff
+            self.x_filter = LowPassFilter(self._alpha(min_cutoff))
+            self.dx_filter = LowPassFilter(self._alpha(d_cutoff))
+            self.last_value = None
+
+        def _alpha(self, cutoff: float) -> float:
+            te = 1.0 / max(fps, 1.0)  # Actual video FPS
+            tau = 1.0 / (2 * 3.14159 * cutoff)
+            return 1.0 / (1.0 + tau / te)
+
+        def __call__(self, value: float) -> float:
+            if self.last_value is None:
+                self.last_value = value
+                return value
+
+            # Compute derivative (velocity)
+            dx = (value - self.last_value) * fps
+            edx = self.dx_filter(dx)
+
+            # Adaptive cutoff: higher velocity = less smoothing (more responsive)
+            cutoff = self.min_cutoff + self.beta * abs(edx)
+            self.x_filter.alpha = self._alpha(cutoff)
+
+            self.last_value = value
+            return self.x_filter(value)
+
+        def reset(self):
+            self.x_filter.reset()
+            self.dx_filter.reset()
+            self.last_value = None
+
+    # Create filters for x and y coordinates
+    # min_cutoff: Lower = more smoothing (0.5-1.5 for ball)
+    # beta: Higher = more responsive to fast motion (0.5-1.0 for ball)
+    x_filter = OneEuroFilter(min_cutoff=0.8, beta=0.7)
+    y_filter = OneEuroFilter(min_cutoff=0.8, beta=0.7)
+
+    smoothed_track = []
+    for i in range(n):
+        if ball_track[i][0] is not None:
+            # Apply One Euro Filter
+            smoothed_x = x_filter(ball_track[i][0])
+            smoothed_y = y_filter(ball_track[i][1])
+            smoothed_track.append((smoothed_x, smoothed_y))
+        else:
+            # Gap: use prediction from last valid position + velocity
+            if len(smoothed_track) > 0 and smoothed_track[-1] is not None:
+                # Simple linear prediction (could enhance with physics model)
+                if len(smoothed_track) >= 2 and smoothed_track[-2] is not None:
+                    vx = smoothed_track[-1][0] - smoothed_track[-2][0]
+                    vy = smoothed_track[-1][1] - smoothed_track[-2][1]
+                    predicted_x = smoothed_track[-1][0] + vx
+                    predicted_y = smoothed_track[-1][1] + vy
+                    smoothed_track.append((predicted_x, predicted_y))
+                else:
+                    # No velocity info, use last known position
+                    smoothed_track.append(smoothed_track[-1])
+            else:
+                smoothed_track.append((None, None))
+
+    ball_track = smoothed_track
     
     # === YOLO Recovery: fill remaining gaps ===
     yolo_model = registry.get("yolo")

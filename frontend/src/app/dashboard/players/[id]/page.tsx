@@ -463,7 +463,7 @@ export default function PlayerProfilePage() {
                     <div className="space-y-2">
                       {insights.filter(i => i.kind === "strength").map((insight) => (
                         <div key={insight.id} className="relative group">
-                          <div className="text-left p-3 rounded-lg bg-content1/30 backdrop-blur-xl hover:bg-content1/40 transition-all">
+                          <div className="text-left p-3 rounded-lg bg-content1/80 hover:bg-content1/90 transition-all">
                             <h4 className="text-sm font-semibold text-foreground/95 mb-1 leading-tight">
                               {insight.title}
                             </h4>
@@ -486,7 +486,7 @@ export default function PlayerProfilePage() {
 
                           {/* Hover panel for clips */}
                           {insight.clips.length > 0 && (
-                            <div className="absolute left-full top-0 ml-2 z-50 w-64 rounded-lg bg-content1/95 backdrop-blur-xl shadow-2xl overflow-hidden opacity-0 invisible group-hover:opacity-100 group-hover:visible transition-all duration-200">
+                            <div className="absolute left-full top-0 ml-2 z-50 w-64 rounded-lg bg-content1 shadow-2xl overflow-hidden opacity-0 invisible group-hover:opacity-100 group-hover:visible transition-all duration-200">
                               <div className="p-2.5 space-y-1.5">
                                 <div className="px-2 py-1 text-[10px] uppercase tracking-wider text-foreground/60 font-semibold">
                                   Source clips
@@ -533,7 +533,7 @@ export default function PlayerProfilePage() {
                     <div className="space-y-2">
                       {insights.filter(i => i.kind === "weakness").map((insight) => (
                         <div key={insight.id} className="relative group">
-                          <div className="text-left p-3 rounded-lg bg-content1/30 backdrop-blur-xl hover:bg-content1/40 transition-all">
+                          <div className="text-left p-3 rounded-lg bg-content1/80 hover:bg-content1/90 transition-all">
                             <h4 className="text-sm font-semibold text-foreground/95 mb-1 leading-tight">
                               {insight.title}
                             </h4>
@@ -556,7 +556,7 @@ export default function PlayerProfilePage() {
 
                           {/* Hover panel for clips */}
                           {insight.clips.length > 0 && (
-                            <div className="absolute left-full top-0 ml-2 z-50 w-64 rounded-lg bg-content1/95 backdrop-blur-xl shadow-2xl overflow-hidden opacity-0 invisible group-hover:opacity-100 group-hover:visible transition-all duration-200">
+                            <div className="absolute left-full top-0 ml-2 z-50 w-64 rounded-lg bg-content1 shadow-2xl overflow-hidden opacity-0 invisible group-hover:opacity-100 group-hover:visible transition-all duration-200">
                               <div className="p-2.5 space-y-1.5">
                                 <div className="px-2 py-1 text-[10px] uppercase tracking-wider text-foreground/60 font-semibold">
                                   Source clips
@@ -622,7 +622,7 @@ export default function PlayerProfilePage() {
         {/* Right: recordings — larger and more prominent */}
         <div className="absolute right-6 top-[15%] bottom-6 w-[560px] flex flex-col z-20">
           {/* Header with enhanced styling */}
-          <div className="flex flex-col gap-3 mb-5 px-4 py-3 bg-content1/30 backdrop-blur-xl rounded-3xl border border-foreground/15">
+          <div className="flex flex-col gap-3 mb-5 px-4 py-3 bg-content1/80 rounded-3xl border border-foreground/15">
             <div className="flex items-center justify-between">
               <div className="flex items-center gap-3">
                 <span className="text-xs uppercase tracking-[0.25em] text-foreground/70">Recordings</span>
@@ -645,7 +645,7 @@ export default function PlayerProfilePage() {
                   onClick={() => setRecordingFilter(f)}
                   className={`text-[10px] px-2.5 py-1.5 rounded-full transition-all font-medium uppercase tracking-[0.15em] whitespace-nowrap ${
                     recordingFilter === f
-                      ? "bg-primary/15 text-primary backdrop-blur-sm"
+                      ? "bg-primary/15 text-primary"
                       : "text-foreground/40 hover:text-foreground/70 hover:bg-foreground/5"
                   }`}
                 >
@@ -686,7 +686,7 @@ export default function PlayerProfilePage() {
                       );
                     }
                   }}
-                  className="group cursor-pointer flex gap-5 items-start p-4 rounded-2xl transition-colors bg-content1/30 backdrop-blur-xl border border-foreground/10 hover:border-foreground/20 hover:bg-content1/40"
+                  className="group cursor-pointer flex gap-5 items-start p-4 rounded-2xl transition-colors bg-content1/90 border border-foreground/10 hover:border-foreground/20 hover:bg-content1"
                 >
                   {rec.video_path && (
                     <div className="relative w-36 h-24 rounded-xl overflow-hidden shrink-0 ring-1 ring-white/10">
