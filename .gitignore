@@ -62,6 +62,10 @@ pnpm-debug.log*
 # Package lock (root level, not needed — frontend uses pnpm-lock)
 /package-lock.json
 
+# Sensitive keys / cookies (NEVER commit)
+yt_cookies_key.txt
+*cookies*.txt
+
 # Misc
 *.pid
 *.seed
