@@ -120,8 +120,8 @@ export function MatchAnalytics({ sessionId, players }: MatchAnalyticsProps) {
   const playerEntries = players?.length
     ? players.map((p) => ({ id: p.id, name: p.name }))
     : [
-        { id: "player1", name: "Player 1" },
-        { id: "player2", name: "Player 2" },
+        { id: "player1", name: "Player" },
+        { id: "player2", name: "Opponent" },
       ];
 
   return (

@@ -149,7 +149,7 @@ export const ShotCard = memo(function ShotCard({
     switch (stroke.stroke_type) {
       case "forehand": return "rgba(155, 123, 91, 0.2)";
       case "backhand": return "rgba(91, 155, 123, 0.2)";
-      case "serve": return "rgba(91, 123, 155, 0.2)";
+      case "unknown": return "rgba(91, 123, 155, 0.2)";
       default: return "rgba(106, 104, 101, 0.2)";
     }
   }, [stroke.stroke_type]);
@@ -158,7 +158,7 @@ export const ShotCard = memo(function ShotCard({
     switch (stroke.stroke_type) {
       case "forehand": return "#9B7B5B";
       case "backhand": return "#5B9B7B";
-      case "serve": return "#5B7B9B";
+      case "unknown": return "#5B7B9B";
       default: return "#6A6865";
     }
   }, [stroke.stroke_type]);

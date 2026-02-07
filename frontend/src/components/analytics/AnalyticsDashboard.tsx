@@ -48,7 +48,7 @@ export function AnalyticsDashboard({ sessionId }: AnalyticsDashboardProps) {
   }>>(() => {
     if (!poseData?.frames || poseData.frames.length === 0) return [];
 
-    return poseData.frames.map((frame) => ({
+    return poseData.frames.map((frame: { frame_number: number; joint_angles?: Record<string, number> }) => ({
       frame: frame.frame_number,
       leftElbow: frame.joint_angles?.left_elbow || 0,
       rightElbow: frame.joint_angles?.right_elbow || 0,
