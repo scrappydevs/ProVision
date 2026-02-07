@@ -689,8 +689,8 @@ export default function PlayerProfilePage() {
                   className="group cursor-pointer flex gap-5 items-start p-4 rounded-2xl transition-all relative overflow-hidden border border-foreground/10 hover:border-foreground/20"
                 >
                   {/* Liquid glass background */}
-                  <div className="absolute inset-0 bg-gradient-to-br from-content1/95 via-content1/90 to-content1/85 group-hover:from-content1 group-hover:via-content1/95 group-hover:to-content1/90 transition-all duration-300" />
-                  <div className="absolute inset-0 bg-[radial-gradient(ellipse_at_top_left,rgba(155,123,91,0.08),transparent_50%),radial-gradient(ellipse_at_bottom_right,rgba(91,155,123,0.05),transparent_50%)] opacity-60 group-hover:opacity-80 transition-opacity duration-300" />
+                  <div className="absolute inset-0 bg-gradient-to-br from-content1/95 via-content1/90 to-content1/85 group-hover:from-content1 group-hover:via-content1/95 group-hover:to-content1/90 transition-all duration-300"></div>
+                  <div className="absolute inset-0 opacity-60 group-hover:opacity-80 transition-opacity duration-300" style={{ background: 'radial-gradient(ellipse at top left, rgba(155,123,91,0.08), transparent 50%), radial-gradient(ellipse at bottom right, rgba(91,155,123,0.05), transparent 50%)' }}></div>
                   
                   {rec.video_path && (
                     <div className="relative w-36 h-24 rounded-xl overflow-hidden shrink-0 ring-1 ring-white/10 z-10">
