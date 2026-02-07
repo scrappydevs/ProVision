@@ -538,12 +538,25 @@ class PoseProcessor:
                             
                             if opponent_center and len(keypoints_data) > 1:
                                 opp_idx = self._find_closest_player(results, opponent_center, exclude_indices=[player_idx])
-                                if frame_idx == 0:
-                                    print(f"[PoseProcessor] Overlay Frame 0: Found opponent at idx {opp_idx}, player at idx {player_idx}, total detections: {len(keypoints_data)}")
+                                
+                                # Validate the match distance - if too far, the selected opponent isn't in frame
+                                if opp_idx is not None:
+                                    bbox = results[0].boxes[opp_idx].xyxy[0].cpu().numpy()
+                                    center_x = (bbox[0] + bbox[2]) / 2
+                                    center_y = (bbox[1] + bbox[3]) / 2
+                                    dist = math.sqrt((center_x - opponent_center["x"]) ** 2 + (center_y - opponent_center["y"]) ** 2)
+                                    
+                                    if dist > 200:
+                                        if frame_idx == 0:
+                                            print(f"[PoseProcessor] Overlay: Skipping opponent - closest match is {dist:.0f}px away (threshold 200px)")
+                                        opp_idx = None
+                                        opponent_center = None
+                                    elif frame_idx == 0:
+                                        print(f"[PoseProcessor] Overlay Frame 0: Opponent matched successfully at idx {opp_idx}")
+                                
                                 if opp_idx is None and len(keypoints_data) > 1:
-                                    # Fallback: pick any other person
-                                    opp_idx = 1 if player_idx == 0 else 0
-                                    print(f"[PoseProcessor] Overlay WARNING: Could not find opponent near initial center, using fallback idx {opp_idx}")
+                                    # Don't use fallback - skip opponent tracking if not found
+                                    pass
                             elif len(keypoints_data) > 1:
                                 opp_idx = 1 if player_idx == 0 else 0
 
