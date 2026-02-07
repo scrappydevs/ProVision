@@ -93,7 +93,9 @@ def get_youtube_metadata(url: str) -> Optional[dict]:
     # IMPORTANT: Don't specify format for metadata — it causes "Requested format
     # is not available" when cookies authenticate as a premium/restricted user.
     # Use extract_flat or skip_download without format to get metadata only.
-    for attempt_name, use_cookies in [("cookies", True), ("no_cookies", False)]:
+    # Try without cookies first (PO Token plugin handles bot bypass).
+    # Stale cookies cause "Requested format is not available" errors.
+    for attempt_name, use_cookies in [("no_cookies", False), ("cookies", True)]:
         try:
             ydl_opts = {
                 "quiet": True,
@@ -108,8 +110,7 @@ def get_youtube_metadata(url: str) -> Optional[dict]:
             with yt_dlp.YoutubeDL(ydl_opts) as ydl:
                 info = ydl.extract_info(url, download=False)
                 if info:
-                    if not use_cookies:
-                        logger.info(f"yt-dlp metadata succeeded without cookies for {url}")
+                    logger.info(f"yt-dlp metadata succeeded ({attempt_name}) for {url}")
                     return _extract_metadata_from_info(info)
         except Exception as e:
             logger.warning(f"yt-dlp metadata ({attempt_name}) failed for {url}: {e}")
@@ -167,7 +168,7 @@ def get_youtube_streaming_url(url: str) -> Optional[dict]:
         "best",
     ]
 
-    for attempt_name, use_cookies in [("cookies", True), ("no_cookies", False)]:
+    for attempt_name, use_cookies in [("no_cookies", False), ("cookies", True)]:
         for fmt in format_attempts:
             try:
                 ydl_opts = {
@@ -241,8 +242,10 @@ def download_youtube_video(
             "best",
         ]
 
-        # Try cookies first (authenticated), then without (PO Token handles bot bypass)
-        for use_cookies in ["cookies", "no_cookies"]:
+        # Try WITHOUT cookies first (PO Token plugin handles bot bypass).
+        # Cookies are tried second because stale/premium cookies cause
+        # "Requested format is not available" for every format string.
+        for use_cookies in ["no_cookies", "cookies"]:
             for fmt in format_attempts:
                 try:
                     opts = {
