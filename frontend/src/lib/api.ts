@@ -856,6 +856,35 @@ export const searchITTFPlayers = (query: string) =>
     { params: { q: query } }
   );
 
+export interface PlayerInsights {
+  player_id: string;
+  total_games: number;
+  total_strokes: number;
+  forehand_stats: {
+    count: number;
+    avg_form_score: number;
+    best_form_score: number;
+  };
+  backhand_stats: {
+    count: number;
+    avg_form_score: number;
+    best_form_score: number;
+  };
+  strengths: Array<{
+    title: string;
+    summary: string;
+    metric: string;
+  }>;
+  weaknesses: Array<{
+    title: string;
+    summary: string;
+    metric: string;
+  }>;
+}
+
+export const getPlayerInsights = (playerId: string) =>
+  api.get<PlayerInsights>(`/api/players/insights/${playerId}`);
+
 // Video types
 export interface Video {
   id: string;

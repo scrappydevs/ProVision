@@ -241,3 +241,15 @@ export function useSearchITTF(query: string) {
     staleTime: 60 * 1000,
   });
 }
+
+export function usePlayerInsights(playerId: string) {
+  return useQuery({
+    queryKey: [...playerKeys.detail(playerId), "insights"],
+    queryFn: async () => {
+      const response = await getPlayerInsights(playerId);
+      return response.data;
+    },
+    enabled: !!playerId,
+    staleTime: 10 * 60 * 1000, // 10 minutes
+  });
+}
