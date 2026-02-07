@@ -25,14 +25,20 @@ export function VideoTips({ currentTime, tips, onTipChange, liveTip }: VideoTips
   const [shownTipIds, setShownTipIds] = useState<Set<string>>(new Set());
   const prevTipRef = useRef<VideoTip | null>(null);
 
-  // Find the single active tip for current time
+  // Find the single active tip for current time.
+  // When tip windows overlap, prefer the most recent one so UI stays synced
+  // with the latest detected stroke instead of an older still-active tip.
   const updateActiveTip = useCallback(() => {
-    // Only show one tip at a time - find the first matching tip
-    const currentTip = tips.find((tip) => {
+    let currentTip: VideoTip | null = null;
+    for (const tip of tips) {
       const tipStart = tip.timestamp;
       const tipEnd = tip.timestamp + tip.duration;
-      return currentTime >= tipStart && currentTime <= tipEnd;
-    });
+      if (currentTime >= tipStart && currentTime <= tipEnd) {
+        if (!currentTip || tip.timestamp >= currentTip.timestamp) {
+          currentTip = tip;
+        }
+      }
+    }
 
     // Mark as shown when first entering range
     if (currentTip && !shownTipIds.has(currentTip.id)) {
