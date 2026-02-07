@@ -17,6 +17,8 @@ import {
   useDeleteRecording, useCreateClip, useAnalyzeRecording,
   usePlayerInsights, useGeneratePlayerDescription,
 } from "@/hooks/usePlayers";
+import { usePlayerHeatmap } from "@/hooks/usePlayerHeatmap";
+import { PlayerHeatmap3D } from "@/components/viewer/PlayerHeatmap3D";
 import { GameTimeline } from "@/components/players/GameTimeline";
 import { createSession, GamePlayerInfo, Recording } from "@/lib/api";
 import { useMutation, useQueryClient } from "@tanstack/react-query";
@@ -75,6 +77,8 @@ export default function PlayerProfilePage() {
   });
   const { data: recordings, isLoading: recordingsLoading } = usePlayerRecordings(playerId);
   const { data: playerInsights } = usePlayerInsights(playerId);
+  const { data: heatmapData, isLoading: heatmapLoading } = usePlayerHeatmap(playerId, 10);
+  const [selectedZoneGames, setSelectedZoneGames] = useState<{ games: string[]; gameNames: string[] } | null>(null);
   const latestGame = useMemo(() => {
     if (!games?.length) return null;
     return [...games].sort((a, b) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime())[0];
@@ -405,8 +409,8 @@ export default function PlayerProfilePage() {
         </div>
 
         {/* Center: large name overlay */}
-        <div className="flex-1 flex flex-col items-start pt-20 px-10">
-          <div className="mb-8">
+        <div className="flex-1 flex flex-col items-start pt-12 px-10">
+          <div className="mb-5">
             <p className="text-xs uppercase tracking-[0.3em] text-foreground/50 mb-3">{player.position || "Player"}</p>
             <h1 className="text-5xl md:text-6xl font-light text-foreground tracking-tight leading-[1.1]">
               {player.name.split(" ").map((word, i) => (
@@ -442,7 +446,7 @@ export default function PlayerProfilePage() {
           </div>
 
           {/* Player description */}
-          <div className="max-w-[700px] mb-8">
+          <div className="max-w-[700px] mb-5">
             <div className="flex items-center justify-between mb-2">
               <h2 className="text-xs uppercase tracking-[0.3em] text-foreground/50">
                 Player Description
@@ -669,6 +673,32 @@ export default function PlayerProfilePage() {
                 )}
               </div>
             )}
+
+            {/* Player Heatmap - positioned below Strengths/Weaknesses */}
+            {heatmapData && heatmapData.games_count > 0 && (
+              <div className="mt-4">
+                <div className="flex items-center justify-between mb-2">
+                  <h3 className="text-xs uppercase tracking-[0.3em] text-foreground/50">
+                    Impact Heatmap
+                  </h3>
+                  <span className="text-[10px] text-foreground/40">
+                    {heatmapData.games_count} recent game{heatmapData.games_count > 1 ? 's' : ''}
+                  </span>
+                </div>
+                <div className="rounded-xl overflow-hidden border border-foreground/15 bg-content1/40">
+                  <PlayerHeatmap3D
+                    gamesData={heatmapData.games}
+                    height={200}
+                    onZoneClick={(zone) => {
+                      setSelectedZoneGames({
+                        games: zone.games,
+                        gameNames: zone.gameNames,
+                      });
+                    }}
+                  />
+                </div>
+              </div>
+            )}
           </div>
         </div>
 
@@ -889,6 +919,75 @@ export default function PlayerProfilePage() {
                   ) : (
                     "Upload"
                   )}
+                </Button>
+              </div>
+            </motion.div>
+          </motion.div>
+        )}
+
+        {/* Heatmap Zone Click Modal */}
+        {selectedZoneGames && (
+          <motion.div
+            initial={{ opacity: 0 }}
+            animate={{ opacity: 1 }}
+            exit={{ opacity: 0 }}
+            className="fixed inset-0 bg-black/60 backdrop-blur-sm flex items-center justify-center z-50 p-4"
+            onClick={() => setSelectedZoneGames(null)}
+          >
+            <motion.div
+              initial={{ scale: 0.95, opacity: 0 }}
+              animate={{ scale: 1, opacity: 1 }}
+              exit={{ scale: 0.95, opacity: 0 }}
+              className="bg-content1 rounded-2xl w-full max-w-md p-6"
+              onClick={(e) => e.stopPropagation()}
+            >
+              <h2 className="text-base font-medium text-foreground mb-1">Games in this zone</h2>
+              <p className="text-[11px] text-foreground/45 mb-4">
+                {selectedZoneGames.games.length} game{selectedZoneGames.games.length > 1 ? 's' : ''} contributed to this area
+              </p>
+
+              <div className="space-y-2 max-h-[400px] overflow-y-auto mb-4">
+                {Array.from(selectedZoneGames.gameNames).map((gameName, idx) => {
+                  const gameId = selectedZoneGames.games[idx];
+                  const game = heatmapData?.games.find(g => g.session_id === gameId);
+                  
+                  return (
+                    <button
+                      key={gameId}
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        setSelectedZoneGames(null);
+                        // Use window.location for reliable navigation
+                        window.location.href = `/dashboard/games/${gameId}`;
+                      }}
+                      className="w-full flex items-center justify-between p-3 rounded-lg bg-background hover:bg-content2 transition-colors text-left"
+                    >
+                      <div className="flex-1 min-w-0">
+                        <p className="text-sm text-foreground font-medium truncate">{gameName}</p>
+                        {game?.created_at && (
+                          <p className="text-[10px] text-foreground/50">
+                            {new Date(game.created_at).toLocaleDateString("en-US", { 
+                              month: "short", 
+                              day: "numeric",
+                              year: "numeric"
+                            })}
+                          </p>
+                        )}
+                        {game?.frame_count && (
+                          <p className="text-[10px] text-foreground/40">
+                            {game.frame_count} impacts
+                          </p>
+                        )}
+                      </div>
+                      <ChevronRight className="w-4 h-4 text-foreground/40 shrink-0" />
+                    </button>
+                  );
+                })}
+              </div>
+
+              <div className="flex justify-end">
+                <Button variant="ghost" onClick={() => setSelectedZoneGames(null)}>
+                  Close
                 </Button>
               </div>
             </motion.div>

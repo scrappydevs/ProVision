@@ -58,12 +58,33 @@ class BallTrackingService:
         except Exception as e:
             return {"status": "error", "message": str(e)}
     
+    def _check_file_on_gpu(self, remote_path: str) -> bool:
+        """Check if a file already exists on GPU and has non-zero size."""
+        try:
+            with self.runner.ssh_session() as ssh:
+                exit_code, stdout, _ = ssh.execute_command(
+                    f"test -f '{remote_path}' && stat -c %s '{remote_path}'",
+                    timeout=10,
+                )
+                if exit_code == 0 and stdout.strip():
+                    size = int(stdout.strip())
+                    if size > 0:
+                        logger.info(f"Video already on GPU: {remote_path} ({size} bytes)")
+                        return True
+        except Exception as e:
+            logger.debug(f"GPU file check failed (will re-download): {e}")
+        return False
+
     def _ensure_video_on_gpu(self, session_id: str, video_url: str) -> str:
         """Download video to GPU if not already present. Returns remote path."""
         video_name = f"{session_id}.mp4"
         remote_video_dir = os.getenv("REMOTE_VIDEO_DIR", "/workspace/provision/data/videos")
         remote_video_path = f"{remote_video_dir}/{video_name}"
-        
+
+        # Skip download if video already exists on GPU
+        if self._check_file_on_gpu(remote_video_path):
+            return remote_video_path
+
         try:
             from ..database.supabase import get_supabase
             supabase = get_supabase()
@@ -76,7 +97,7 @@ class BallTrackingService:
                     return remote_video_path
         except Exception as e:
             logger.warning(f"Signed URL download failed, falling back to direct: {e}")
-        
+
         self._download_via_url(remote_video_path, video_url)
         return remote_video_path
 
