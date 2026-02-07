@@ -19,6 +19,7 @@ router = APIRouter(prefix="/api/analytics", tags=["analytics"])
 @router.get("/{session_id}")
 async def get_session_analytics(
     session_id: str,
+    force: bool = False,
     user_id: str = Depends(get_current_user_id)
 ) -> Dict[str, Any]:
     """
@@ -56,28 +57,29 @@ async def get_session_analytics(
         else None
     )
 
-    # Check cached analytics
-    try:
-        cache_result = supabase.table("session_analytics") \
-            .select("analytics, session_updated_at") \
-            .eq("session_id", session_id) \
-            .eq("user_id", user_id) \
-            .limit(1) \
-            .execute()
-        if cache_result.data:
-            cache_row = cache_result.data[0]
-            cache_updated = cache_row.get("session_updated_at")
-            cache_updated_norm = (
-                cache_updated.isoformat()
-                if hasattr(cache_updated, "isoformat")
-                else str(cache_updated)
-                if cache_updated is not None
-                else None
-            )
-            if cache_row.get("analytics") and session_updated_at_norm and cache_updated_norm == session_updated_at_norm:
-                return cache_row["analytics"]
-    except Exception as e:
-        logger.warning(f"Analytics cache lookup failed: {e}")
+    # Check cached analytics (skip if forcing recompute)
+    if not force:
+        try:
+            cache_result = supabase.table("session_analytics") \
+                .select("analytics, session_updated_at") \
+                .eq("session_id", session_id) \
+                .eq("user_id", user_id) \
+                .limit(1) \
+                .execute()
+            if cache_result.data:
+                cache_row = cache_result.data[0]
+                cache_updated = cache_row.get("session_updated_at")
+                cache_updated_norm = (
+                    cache_updated.isoformat()
+                    if hasattr(cache_updated, "isoformat")
+                    else str(cache_updated)
+                    if cache_updated is not None
+                    else None
+                )
+                if cache_row.get("analytics") and session_updated_at_norm and cache_updated_norm == session_updated_at_norm:
+                    return cache_row["analytics"]
+        except Exception as e:
+            logger.warning(f"Analytics cache lookup failed: {e}")
     
     # Fetch pose data
     pose_result = supabase.table("pose_analysis") \

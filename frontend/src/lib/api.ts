@@ -759,6 +759,16 @@ export interface AnalyticsData {
       estimate: string;
       distribution: Record<string, number>;
     };
+    points?: {
+      count: number;
+      events: Array<{
+        frame: number;
+        timestamp: number;
+        reason: string;
+        last_contact_frame?: number;
+        bounce_frame?: number | null;
+      }>;
+    };
   };
   pose_analytics: {
     movement: {
@@ -790,8 +800,10 @@ export interface AnalyticsData {
   };
 }
 
-export const getSessionAnalytics = (sessionId: string) =>
-  api.get<AnalyticsData>(`/api/analytics/${sessionId}`);
+export const getSessionAnalytics = (sessionId: string, options?: { force?: boolean }) =>
+  api.get<AnalyticsData>(`/api/analytics/${sessionId}`, {
+    params: options?.force ? { force: true } : undefined,
+  });
 
 export const backfillTournamentVideos = () =>
   api.post<{ message: string; searched: number; found: number; skipped: number }>("/api/tournaments/backfill-videos");

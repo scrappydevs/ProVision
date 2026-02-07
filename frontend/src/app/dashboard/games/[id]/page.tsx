@@ -5,6 +5,7 @@ import { useParams, useRouter, useSearchParams } from "next/navigation";
 import { useSession, useTrackObject, useUpdateSession } from "@/hooks/useSessions";
 import { usePoseAnalysis } from "@/hooks/usePoseData";
 import { useStrokeSummary, useAnalyzeStrokes } from "@/hooks/useStrokeData";
+import { useAnalytics } from "@/hooks/useAnalytics";
 import { useQueryClient } from "@tanstack/react-query";
 import { sessionKeys } from "@/hooks/useSessions";
 import { Button } from "@/components/ui/button";
@@ -25,6 +26,7 @@ import {
   PersonPose,
   Stroke,
   getDebugFrame,
+  getSessionAnalytics,
 } from "@/lib/api";
 import { generateTipsFromStrokes } from "@/lib/tipGenerator";
 import { PlayerSelection, PlayerSelectionOverlays } from "@/components/viewer/PlayerSelection";
@@ -112,10 +114,12 @@ export default function GameViewerPage() {
   const [debugLoading, setDebugLoading] = useState(false);
   const [debugFlash, setDebugFlash] = useState<string | null>(null);
   const [debugCopied, setDebugCopied] = useState(false);
+  const [isRecomputingAnalytics, setIsRecomputingAnalytics] = useState(false);
 
   const { data: session, isLoading } = useSession(gameId);
   const { data: poseData } = usePoseAnalysis(gameId);
   const { data: strokeSummary } = useStrokeSummary(gameId);
+  const { data: analytics } = useAnalytics(gameId);
   const trackMutation = useTrackObject(gameId);
   const strokeMutation = useAnalyzeStrokes(gameId);
   const updateSessionMutation = useUpdateSession(gameId);
@@ -198,6 +202,7 @@ export default function GameViewerPage() {
     return past.length > 0 ? past[past.length - 1] : null;
   }, [strokeSummary?.strokes, currentFrame]);
 
+
   const computedTrajectoryFps = useMemo(() => {
     const frames = session?.trajectory_data?.frames?.length ?? 0;
     if (!frames || !duration) return null;
@@ -216,6 +221,22 @@ export default function GameViewerPage() {
       return videoFps;
     } catch { return videoFps; }
   }, [session?.trajectory_data, videoFps, computedTrajectoryFps]);
+
+  const pointEvents = useMemo(() => {
+    return analytics?.ball_analytics?.points?.events ?? [];
+  }, [analytics]);
+
+  const activePointEvent = useMemo(() => {
+    if (pointEvents.length === 0) return null;
+    const windowFrames = Math.max(2, Math.round(fps * 0.15));
+    return pointEvents.find((evt) => Math.abs(evt.frame - currentFrame) <= windowFrames) ?? null;
+  }, [pointEvents, currentFrame, fps]);
+
+  const lastPointEvent = useMemo(() => {
+    if (pointEvents.length === 0) return null;
+    const past = pointEvents.filter((evt) => evt.frame <= currentFrame);
+    return past.length > 0 ? past[past.length - 1] : null;
+  }, [pointEvents, currentFrame]);
 
   const frameFromTime = useCallback(
     (time: number) => Math.max(0, Math.round(time * fps)),
@@ -444,6 +465,19 @@ export default function GameViewerPage() {
     setDebugCopied(true);
     setTimeout(() => setDebugCopied(false), 2000);
   }, [debugLog]);
+
+  const handleRecomputeAnalytics = useCallback(async () => {
+    if (!gameId || isRecomputingAnalytics) return;
+    setIsRecomputingAnalytics(true);
+    try {
+      const response = await getSessionAnalytics(gameId, { force: true });
+      queryClient.setQueryData(["analytics", gameId], response.data);
+    } catch (err) {
+      console.error("Analytics recompute failed:", err);
+    } finally {
+      setIsRecomputingAnalytics(false);
+    }
+  }, [gameId, isRecomputingAnalytics, queryClient]);
 
   // Keyboard shortcuts for debug mode
   useEffect(() => {
@@ -1258,7 +1292,18 @@ export default function GameViewerPage() {
                 <div className="glass-context rounded-xl flex flex-col h-full overflow-hidden">
                   <div className="px-3 py-2.5 border-b border-[#363436]/30 flex items-center justify-between">
                     <span className="text-xs font-medium text-[#E8E6E3]">Pose & Strokes</span>
-                    {(isDetectingPose || isPoseProcessing) && <Loader2 className="w-3 h-3 text-[#9B7B5B] animate-spin" />}
+                    <div className="flex items-center gap-2">
+                      <button
+                        onClick={handleRecomputeAnalytics}
+                        disabled={isRecomputingAnalytics}
+                        className="flex items-center gap-1 text-[10px] text-[#6A6865] hover:text-[#9B7B5B] transition-colors disabled:opacity-50"
+                        title="Recompute analytics for this session"
+                      >
+                        <RefreshCw className={cn("w-3 h-3", isRecomputingAnalytics && "animate-spin")} />
+                        <span className="hidden sm:inline">Recompute analytics</span>
+                      </button>
+                      {(isDetectingPose || isPoseProcessing) && <Loader2 className="w-3 h-3 text-[#9B7B5B] animate-spin" />}
+                    </div>
                   </div>
                   <div className="flex-1 overflow-y-auto p-2 space-y-2">
                     {showPlayerSelection && (
@@ -1323,6 +1368,36 @@ export default function GameViewerPage() {
                           </div>
                         ) : (
                           <p className="text-[10px] text-[#6A6865] text-center">Play video to see live stroke detection</p>
+                        )}
+                      </div>
+                    )}
+
+                    {/* ── Live Point Indicator (synced to video frame) ── */}
+                    {pointEvents.length > 0 && (
+                      <div className={cn(
+                        "p-2.5 rounded-lg transition-all duration-200",
+                        activePointEvent ? "bg-[#C45C5C]/15 ring-1 ring-[#C45C5C]/40" : "bg-[#1E1D1F]"
+                      )}>
+                        {activePointEvent ? (
+                          <div className="flex items-center gap-2">
+                            <div className="w-2 h-2 rounded-full bg-[#C45C5C] animate-pulse" />
+                            <span className="text-sm font-medium text-[#C45C5C]">Point scored</span>
+                            <span className="text-[10px] text-[#6A6865] ml-auto">
+                              {fmtTime(activePointEvent.timestamp)}
+                            </span>
+                          </div>
+                        ) : lastPointEvent ? (
+                          <div className="flex items-center gap-2">
+                            <div className="w-2 h-2 rounded-full bg-[#363436]" />
+                            <span className="text-xs text-[#6A6865]">
+                              Last point: <span className="text-[#C45C5C]">{fmtTime(lastPointEvent.timestamp)}</span>
+                            </span>
+                            <span className="text-[10px] text-[#6A6865] ml-auto capitalize">
+                              {lastPointEvent.reason.replace(/_/g, " ")}
+                            </span>
+                          </div>
+                        ) : (
+                          <p className="text-[10px] text-[#6A6865] text-center">Play video to see point events</p>
                         )}
                       </div>
                     )}
@@ -1437,6 +1512,40 @@ export default function GameViewerPage() {
                                 })}
                               </div>
                             </div>
+
+                            {/* Point timeline — each point as a mini pill */}
+                            {pointEvents.length > 0 && (
+                              <div>
+                                <p className="text-[10px] text-[#6A6865] uppercase tracking-wider mb-1.5">
+                                  Point Timeline ({pointEvents.length})
+                                </p>
+                                <div className="flex flex-wrap gap-1">
+                                  {pointEvents.map((evt, i) => {
+                                    const isActive = activePointEvent?.frame === evt.frame;
+                                    return (
+                                      <button
+                                        key={`${evt.frame}-${i}`}
+                                        onClick={() => {
+                                          if (videoRef.current) videoRef.current.currentTime = evt.frame / fps;
+                                        }}
+                                        className={cn(
+                                          "px-1.5 py-0.5 rounded text-[9px] font-medium transition-all cursor-pointer",
+                                          isActive ? "ring-1 scale-110" : "opacity-70 hover:opacity-100"
+                                        )}
+                                        style={{
+                                          backgroundColor: "#C45C5C20",
+                                          color: "#C45C5C",
+                                          ...(isActive ? { ringColor: "#C45C5C" } : {}),
+                                        }}
+                                        title={`Point — Frame ${evt.frame} — ${evt.reason.replace(/_/g, " ")}`}
+                                      >
+                                        P{i + 1}
+                                      </button>
+                                    );
+                                  })}
+                                </div>
+                              </div>
+                            )}
 
                             {/* All Insights throughout the video */}
                             {videoTips.length > 0 && (
