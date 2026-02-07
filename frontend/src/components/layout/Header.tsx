@@ -30,13 +30,10 @@ export function Header() {
                     ? "bg-primary/15 text-primary ring-1 ring-primary/30"
                     : "text-muted-foreground hover:text-foreground hover:bg-muted"
                 )}
-                title="Toggle AI Coach"
+                title="Toggle Insights"
               >
                 <Sparkles className="w-3.5 h-3.5" />
-                <span className="hidden sm:inline">AI Coach</span>
-                {aiOpen && (
-                  <div className="w-1.5 h-1.5 rounded-full bg-primary" />
-                )}
+                <span className="hidden sm:inline">Insights</span>
               </button>
 
               <div className="w-px h-6 bg-border" />
