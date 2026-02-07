@@ -52,7 +52,7 @@ async def _run_tracknet_background(session_id: str, video_url: str):
 
 
 async def _run_dashboard_analysis_background(session_id: str, user_id: str, video_url: str):
-    """Background task: run UpliftingTableTennis analysis on RunPod GPU #2."""
+    """Background task: run dashboard analysis on RunPod GPU #2."""
     try:
         from ..services.runpod_dashboard_service import runpod_dashboard_service
         if not runpod_dashboard_service.is_available:

@@ -13,6 +13,10 @@ import {
   PolarAngleAxis,
   PolarRadiusAxis,
   Radar,
+  BarChart,
+  Bar,
+  XAxis,
+  YAxis,
   ResponsiveContainer,
   Legend,
   Tooltip,
@@ -653,6 +657,36 @@ export default function ComparePage() {
                 </div>
               </>
             )}
+
+            {/* Score Comparison Bar Chart */}
+            {normalizedAnalysis && normalizedAnalysis.scores?.axes?.length ? (
+              <div>
+                <p className="text-xs uppercase tracking-widest text-foreground/30 mb-3">Score Breakdown</p>
+                <ResponsiveContainer width="100%" height={200}>
+                  <BarChart
+                    data={normalizedAnalysis.scores.axes}
+                    layout="vertical"
+                    margin={{ top: 0, right: 20, bottom: 0, left: 0 }}
+                    barGap={2}
+                  >
+                    <XAxis type="number" domain={[0, 100]} tick={{ fill: "#6A6865", fontSize: 10 }} axisLine={false} tickLine={false} />
+                    <YAxis type="category" dataKey="axis" tick={{ fill: "#8A8885", fontSize: 11 }} width={120} axisLine={false} tickLine={false} />
+                    <Tooltip
+                      contentStyle={{
+                        backgroundColor: "#1E1D1F",
+                        border: "1px solid #363436",
+                        borderRadius: "8px",
+                        fontSize: "12px",
+                        color: "#E8E6E3",
+                      }}
+                    />
+                    <Bar dataKey="left" name={leftPlayer?.name ?? "Player A"} fill="#9B7B5B" radius={[0, 4, 4, 0]} barSize={14} />
+                    <Bar dataKey="right" name={rightPlayer?.name ?? "Player B"} fill="#6B8E6B" radius={[0, 4, 4, 0]} barSize={14} />
+                    <Legend wrapperStyle={{ fontSize: "12px" }} iconSize={10} />
+                  </BarChart>
+                </ResponsiveContainer>
+              </div>
+            ) : null}
 
             {/* Head-to-head insights — only after analysis finishes */}
             {!analyzeMatchupMutation.isPending && matchupInsights.length > 0 && (

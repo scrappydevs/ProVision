@@ -300,11 +300,11 @@ def _generate_player_description_with_agent(
 
     system = (
         "You are a concise tennis coach assistant. "
-        "Write a brief 1-2 sentence description of the player's playing style, highlighting their key strength and weakness. "
-        "Use the data provided; do not invent stats. Be concise and impactful."
+        "Output EXACTLY 1-2 sentences ONLY. NO paragraphs. NO additional text. "
+        "Format: One sentence about playing style and strength. One sentence about weakness or area for improvement."
     )
     user_msg = (
-        "Using this JSON data, write a 1-2 sentence player description.\n\n"
+        "Write ONLY 1-2 sentences describing this player. NO MORE.\n\n"
         f"{json.dumps(context, ensure_ascii=True)}"
     )
 
@@ -313,7 +313,7 @@ def _generate_player_description_with_agent(
         client = anthropic.Anthropic(api_key=anthropic_key)
         response = client.messages.create(
             model="claude-sonnet-4-20250514",
-            max_tokens=150,
+            max_tokens=100,
             system=system,
             messages=[{"role": "user", "content": user_msg}],
         )
@@ -321,6 +321,11 @@ def _generate_player_description_with_agent(
         description = "\n".join(text_blocks).strip()
         if not description:
             return None
+        
+        # Enforce 1-2 sentence limit by truncating after second period
+        sentences = description.split('. ')
+        if len(sentences) > 2:
+            description = '. '.join(sentences[:2]) + '.'
         supabase.table("players").update({
             "description": description,
             "notes": description,
@@ -537,13 +542,20 @@ async def analyze_player_matchup(
         "Return ONLY valid JSON (no markdown, no prose). "
         "Return JSON with keys: headline (string), "
         "tactical_advantage (array of 2-3 strings), "
-        "key_edges (array of 3-4 strings), "
+        "key_edges (array of 3-4 strings — each edge must describe a MEANINGFUL, "
+        "actionable difference between the players. Ignore trivially small gaps. "
+        "Focus on style clashes, physical advantages, or strategic mismatches. "
+        "Do NOT just restate scores with decimal points.), "
         "serve_receive_plan (array of 2-3 strings), "
         "rally_length_bias (array of 2-3 strings), "
         "scores (object with key 'axes' as an array of 5 objects: "
         "{axis: string, left: number, right: number}, "
         "where axis names are: Tactical Advantage, Key Edges, Serve/Receive, Rally Length, Experience/Form. "
-        "Scores must be integers from 0-100.)"
+        "Scores must be integers from 0-100.) "
+        "IMPORTANT: Scores are on a 0-100 scale, NOT percentages. "
+        "Never use '%' or 'percent' — write '82 form score' not '82%'. "
+        "Describe qualities in plain language (e.g. 'strong backhand', 'consistent rallier') "
+        "rather than citing raw numbers."
     )
     user_msg = (
         "Analyze this matchup using both player descriptions and insights. "
