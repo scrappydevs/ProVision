@@ -112,6 +112,7 @@ export default function GameViewerPage() {
   const [videoBounds, setVideoBounds] = useState<{ top: number; left: number; right: number; width: number; height: number } | null>(null);
   const isResizing = useRef(false);
   const [activeTip, setActiveTip] = useState<VideoTip | null>(null);
+  const [liveTipCycleIndex, setLiveTipCycleIndex] = useState(0);
 
   const [showPlayerSelection, setShowPlayerSelection] = useState(false);
   const playerSelectionAutoOpened = useRef(false);
@@ -256,6 +257,19 @@ export default function GameViewerPage() {
   const videoW = session?.trajectory_data?.video_info?.width ?? 1280;
   const videoH = session?.trajectory_data?.video_info?.height ?? 828;
 
+  // Derive fps from pose data — stroke frame numbers live in this frame space,
+  // which may differ from trajectory fps if the pose video was re-encoded.
+  const poseBasedFps = useMemo(() => {
+    if (!poseData?.frames?.length) return null;
+    for (const f of poseData.frames) {
+      if (f.timestamp > 1.0 && f.frame_number > 10) {
+        const derived = f.frame_number / f.timestamp;
+        if (Number.isFinite(derived) && derived > 0) return derived;
+      }
+    }
+    return null;
+  }, [poseData?.frames]);
+
   // Generate video tips from stroke data with opponent context
   const videoTips = useMemo(() => {
     // Build opponent context if we have multiple selected players and stored pose data
@@ -315,16 +329,101 @@ export default function GameViewerPage() {
     }
 
     const firstPlayer = session?.players?.[0];
-    const tips = generateTipsFromStrokes(strokeSummary?.strokes || [], fps, opponentContext, firstPlayer?.name);
+    // Use pose-derived fps for stroke timing (stroke frame numbers come from pose analysis)
+    const tipFps = poseBasedFps ?? fps;
+    const tips = generateTipsFromStrokes(strokeSummary?.strokes || [], tipFps, opponentContext, firstPlayer?.name);
     console.log('[VideoTips] Generated tips:', {
       strokeCount: strokeSummary?.strokes?.length || 0,
       tipCount: tips.length,
+      tipFps,
       hasOpponentContext: !!opponentContext,
       selectedPlayers: selectedPersonIds,
       tips: tips.map(t => ({ id: t.id, timestamp: t.timestamp, title: t.title }))
     });
     return tips;
-  }, [strokeSummary?.strokes, fps, selectedPersonIds, poseData?.frames, videoW, videoH, session?.trajectory_data]);
+  }, [strokeSummary?.strokes, fps, poseBasedFps, selectedPersonIds, poseData?.frames, videoW, videoH, session?.trajectory_data]);
+
+  // Live pose-based insight — rotates through categories between stroke tips
+  const currentPoseFrame = useMemo(() => {
+    if (!poseData?.frames?.length) return null;
+    // Find the closest player (person_id=0) frame to currentFrame
+    let best: typeof poseData.frames[0] | null = null;
+    let bestDist = Infinity;
+    for (const f of poseData.frames) {
+      if ((f.person_id ?? 0) !== 0) continue;
+      const d = Math.abs(f.frame_number - currentFrame);
+      if (d < bestDist) { bestDist = d; best = f; }
+    }
+    if (bestDist > 10) return null;
+    return best;
+  }, [poseData?.frames, currentFrame]);
+
+  // Cycle live tips every 2.5s when no stroke tip is active
+  useEffect(() => {
+    if (activeTip || !currentPoseFrame) return;
+    const timer = setInterval(() => {
+      setLiveTipCycleIndex((i) => i + 1);
+    }, 2500);
+    return () => clearInterval(timer);
+  }, [activeTip, currentPoseFrame]);
+
+  const livePoseInsight = useMemo((): { title: string; message: string } | null => {
+    if (activeTip || !currentPoseFrame) return null;
+    const ja = currentPoseFrame.joint_angles ?? {};
+    const bm = currentPoseFrame.body_metrics ?? {};
+
+    const rKnee = ja.right_knee;
+    const lKnee = ja.left_knee;
+    const rElbow = ja.right_elbow;
+    const lElbow = ja.left_elbow;
+    const hipRot = bm.hip_rotation;
+    const shoulderRot = bm.shoulder_rotation;
+    const spineLean = bm.spine_lean;
+
+    type Insight = { title: string; message: string };
+    const insights: Insight[] = [];
+
+    // Only flag things that are genuinely off — skip normal ranges
+
+    // Standing too upright
+    if (rKnee != null && lKnee != null) {
+      const avgKnee = (rKnee + lKnee) / 2;
+      if (avgKnee > 168) {
+        insights.push({ title: "Stance", message: "Legs are too straight — bend your knees to get lower and push off faster" });
+      } else if (avgKnee < 125) {
+        insights.push({ title: "Stance", message: "You're crouching very deep — rise up slightly so you can move laterally" });
+      }
+    }
+
+    // Arms too straight or too tucked between rallies
+    if (rElbow != null && lElbow != null) {
+      const avgElbow = (rElbow + lElbow) / 2;
+      if (avgElbow > 160) {
+        insights.push({ title: "Ready Position", message: "Arms are hanging straight — keep your elbows bent and racket up for quicker preparation" });
+      } else if (avgElbow < 60) {
+        insights.push({ title: "Ready Position", message: "Arms are very tucked in — relax them slightly so you can react to either side" });
+      }
+    }
+
+    // Loading rotational energy
+    if (shoulderRot != null && hipRot != null) {
+      const separation = Math.abs(shoulderRot - hipRot);
+      if (separation > 18) {
+        insights.push({ title: "Torso", message: "Upper body is winding up — good rotational loading for the next shot" });
+      }
+    }
+
+    // Leaning too far
+    if (spineLean != null) {
+      const lean = Math.abs(spineLean);
+      if (lean > 12) {
+        insights.push({ title: "Balance", message: `Leaning ${spineLean > 0 ? "forward" : "backward"} quite a lot — center your weight for better recovery` });
+      }
+    }
+
+    if (insights.length === 0) return null;
+    return insights[liveTipCycleIndex % insights.length];
+  }, [activeTip, currentPoseFrame, liveTipCycleIndex]);
 
   const tipSeekTime = useMemo(() => {
     if (!tipParam || videoTips.length === 0) return null;
@@ -1188,6 +1287,7 @@ export default function GameViewerPage() {
                   tips={videoTips}
                   isPlaying={isPlaying}
                   onTipChange={handleTipChange}
+                  liveTip={livePoseInsight}
                 />
 
                 {/* Live Stroke Indicator - Top-left of video */}

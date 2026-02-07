@@ -102,10 +102,10 @@ export default function LandingPage() {
               transition={{ duration: 1, delay: 0.8 }}
             >
               <h1 className="text-4xl md:text-5xl lg:text-6xl font-light leading-[1.1] tracking-tight mb-6">
-                <span className="text-[#9B7B5B]">Telemetry</span> for Table Tennis
+                Telemetry for <span className="text-[#9B7B5B]">Table Tennis</span>
               </h1>
               <p className="text-lg md:text-xl text-muted-foreground max-w-3xl leading-relaxed">
-                AI and computer vision to automatically track the ball, analyze paddle mechanics and deliver real-time coaching insights
+                Computer Vision and AI to analyze film, track performance, and predict outcomes
               </p>
             </motion.div>
           </div>

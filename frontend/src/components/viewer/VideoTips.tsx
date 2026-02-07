@@ -17,9 +17,10 @@ interface VideoTipsProps {
   tips: VideoTip[];
   isPlaying: boolean;
   onTipChange?: (tip: VideoTip | null) => void;
+  liveTip?: { title: string; message: string } | null;
 }
 
-export function VideoTips({ currentTime, tips, onTipChange }: VideoTipsProps) {
+export function VideoTips({ currentTime, tips, onTipChange, liveTip }: VideoTipsProps) {
   const [activeTip, setActiveTip] = useState<VideoTip | null>(null);
   const [shownTipIds, setShownTipIds] = useState<Set<string>>(new Set());
   const prevTipRef = useRef<VideoTip | null>(null);
@@ -61,7 +62,11 @@ export function VideoTips({ currentTime, tips, onTipChange }: VideoTipsProps) {
     }
   }, [currentTime, onTipChange]);
 
-  if (!activeTip) {
+  // Stroke tips take priority; fall back to liveTip when no stroke tip active
+  const displayTitle = activeTip?.title ?? liveTip?.title;
+  const displayMessage = activeTip?.message ?? liveTip?.message;
+
+  if (!displayTitle) {
     return null;
   }
 
@@ -74,20 +79,20 @@ export function VideoTips({ currentTime, tips, onTipChange }: VideoTipsProps) {
       }}
     >
       <div
-        className="glass-shot-card px-5 py-3 animate-in fade-in slide-in-from-top-2 duration-500"
+        className="glass-shot-card px-5 py-3 animate-in fade-in slide-in-from-top-2 duration-300"
         style={{
           willChange: 'transform, opacity',
           minWidth: '280px',
-          maxWidth: '420px',
+          maxWidth: '480px',
         }}
       >
         <div className="relative z-10 flex flex-col gap-1">
           <span className="text-xs font-medium text-[#E8E6E3] leading-tight">
-            {activeTip.title}
+            {displayTitle}
           </span>
-          {activeTip.message && (
+          {displayMessage && (
             <span className="text-[11px] text-[#8A8885] leading-snug">
-              {activeTip.message}
+              {displayMessage}
             </span>
           )}
         </div>

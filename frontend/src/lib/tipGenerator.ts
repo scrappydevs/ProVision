@@ -7,9 +7,10 @@ export interface OpponentContext {
 }
 
 /**
- * Generate focused coaching tips - one tip per stroke showing the most important feedback
- * Now includes opponent positioning context for more comprehensive analysis
- * playerName is used to clarify tips are about the selected player (not opponent)
+ * Generate coaching tips from strokes — natural language, actionable feedback.
+ * Tips are generated for strokes that are notably good, notably weak, or have
+ * a clear mechanical issue worth calling out. Average strokes with nothing
+ * remarkable are skipped.
  */
 export function generateTipsFromStrokes(
   strokes: Stroke[],
@@ -23,26 +24,15 @@ export function generateTipsFromStrokes(
     return tips;
   }
 
-  // Generate tips only for significant strokes (excellent or needs improvement)
   strokes.forEach((stroke, index) => {
-    const strokeDuration = (stroke.end_frame - stroke.start_frame) / fps;
     const contactTime = stroke.peak_frame / fps;
 
-    // Only generate tips for strokes that need attention (poor) or deserve praise (excellent)
-    // Skip "okay" strokes (form_score 75-85) to reduce noise
-    const shouldGenerateTip = stroke.form_score < 75 || stroke.form_score > 85;
-
-    if (!shouldGenerateTip) {
-      return; // Skip this stroke
-    }
-
-    // Main contact tip (primary technique feedback with opponent context)
     const contactTip = generateStrokeTip(stroke, index, opponentContext, playerName);
     if (contactTip) {
       tips.push({
         id: `stroke-${stroke.id}-contact`,
         timestamp: contactTime,
-        duration: 5.5, // Enough time to read while video plays
+        duration: 3.5,
         title: contactTip.title,
         message: contactTip.message,
         strokeId: stroke.id,
@@ -51,7 +41,16 @@ export function generateTipsFromStrokes(
     }
   });
 
-  return tips.sort((a, b) => a.timestamp - b.timestamp);
+  // Sort by time then enforce minimum 1s spacing — drop later tip if too close
+  tips.sort((a, b) => a.timestamp - b.timestamp);
+  const spaced: VideoTip[] = [];
+  for (const tip of tips) {
+    const prev = spaced[spaced.length - 1];
+    if (!prev || tip.timestamp - prev.timestamp >= 1.0) {
+      spaced.push(tip);
+    }
+  }
+  return spaced;
 }
 
 /**
@@ -65,16 +64,14 @@ function getOpponentPositionContext(
     return { hasOpponent: false };
   }
 
-  // Get the opponent pose for this stroke (strokeIndex maps to pose arrays)
   const opponentPose = opponentContext.opponentPoses[strokeIndex];
   if (!opponentPose) {
     return { hasOpponent: false };
   }
 
-  // Analyze opponent bbox to determine position
-  const [x1, y1, x2, y2] = opponentPose.bbox;
+  const [x1, , x2] = opponentPose.bbox;
   const centerX = (x1 + x2) / 2;
-  const frameWidth = 1920; // Typical video width
+  const frameWidth = 1920;
 
   let position = "center";
   if (centerX < frameWidth * 0.33) {
@@ -91,8 +88,22 @@ function getOpponentPositionContext(
 }
 
 /**
- * Generate contact phase tip (main technique feedback)
- * Now includes opponent positioning context for tactical insights
+ * Check if an average-form stroke (75-85) has any single metric that stands
+ * out enough to warrant a tip. Returns true if something is noteworthy.
+ */
+function hasNotableIssue(metrics: Stroke["metrics"], strokeType: string): boolean {
+  if (metrics.elbow_angle < 120) return true;
+  if (Math.abs(metrics.hip_rotation_range) < 10) return true;
+  if (metrics.elbow_range < 40) return true;
+  if (Math.abs(metrics.shoulder_rotation_range) < 15) return true;
+  if (metrics.knee_angle < 130 || metrics.knee_angle > 170) return true;
+  if (strokeType === "forehand" && Math.abs(metrics.spine_lean) < 3) return true;
+  return false;
+}
+
+/**
+ * Generate a natural-language coaching tip for a stroke.
+ * Returns null for average strokes with nothing notable.
  */
 function generateStrokeTip(
   stroke: Stroke,
@@ -104,84 +115,89 @@ function generateStrokeTip(
   const strokeName = stroke_type.charAt(0).toUpperCase() + stroke_type.slice(1);
   const prefix = playerName ? `${playerName.split(" ")[0]}'s` : "Your";
 
-  // Get opponent context for this stroke
   const oppContext = getOpponentPositionContext(strokeIndex, opponentContext);
 
-  // Priority 1: If form is excellent, give positive reinforcement with opponent context
+  // Skip average strokes that don't have any standout issue
+  if (form_score >= 75 && form_score <= 85 && !hasNotableIssue(metrics, stroke_type)) {
+    return null;
+  }
+
+  // Excellent form — positive reinforcement
   if (form_score > 85) {
-    const baseMessage = `Great shot - smooth and powerful`;
-    const contextualMessage = oppContext.hasOpponent
-      ? `${baseMessage}. Opponent at ${oppContext.opponentPosition}`
-      : baseMessage;
+    const strengths: string[] = [];
+    if (metrics.elbow_angle >= 130) strengths.push("full arm extension");
+    if (Math.abs(metrics.hip_rotation_range) >= 15) strengths.push("strong hip rotation");
+    if (Math.abs(metrics.shoulder_rotation_range) >= 20) strengths.push("good shoulder turn");
+    if (metrics.elbow_range >= 50) strengths.push("complete follow-through");
+
+    const detail = strengths.length > 0
+      ? strengths.join(" with ")
+      : "smooth and well-coordinated";
 
     return {
-      title: `${prefix} ${strokeName} - Excellent`,
-      message: contextualMessage,
+      title: `${prefix} ${strokeName} — Excellent`,
+      message: oppContext.hasOpponent
+        ? `Great shot — ${detail}. Opponent at ${oppContext.opponentPosition}`
+        : `Great shot — ${detail}`,
     };
   }
 
-  // Priority 2: Critical technique issues (most important to fix first)
+  // Priority issues — find the most important thing to fix
 
-  // Elbow extension at contact (crucial for power and control)
   if (metrics.elbow_angle < 120) {
     return {
       title: `${prefix} ${strokeName}`,
-      message: `Straighten your arm more at contact`,
+      message: `Extend your arm more at contact — a longer lever creates more racket-head speed through the ball`,
     };
   }
 
-  // Hip rotation (power generation)
-  const hipRotRange = Math.abs(metrics.hip_rotation_range);
-  if (hipRotRange < 10) {
+  const hipRot = Math.abs(metrics.hip_rotation_range);
+  if (hipRot < 10) {
     return {
       title: `${prefix} ${strokeName}`,
-      message: `Turn your body more for extra power`,
+      message: `Rotate your hips more into the shot — the pelvis drives the kinetic chain for power transfer`,
     };
   }
 
-  // Follow-through completion
   if (metrics.elbow_range < 40) {
     return {
       title: `${prefix} ${strokeName}`,
-      message: `Finish the swing completely`,
+      message: `Finish the swing — a full follow-through keeps the racket accelerating and adds topspin control`,
     };
   }
 
-  // Shoulder rotation (coordination with hips)
-  const shoulderRotRange = Math.abs(metrics.shoulder_rotation_range);
-  if (shoulderRotRange < 15) {
+  const shoulderRot = Math.abs(metrics.shoulder_rotation_range);
+  if (shoulderRot < 15) {
     return {
       title: `${prefix} ${strokeName}`,
-      message: `Turn your shoulders more through the shot`,
+      message: `Turn your shoulders more through the shot — upper-body torque adds pace without extra arm effort`,
     };
   }
 
-  // Knee bend (athletic stance)
   if (metrics.knee_angle < 130) {
     return {
       title: `${prefix} ${strokeName}`,
-      message: `Stand up a bit - you're too low`,
-    };
-  } else if (metrics.knee_angle > 170) {
-    return {
-      title: `${prefix} ${strokeName}`,
-      message: `Bend your knees more - stay low and ready`,
+      message: `You're crouching too low — stand up slightly for better balance and quicker recovery between shots`,
     };
   }
 
-  // Weight transfer (spine lean)
-  const spineLean = Math.abs(metrics.spine_lean);
-  if (stroke_type === "forehand" && spineLean < 3) {
+  if (metrics.knee_angle > 170) {
     return {
       title: `${prefix} ${strokeName}`,
-      message: `Shift your weight forward through the ball`,
+      message: `Bend your knees more — a lower stance gives you faster lateral movement and better weight transfer`,
     };
   }
 
-  // Priority 3: Needs significant work
+  if (stroke_type === "forehand" && Math.abs(metrics.spine_lean) < 3) {
+    return {
+      title: `${prefix} ${strokeName}`,
+      message: `Shift your weight forward through the ball — leaning into contact transfers more momentum`,
+    };
+  }
+
+  // Weak form with no single standout issue — general guidance
   return {
     title: `${prefix} ${strokeName}`,
-    message: `Work on smooth power from legs through body to racket`,
+    message: `Focus on connecting the chain — drive from legs through hips and torso into the racket`,
   };
 }
-
