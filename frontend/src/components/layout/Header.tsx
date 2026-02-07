@@ -14,8 +14,8 @@ export function Header() {
     <header className="h-16 border-b border-border bg-background fixed top-0 left-0 right-0 z-40">
       <div className="h-full px-6 flex items-center justify-between">
         <div className="flex items-center gap-3">
-          <img src="/logo.png" alt="ProVision" className="w-6 h-6 dark:invert" />
-          <span className="text-md font-semibold tracking-wide text-foreground">ProVision</span>
+          <img src="/logo.png" alt="PROVISION" className="w-6 h-6 dark:invert" />
+          <span className="text-md font-semibold tracking-wider text-foreground">PROVISION</span>
         </div>
 
         <div className="flex items-center gap-4">

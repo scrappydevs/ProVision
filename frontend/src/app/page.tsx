@@ -55,8 +55,8 @@ export default function LandingPage() {
       >
         <div className="max-w-7xl mx-auto flex items-center justify-between">
           <div className="flex items-center gap-3">
-            <img src="/logo.png" alt="ProVision" className="w-7 h-7 dark:invert" />
-            <span className="text-lg font-medium tracking-wide">ProVision</span>
+            <img src="/logo.png" alt="PROVISION" className="w-7 h-7 dark:invert" />
+            <span className="text-lg font-medium tracking-wider">PROVISION</span>
           </div>
           <div className="flex items-center gap-8">
             <a href="#how" className="text-base text-muted-foreground hover:text-foreground transition-colors">How it works</a>
@@ -250,8 +250,8 @@ export default function LandingPage() {
       <footer className="py-8 px-8 border-t border-border">
         <div className="max-w-5xl mx-auto flex items-center justify-between text-sm text-muted-foreground">
           <div className="flex items-center gap-2">
-            <img src="/logo.png" alt="ProVision" className="w-4 h-4 dark:invert" />
-            <span>ProVision</span>
+            <img src="/logo.png" alt="PROVISION" className="w-4 h-4 dark:invert" />
+            <span>PROVISION</span>
           </div>
           <div className="flex items-center gap-6 text-xs">
             <span>TrackNet</span>
