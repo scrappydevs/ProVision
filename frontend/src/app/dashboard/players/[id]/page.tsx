@@ -272,11 +272,12 @@ export default function PlayerProfilePage() {
 
   // Generate player-specific insights from API data
   const insights: Insight[] = useMemo(() => {
-    if (!playerInsights || !clipRefs.length) {
+    if (!playerInsights) {
       return []; // No insights without data
     }
-    
+
     const results: Insight[] = [];
+    const clips = clipRefs.length ? clipRefs : [];
     
     // Add strengths from API
     playerInsights.strengths.forEach((strength: { title: string; summary: string; metric: string }, idx: number) => {
@@ -287,7 +288,7 @@ export default function PlayerProfilePage() {
         summary: strength.summary,
         metric: strength.metric,
         tipMatch: strength.title.toLowerCase().includes("forehand") ? "forehand" : strength.title.toLowerCase().includes("backhand") ? "backhand" : undefined,
-        clips: clipRefs,
+        clips,
       });
     });
     
@@ -300,7 +301,7 @@ export default function PlayerProfilePage() {
         summary: weakness.summary,
         metric: weakness.metric,
         tipMatch: weakness.title.toLowerCase().includes("forehand") ? "forehand" : weakness.title.toLowerCase().includes("backhand") ? "backhand" : undefined,
-        clips: clipRefs,
+        clips,
       });
     });
     

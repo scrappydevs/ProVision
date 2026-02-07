@@ -1,10 +1,35 @@
-from typing import List, Optional
-from fastapi import APIRouter, Depends, HTTPException
+from typing import List, Optional, Dict
+from datetime import datetime, timezone
+from uuid import uuid4
+from fastapi import APIRouter, Depends, HTTPException, UploadFile, File, Query
 from pydantic import BaseModel
 
 from ..database.supabase import get_supabase, get_current_user_id
+from ..services.ittf_service import fetch_ittf_player_data, search_ittf_players
 
 router = APIRouter()
+
+
+class PlayerCreate(BaseModel):
+    name: str
+    position: Optional[str] = None
+    team: Optional[str] = None
+    notes: Optional[str] = None
+    description: Optional[str] = None
+    handedness: Optional[str] = None
+    is_active: Optional[bool] = True
+    ittf_id: Optional[int] = None
+
+
+class PlayerUpdate(BaseModel):
+    name: Optional[str] = None
+    position: Optional[str] = None
+    team: Optional[str] = None
+    notes: Optional[str] = None
+    description: Optional[str] = None
+    handedness: Optional[str] = None
+    is_active: Optional[bool] = None
+    ittf_id: Optional[int] = None
 
 
 class PlayerInsightsResponse(BaseModel):
@@ -15,6 +40,83 @@ class PlayerInsightsResponse(BaseModel):
     backhand_stats: dict
     strengths: List[dict]
     weaknesses: List[dict]
+
+
+def _get_game_counts(supabase, player_ids: List[str]) -> Dict[str, int]:
+    if not player_ids:
+        return {}
+    gp_result = supabase.table("game_players").select("player_id").in_("player_id", player_ids).execute()
+    counts: Dict[str, int] = {}
+    for row in gp_result.data or []:
+        pid = row.get("player_id")
+        if pid:
+            counts[pid] = counts.get(pid, 0) + 1
+    return counts
+
+
+def _get_players_for_games(supabase, game_ids: List[str]) -> Dict[str, List[dict]]:
+    """Fetch players for a list of game IDs. Returns {game_id: [player]}."""
+    if not game_ids:
+        return {}
+    gp_result = supabase.table("game_players").select("game_id, player_id").in_("game_id", game_ids).execute()
+    if not gp_result.data:
+        return {}
+    player_ids = list({gp["player_id"] for gp in gp_result.data if gp.get("player_id")})
+    if not player_ids:
+        return {}
+    players_result = supabase.table("players").select("id, name, avatar_url").in_("id", player_ids).execute()
+    player_map = {p["id"]: p for p in players_result.data or []}
+    game_players_map: Dict[str, List[dict]] = {}
+    for gp in gp_result.data:
+        player = player_map.get(gp.get("player_id"))
+        if not player:
+            continue
+        game_players_map.setdefault(gp["game_id"], []).append(player)
+    return game_players_map
+
+
+@router.get("/")
+async def list_players(
+    search: Optional[str] = Query(default=None),
+    user_id: str = Depends(get_current_user_id),
+):
+    supabase = get_supabase()
+    q = supabase.table("players").select(
+        "id, coach_id, name, avatar_url, position, team, notes, description, "
+        "handedness, is_active, ittf_id, ittf_data, ittf_last_synced, created_at, updated_at"
+    ).eq("coach_id", user_id)
+    if search:
+        q = q.ilike("name", f"%{search}%")
+    players = q.order("name").execute()
+    player_ids = [p["id"] for p in players.data or []]
+    game_counts = _get_game_counts(supabase, player_ids)
+    for p in players.data or []:
+        p["game_count"] = game_counts.get(p["id"], 0)
+    return players.data or []
+
+
+@router.post("/")
+async def create_player(
+    data: PlayerCreate,
+    user_id: str = Depends(get_current_user_id),
+):
+    supabase = get_supabase()
+    payload = data.model_dump(exclude_unset=True)
+    payload["coach_id"] = user_id
+    result = supabase.table("players").insert(payload).execute()
+    if not result.data:
+        raise HTTPException(status_code=500, detail="Failed to create player")
+    return result.data[0]
+
+
+@router.get("/search-ittf")
+async def search_ittf(
+    q: str = Query(min_length=2),
+    user_id: str = Depends(get_current_user_id),
+):
+    _ = user_id
+    results = await search_ittf_players(q)
+    return {"query": q, "results": results, "count": len(results)}
 
 
 @router.get("/insights/{player_id}")
@@ -214,12 +316,11 @@ async def generate_player_description(
             para2_parts.append(f"Backhand development is a priority (current {bh_score:.0f}% avg), emphasizing early contact point and weight transfer")
         
         if abs(fh_count - bh_count) > total * 0.3:
-            dominant_side = "forehand" if fh_count > bh_count else "backhand"
             other_side = "backhand" if fh_count > bh_count else "forehand"
             para2_parts.append(f"Incorporating more {other_side} opportunities in training will create a more complete game")
         
         if not para2_parts:
-            para2_parts.append(f"Continue developing overall consistency and match-play experience")
+            para2_parts.append("Continue developing overall consistency and match-play experience")
         
         para2 = ". ".join(para2_parts) + "."
         
@@ -233,3 +334,147 @@ async def generate_player_description(
         "description": description,
         "generated_at": "now"
     }
+
+
+@router.post("/{player_id}/sync-ittf")
+async def sync_ittf(
+    player_id: str,
+    user_id: str = Depends(get_current_user_id),
+):
+    supabase = get_supabase()
+    player_result = supabase.table("players").select("id, ittf_id").eq("id", player_id).eq("coach_id", user_id).single().execute()
+    if not player_result.data:
+        raise HTTPException(status_code=404, detail="Player not found")
+    ittf_id = player_result.data.get("ittf_id")
+    if not ittf_id:
+        raise HTTPException(status_code=400, detail="Player does not have an ITTF ID")
+    ittf_data = await fetch_ittf_player_data(ittf_id)
+    if not ittf_data:
+        raise HTTPException(status_code=502, detail="Failed to fetch ITTF data")
+    now = datetime.now(timezone.utc).isoformat()
+    update = {
+        "ittf_data": ittf_data,
+        "ittf_last_synced": now,
+    }
+    result = supabase.table("players").update(update).eq("id", player_id).execute()
+    if not result.data:
+        raise HTTPException(status_code=500, detail="Failed to update ITTF data")
+    return result.data[0]
+
+
+@router.get("/{player_id}/ittf-stats")
+async def get_ittf_stats(
+    player_id: str,
+    user_id: str = Depends(get_current_user_id),
+):
+    supabase = get_supabase()
+    player_result = supabase.table("players").select(
+        "ittf_id, ittf_data, ittf_last_synced"
+    ).eq("id", player_id).eq("coach_id", user_id).single().execute()
+    if not player_result.data:
+        raise HTTPException(status_code=404, detail="Player not found")
+    return {
+        "ittf_id": player_result.data.get("ittf_id"),
+        "ittf_data": player_result.data.get("ittf_data"),
+        "ittf_last_synced": player_result.data.get("ittf_last_synced"),
+    }
+
+
+@router.post("/{player_id}/avatar")
+async def upload_avatar(
+    player_id: str,
+    avatar: UploadFile = File(...),
+    user_id: str = Depends(get_current_user_id),
+):
+    supabase = get_supabase()
+    player_result = supabase.table("players").select("id").eq("id", player_id).eq("coach_id", user_id).single().execute()
+    if not player_result.data:
+        raise HTTPException(status_code=404, detail="Player not found")
+    filename = avatar.filename or "avatar"
+    ext = f".{filename.rsplit('.', 1)[-1]}" if "." in filename else ".jpg"
+    storage_path = f"{user_id}/players/{player_id}/avatar-{uuid4().hex}{ext}"
+    content = await avatar.read()
+    supabase.storage.from_("provision-videos").upload(storage_path, content)
+    avatar_url = supabase.storage.from_("provision-videos").get_public_url(storage_path)
+    result = supabase.table("players").update({"avatar_url": avatar_url}).eq("id", player_id).execute()
+    if not result.data:
+        raise HTTPException(status_code=500, detail="Failed to update avatar")
+    return result.data[0]
+
+
+@router.get("/{player_id}/games")
+async def get_player_games(
+    player_id: str,
+    search: Optional[str] = Query(default=None),
+    status: Optional[str] = Query(default=None),
+    user_id: str = Depends(get_current_user_id),
+):
+    supabase = get_supabase()
+    player_result = supabase.table("players").select("id").eq("id", player_id).eq("coach_id", user_id).single().execute()
+    if not player_result.data:
+        raise HTTPException(status_code=404, detail="Player not found")
+    games_result = supabase.table("game_players").select("game_id").eq("player_id", player_id).execute()
+    game_ids = [g["game_id"] for g in games_result.data or []]
+    if not game_ids:
+        return []
+    q = supabase.table("sessions").select(
+        "id, name, video_path, status, created_at"
+    ).in_("id", game_ids)
+    if search:
+        q = q.ilike("name", f"%{search}%")
+    if status:
+        q = q.eq("status", status)
+    sessions = q.order("created_at", desc=True).execute()
+    players_map = _get_players_for_games(supabase, [s["id"] for s in sessions.data or []])
+    for s in sessions.data or []:
+        s["players"] = players_map.get(s["id"], [])
+    return sessions.data or []
+
+
+@router.get("/{player_id}")
+async def get_player(
+    player_id: str,
+    user_id: str = Depends(get_current_user_id),
+):
+    supabase = get_supabase()
+    result = supabase.table("players").select(
+        "id, coach_id, name, avatar_url, position, team, notes, description, "
+        "handedness, is_active, ittf_id, ittf_data, ittf_last_synced, created_at, updated_at"
+    ).eq("id", player_id).eq("coach_id", user_id).single().execute()
+    if not result.data:
+        raise HTTPException(status_code=404, detail="Player not found")
+    game_counts = _get_game_counts(supabase, [player_id])
+    result.data["game_count"] = game_counts.get(player_id, 0)
+    return result.data
+
+
+@router.put("/{player_id}")
+async def update_player(
+    player_id: str,
+    data: PlayerUpdate,
+    user_id: str = Depends(get_current_user_id),
+):
+    supabase = get_supabase()
+    payload = data.model_dump(exclude_unset=True)
+    if not payload:
+        raise HTTPException(status_code=400, detail="No updates provided")
+    player_result = supabase.table("players").select("id").eq("id", player_id).eq("coach_id", user_id).single().execute()
+    if not player_result.data:
+        raise HTTPException(status_code=404, detail="Player not found")
+    result = supabase.table("players").update(payload).eq("id", player_id).execute()
+    if not result.data:
+        raise HTTPException(status_code=500, detail="Failed to update player")
+    return result.data[0]
+
+
+@router.delete("/{player_id}")
+async def delete_player(
+    player_id: str,
+    user_id: str = Depends(get_current_user_id),
+):
+    supabase = get_supabase()
+    player_result = supabase.table("players").select("id").eq("id", player_id).eq("coach_id", user_id).single().execute()
+    if not player_result.data:
+        raise HTTPException(status_code=404, detail="Player not found")
+    supabase.table("players").delete().eq("id", player_id).execute()
+    return {"status": "ok"}
