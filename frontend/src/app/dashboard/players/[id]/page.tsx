@@ -446,14 +446,14 @@ export default function PlayerProfilePage() {
             </div>
           </div>
 
-          {/* Tips - column layout under name */}
-          <div className="max-w-[500px] flex flex-col gap-3 overflow-x-visible">
+          {/* Tips - two column layout under name */}
+          <div className="max-w-[700px] overflow-x-visible">
             {recordingsLoading ? (
               <div className="flex items-center justify-center h-20">
                 <Loader2 className="w-3 h-3 text-primary animate-spin" />
               </div>
             ) : (
-              <>
+              <div className="grid grid-cols-2 gap-6">
                 {/* Strengths */}
                 {insights.filter(i => i.kind === "strength").length > 0 && (
                   <div className="space-y-2">
@@ -593,7 +593,7 @@ export default function PlayerProfilePage() {
                     </div>
                   </div>
                 )}
-              </>
+              </div>
             )}
           </div>
         </div>
