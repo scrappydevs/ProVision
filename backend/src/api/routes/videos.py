@@ -225,7 +225,7 @@ def _analyze_youtube_background(
     start_time: Optional[float] = None,
     end_time: Optional[float] = None,
 ):
-    """Background task: download YouTube video, upload to storage, populate session."""
+    """Background task: download YouTube video, upload to storage, then auto-run full analysis pipeline."""
     from ..services.youtube_service import download_youtube_video
 
     supabase = get_supabase()
@@ -262,13 +262,43 @@ def _analyze_youtube_background(
             except Exception as e:
                 logger.warning(f"[VideoAnalyze] Failed to link player: {e}")
 
-        logger.info(f"[VideoAnalyze] Session {session_id} ready for analysis")
+        logger.info(f"[VideoAnalyze] Video uploaded. Starting auto-analysis pipeline for session {session_id}")
 
+        # Clean up downloaded file before long-running analysis
         try:
             os.unlink(local_path)
             os.rmdir(os.path.dirname(local_path))
         except Exception:
             pass
+        local_path = None  # Prevent double-cleanup in outer except
+
+        # ── Auto-trigger TrackNet ball tracking ──
+        try:
+            import asyncio
+            from .sessions import _run_tracknet_background
+            logger.info(f"[VideoAnalyze] Starting TrackNet for session {session_id}")
+            loop = asyncio.new_event_loop()
+            loop.run_until_complete(_run_tracknet_background(session_id, video_url))
+            loop.close()
+            logger.info(f"[VideoAnalyze] TrackNet completed for session {session_id}")
+        except Exception as e:
+            logger.warning(f"[VideoAnalyze] TrackNet auto-track failed (non-fatal): {e}")
+
+        # ── Auto-trigger pose analysis → overlay video → stroke detection ──
+        try:
+            from .pose import process_pose_analysis
+            logger.info(f"[VideoAnalyze] Starting pose analysis for session {session_id}")
+            process_pose_analysis(session_id, storage_path, video_url)
+            logger.info(f"[VideoAnalyze] Pose analysis completed for session {session_id}")
+        except Exception as e:
+            logger.warning(f"[VideoAnalyze] Pose auto-analysis failed (non-fatal): {e}")
+            # If pose fails, mark session as ready (video + tracknet may have succeeded)
+            try:
+                current = supabase.table("sessions").select("status").eq("id", session_id).single().execute()
+                if current.data and current.data.get("status") == "processing":
+                    supabase.table("sessions").update({"status": "ready"}).eq("id", session_id).execute()
+            except Exception:
+                pass
 
         # Trigger local pose analysis (runs YOLO locally, no GPU server needed)
         try:
@@ -290,6 +320,13 @@ def _analyze_youtube_background(
             }).eq("id", video_id).execute()
         except Exception:
             pass
+        # Clean up if download succeeded but something else failed
+        if local_path:
+            try:
+                os.unlink(local_path)
+                os.rmdir(os.path.dirname(local_path))
+            except Exception:
+                pass
 
 
 class AnalyzeRequest(BaseModel):

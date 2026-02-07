@@ -110,6 +110,7 @@ export default function GameViewerPage() {
   const [panelWidth, setPanelWidth] = useState(320);
   const [videoDisplayWidth, setVideoDisplayWidth] = useState<number | null>(null);
   const [videoBounds, setVideoBounds] = useState<{ top: number; left: number; right: number; width: number; height: number } | null>(null);
+  const [videoReady, setVideoReady] = useState(false);
   const isResizing = useRef(false);
   const [activeTip, setActiveTip] = useState<VideoTip | null>(null);
 
@@ -502,6 +503,11 @@ export default function GameViewerPage() {
     return () => window.removeEventListener("keydown", handler);
   }, [debugMode, debugAnnotate]);
 
+  // Reset videoReady when the video source changes (e.g. clip loaded, pose overlay toggled)
+  useEffect(() => {
+    setVideoReady(false);
+  }, [videoUrl]);
+
   // Video events — use requestVideoFrameCallback when available for tighter sync
   useEffect(() => {
     const video = videoRef.current;
@@ -545,11 +551,16 @@ export default function GameViewerPage() {
       setCurrentFrame(frameFromTime(video.currentTime));
     };
     const onMeta = () => { setDuration(video.duration); };
+    const onCanPlay = () => { setVideoReady(true); };
+
+    // If video is already loaded (e.g. cached), mark ready immediately
+    if (video.readyState >= 3) setVideoReady(true);
 
     video.addEventListener("play", onPlay);
     video.addEventListener("pause", onPause);
     video.addEventListener("seeked", onSeeked);
     video.addEventListener("loadedmetadata", onMeta);
+    video.addEventListener("canplay", onCanPlay);
     // Also handle timeupdate as fallback for initial load / slow seek
     video.addEventListener("timeupdate", onSeeked);
     return () => {
@@ -561,6 +572,7 @@ export default function GameViewerPage() {
       video.removeEventListener("pause", onPause);
       video.removeEventListener("seeked", onSeeked);
       video.removeEventListener("loadedmetadata", onMeta);
+      video.removeEventListener("canplay", onCanPlay);
       video.removeEventListener("timeupdate", onSeeked);
     };
   }, [videoUrl, frameFromTime]);
@@ -1058,7 +1070,17 @@ export default function GameViewerPage() {
     }
   }, [gameId]);
 
+  // Tabs that require the video to be loaded before they can function
+  const videoRequiredTabs: TabId[] = ["track", "court", "analytics"];
+  const isTabDisabled = useCallback((tabId: TabId) => {
+    if (!videoRequiredTabs.includes(tabId)) return false;
+    return !videoReady || isProcessing;
+  }, [videoReady, isProcessing]);
+
   const handleTabClick = useCallback((tabId: TabId) => {
+    // Block switching to video-dependent tabs until clip/video is loaded
+    if (isTabDisabled(tabId)) return;
+
     setActiveTab(tabId);
     setPlayerSelectMode(false);
     if (tabId === "pose") {
@@ -1066,7 +1088,7 @@ export default function GameViewerPage() {
       if (!showPoseOverlay) handleDetectPose(); // detect on first enable
     }
     if (tabId === "track" && !hasTrajectory) handleTrackNetTrack();
-  }, [showPoseOverlay, handleDetectPose, hasTrajectory, handleTrackNetTrack]);
+  }, [showPoseOverlay, handleDetectPose, hasTrajectory, handleTrackNetTrack, isTabDisabled]);
 
   // Auto-widen panel for court view and analytics
   useEffect(() => {
@@ -1151,7 +1173,21 @@ export default function GameViewerPage() {
                 className={cn("relative w-full h-full", (trackingMode || playerSelectMode) && "cursor-crosshair")}
                 onClick={handleFrameClick}
               >
-                {videoUrl && <video ref={videoRef} src={videoUrl} className="w-full h-full object-contain" muted={isMuted} playsInline />}
+                {videoUrl ? (
+                  <video ref={videoRef} src={videoUrl} className="w-full h-full object-contain" muted={isMuted} playsInline />
+                ) : session?.status === "pending" || session?.status === "processing" ? (
+                  <div className="absolute inset-0 flex flex-col items-center justify-center gap-3">
+                    <Loader2 className="w-8 h-8 text-[#9B7B5B] animate-spin" />
+                    <div className="text-center">
+                      <p className="text-sm font-medium text-[#E8E6E3]">
+                        {session?.status === "pending" ? "Downloading clip..." : "Processing video..."}
+                      </p>
+                      <p className="text-[10px] text-[#8A8885] mt-1">
+                        {session?.status === "pending" ? "Trimming and preparing your clip" : "Analysis will begin automatically"}
+                      </p>
+                    </div>
+                  </div>
+                ) : null}
                 <canvas ref={canvasRef} className="absolute inset-0 w-full h-full pointer-events-none" style={{ zIndex: 10 }} />
                 <canvas ref={playerCanvasRef} className="absolute inset-0 w-full h-full pointer-events-none" style={{ zIndex: 20 }} />
                 
@@ -1237,7 +1273,9 @@ export default function GameViewerPage() {
                       <Loader2 className="w-4 h-4 text-[#9B7B5B] animate-spin" />
                       <div>
                         <p className="text-xs font-medium text-[#E8E6E3]">Analyzing poses</p>
-                        <p className="text-[10px] text-[#8A8885]">Detecting player movements</p>
+                        <p className="text-[10px] text-[#8A8885]">
+                          {hasTrajectory ? "Generating overlay video..." : "Detecting players and tracking ball..."}
+                        </p>
                       </div>
                     </div>
                   </div>
@@ -1320,11 +1358,22 @@ export default function GameViewerPage() {
                     const Icon = tab.icon;
                     const isActive = activeTab === tab.id;
                     const isOn = (tab.id === "pose" && showPoseOverlay) || (tab.id === "track" && trackingMode) || (tab.id === "analytics" && activeTab === "analytics");
+                    const disabled = isTabDisabled(tab.id);
                     return (
-                      <button key={tab.id} onClick={() => handleTabClick(tab.id)} className={cn("glass-tab", (isActive || isOn) && "glass-tab-active")}>
-                        <Icon className="w-3.5 h-3.5" />
+                      <button
+                        key={tab.id}
+                        onClick={() => handleTabClick(tab.id)}
+                        disabled={disabled}
+                        className={cn(
+                          "glass-tab",
+                          (isActive || isOn) && !disabled && "glass-tab-active",
+                          disabled && "opacity-35 cursor-not-allowed"
+                        )}
+                        title={disabled ? "Waiting for video to load..." : tab.label}
+                      >
+                        {disabled ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Icon className="w-3.5 h-3.5" />}
                         <span>{tab.label}</span>
-                        {isOn && <div className="w-1.5 h-1.5 rounded-full bg-[#9B7B5B]" />}
+                        {isOn && !disabled && <div className="w-1.5 h-1.5 rounded-full bg-[#9B7B5B]" />}
                       </button>
                     );
                   })}
