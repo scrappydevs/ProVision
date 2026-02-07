@@ -160,7 +160,7 @@ export default function DashboardPage() {
           <Loader2 className="w-8 h-8 text-primary animate-spin" />
         </div>
       ) : players && players.length > 0 ? (
-        <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-4 xl:grid-cols-5 2xl:grid-cols-6 gap-4 auto-rows-fr">
+        <div className="grid grid-cols-3 sm:grid-cols-4 lg:grid-cols-5 gap-4 auto-rows-fr">
           {players.map((player, i) => (
             <motion.div
               key={player.id}
