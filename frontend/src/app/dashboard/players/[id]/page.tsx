@@ -525,13 +525,13 @@ export default function PlayerProfilePage() {
           </div>
 
           {/* Tips - two column layout under name */}
-          <div className="max-w-[700px] overflow-x-visible">
+          <div className="max-w-[700px] overflow-x-visible max-h-[calc(100vh-32rem)] overflow-y-auto">
             {recordingsLoading ? (
               <div className="flex items-center justify-center h-20">
                 <Loader2 className="w-3 h-3 text-primary animate-spin" />
               </div>
             ) : (
-              <div className="grid grid-cols-2 gap-6">
+              <div className="space-y-3">
                 {/* Strengths */}
                 {insights.filter(i => i.kind === "strength").length > 0 && (
                   <div className="space-y-2">
@@ -539,10 +539,10 @@ export default function PlayerProfilePage() {
                       <div className="w-2 h-2 rounded-full bg-[#6B8E6B]" />
                       <span className="text-sm uppercase tracking-wider text-[#6B8E6B] font-semibold">Strengths</span>
                     </div>
-                    <div className="space-y-2">
+                    <div className="grid grid-cols-2 gap-3">
                       {insights.filter(i => i.kind === "strength").map((insight) => (
                         <div key={insight.id} className="relative group">
-                          <div className="text-left p-3 rounded-lg bg-content1/80 hover:bg-content1/90 transition-all">
+                          <div className="text-left p-3 rounded-lg bg-content1/80 hover:bg-content1/90 transition-all h-full">
                             <h4 className="text-sm font-semibold text-foreground/95 mb-1 leading-tight">
                               {insight.title}
                             </h4>
@@ -609,10 +609,10 @@ export default function PlayerProfilePage() {
                       <div className="w-2 h-2 rounded-full bg-[#C45C5C]" />
                       <span className="text-sm uppercase tracking-wider text-[#C45C5C] font-semibold">Areas to improve</span>
                     </div>
-                    <div className="space-y-2">
+                    <div className="grid grid-cols-2 gap-3">
                       {insights.filter(i => i.kind === "weakness").map((insight) => (
                         <div key={insight.id} className="relative group">
-                          <div className="text-left p-3 rounded-lg bg-content1/80 hover:bg-content1/90 transition-all">
+                          <div className="text-left p-3 rounded-lg bg-content1/80 hover:bg-content1/90 transition-all h-full">
                             <h4 className="text-sm font-semibold text-foreground/95 mb-1 leading-tight">
                               {insight.title}
                             </h4>

@@ -1052,7 +1052,7 @@ function Scene({
 }
 
 export function BirdEyeView({ trajectoryData, poseData, currentFrame, totalFrames, isPlaying }: BirdEyeViewProps) {
-  const [mode, setMode] = useState<PhysicsMode>("predict");
+  const [mode, setMode] = useState<PhysicsMode>("heatmap");
   const [cameraPreset, setCameraPreset] = useState<CameraPreset>("default");
   const fps = trajectoryData?.video_info?.fps ?? 30;
   const [whatIfStart, setWhatIfStart] = useState<[number, number, number] | null>(null);
