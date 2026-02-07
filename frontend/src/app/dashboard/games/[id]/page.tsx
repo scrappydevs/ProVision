@@ -1161,7 +1161,7 @@ export default function GameViewerPage() {
 
   // Auto-widen panel for court view and analytics
   useEffect(() => {
-    if (showCourt) setPanelWidth(480);
+    if (showCourt) setPanelWidth(640); // Wide panel for 3D court view
     else if (showAnalytics) setPanelWidth(800); // Wide panel for analytics
     else setPanelWidth(320);
   }, [showCourt, showAnalytics]);
@@ -1218,7 +1218,7 @@ export default function GameViewerPage() {
           "gap-3 flex-1 min-h-0",
           aiChatOpen ? "flex flex-col overflow-y-auto" : "flex"
         )}>
-          {/* Left: Video or Court (full area) */}
+          {/* Left: Video */}
           <div className={cn(
             "flex flex-col min-h-0",
             aiChatOpen

@@ -12,10 +12,12 @@ export function Header() {
 
   return (
     <header className="h-16 border-b border-border bg-background fixed top-0 left-0 right-0 z-40">
-      <div className="h-full px-6 flex items-center justify-between">
-        <div className="flex items-center gap-2.5">
-          <img src="/logo.png" alt="ProVision" className="w-5 h-5 dark:invert" />
-          <span className="text-sm font-medium tracking-wide text-foreground">ProVision</span>
+      <div className="h-full pr-6 flex items-center justify-between">
+        <div className="flex items-center shrink-0">
+          <div className="w-14 flex items-center justify-center">
+            <img src="/logo.png" alt="ProVision" className="w-8 h-8 dark:invert" />
+          </div>
+          <span className="text-base font-semibold tracking-wide text-foreground">ProVision</span>
         </div>
 
         <div className="flex items-center gap-4">

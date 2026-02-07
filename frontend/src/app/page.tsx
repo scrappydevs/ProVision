@@ -55,7 +55,7 @@ export default function LandingPage() {
       >
         <div className="max-w-7xl mx-auto flex items-center justify-between">
           <div className="flex items-center gap-2.5">
-            <img src="/logo.png" alt="ProVision" className="w-5 h-5 dark:invert" />
+            <img src="/logo.png" alt="ProVision" className="w-8 h-8 dark:invert" />
             <span className="text-sm font-medium tracking-wide">ProVision</span>
           </div>
           <div className="flex items-center gap-8">
@@ -247,7 +247,7 @@ export default function LandingPage() {
       <footer className="py-8 px-8 border-t border-border">
         <div className="max-w-5xl mx-auto flex items-center justify-between text-sm text-muted-foreground">
           <div className="flex items-center gap-2">
-            <img src="/logo.png" alt="ProVision" className="w-4 h-4 dark:invert" />
+            <img src="/logo.png" alt="ProVision" className="w-6 h-6 dark:invert" />
             <span>ProVision</span>
           </div>
           <div className="flex items-center gap-6 text-xs">

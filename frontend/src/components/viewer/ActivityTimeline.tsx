@@ -1,6 +1,6 @@
 "use client";
 
-import { memo, useMemo, useCallback, useRef } from "react";
+import { memo, useMemo, useCallback, useRef, useState } from "react";
 
 export interface ActivityMarker {
   /** Normalized position 0–1 along the timeline */
@@ -15,6 +15,8 @@ export interface ActivityMarker {
   time: number;
   /** Category for layering */
   type: "stroke" | "velocity" | "point";
+  /** Stroke subtype for color coding */
+  strokeType?: "forehand" | "backhand" | "unknown";
 }
 
 export interface ActivityRegionData {
@@ -61,26 +63,25 @@ interface ActivityTimelineProps {
 }
 
 const STROKE_COLORS = {
-  forehand: "#9B7B5B",
-  backhand: "#5B9B7B",
+  forehand: "#C49A6C",   // warm bronze/gold — forehand
+  backhand: "#5BB89B",   // teal green — backhand
   unknown: "#8A8885",
 };
 
-const POINT_COLOR = "#C45C5C";
-const VELOCITY_COLOR = "rgba(91, 123, 155, 0.5)";
+const POINT_COLOR = "#E05555";
+const VELOCITY_COLOR = "rgba(91, 123, 155, 0.45)";
 
 const REGION_COLORS: Record<string, string> = {
   rally: "rgba(91, 123, 155, 0.12)",
-  point: "rgba(196, 92, 92, 0.15)",
-  stroke_cluster: "rgba(155, 123, 91, 0.14)",
+  point: "rgba(224, 85, 85, 0.13)",
+  stroke_cluster: "rgba(196, 154, 108, 0.14)",
   high_speed: "rgba(91, 180, 180, 0.12)",
 };
 
 /**
  * ActivityTimeline — a waveform-style seek bar that shows vertical bars
  * at moments of high activity (strokes, fast ball movement, point events).
- * Styled to match the ClipSelector aesthetic with a dark background,
- * bronze accent playhead, and glass-like feel.
+ * Bars fatten on hover for easier inspection. Color-coded by stroke type.
  */
 export const ActivityTimeline = memo(function ActivityTimeline({
   currentTime,
@@ -94,6 +95,7 @@ export const ActivityTimeline = memo(function ActivityTimeline({
   onSeek,
 }: ActivityTimelineProps) {
   const timelineRef = useRef<HTMLDivElement>(null);
+  const [hoverX, setHoverX] = useState<number | null>(null); // 0-1 position
 
   // Build activity markers from all data sources
   const markers = useMemo((): ActivityMarker[] => {
@@ -102,8 +104,7 @@ export const ActivityTimeline = memo(function ActivityTimeline({
     const result: ActivityMarker[] = [];
     const maxFrame = totalFrames > 0 ? totalFrames : duration * fps;
 
-    // --- Stroke activity bars ---
-    // Each stroke generates a cluster of bars across its frame range
+    // --- Stroke activity bars (from stroke_analytics table) ---
     for (const stroke of strokes) {
       const startPos = stroke.start_frame / maxFrame;
       const endPos = stroke.end_frame / maxFrame;
@@ -130,6 +131,7 @@ export const ActivityTimeline = memo(function ActivityTimeline({
           label: `${stroke.stroke_type} — Form ${stroke.form_score.toFixed(0)}`,
           time: (startPos + t * (endPos - startPos)) * duration,
           type: "stroke",
+          strokeType: stroke.stroke_type,
         });
       }
     }
@@ -147,7 +149,7 @@ export const ActivityTimeline = memo(function ActivityTimeline({
         if (normalizedVel > 0.25) {
           result.push({
             position: pos,
-            intensity: 0.1 + normalizedVel * 0.5, // subtle background wave
+            intensity: 0.1 + normalizedVel * 0.5,
             color: VELOCITY_COLOR,
             label: `Ball speed: ${vel.toFixed(1)} px/f`,
             time: pos * duration,
@@ -163,7 +165,7 @@ export const ActivityTimeline = memo(function ActivityTimeline({
         const pos = evt.frame / maxFrame;
         result.push({
           position: Math.max(0, Math.min(1, pos)),
-          intensity: 1.0, // Always full height — critical moments
+          intensity: 1.0,
           color: POINT_COLOR,
           label: `Point — ${evt.reason.replace(/_/g, " ")}`,
           time: evt.timestamp,
@@ -213,6 +215,19 @@ export const ActivityTimeline = memo(function ActivityTimeline({
     [duration, onSeek, handleClick]
   );
 
+  // Track hover position for fatten effect
+  const handleMouseMove = useCallback((e: React.MouseEvent<HTMLDivElement>) => {
+    const el = timelineRef.current;
+    if (!el) return;
+    const rect = el.getBoundingClientRect();
+    const x = (e.clientX - rect.left) / rect.width;
+    setHoverX(Math.max(0, Math.min(1, x)));
+  }, []);
+
+  const handleMouseLeave = useCallback(() => {
+    setHoverX(null);
+  }, []);
+
   const playheadPct = duration > 0 ? (currentTime / duration) * 100 : 0;
 
   // Group markers by type for layered rendering (velocity behind, strokes in front, points on top)
@@ -220,12 +235,36 @@ export const ActivityTimeline = memo(function ActivityTimeline({
   const strokeMarkers = markers.filter((m) => m.type === "stroke");
   const pointMarkers = markers.filter((m) => m.type === "point");
 
+  // Compute fatten scale for a marker based on hover proximity
+  const getHoverScale = (pos: number): number => {
+    if (hoverX === null) return 1;
+    const dist = Math.abs(pos - hoverX);
+    // Bars within ~3% of cursor fatten, peak at cursor
+    const radius = 0.03;
+    if (dist > radius) return 1;
+    return 1 + 2.5 * (1 - dist / radius); // up to 3.5x width at cursor
+  };
+
+  // Hover tooltip text
+  const hoverLabel = useMemo(() => {
+    if (hoverX === null) return null;
+    // Find nearest stroke marker to hover position
+    const radius = 0.015;
+    const nearby = strokeMarkers.find((m) => Math.abs(m.position - hoverX) < radius);
+    if (nearby) return nearby.label;
+    const nearbyPoint = pointMarkers.find((m) => Math.abs(m.position - hoverX) < radius);
+    if (nearbyPoint) return nearbyPoint.label;
+    return null;
+  }, [hoverX, strokeMarkers, pointMarkers]);
+
   return (
     <div
       ref={timelineRef}
       className="relative h-10 rounded-lg overflow-hidden cursor-pointer select-none group"
       style={{ background: "#1C1A19" }}
       onMouseDown={handleMouseDown}
+      onMouseMove={handleMouseMove}
+      onMouseLeave={handleMouseLeave}
     >
       {/* Subtle grid lines for visual rhythm */}
       <div className="absolute inset-0 pointer-events-none opacity-[0.04]">
@@ -260,56 +299,78 @@ export const ActivityTimeline = memo(function ActivityTimeline({
       })}
 
       {/* Velocity waveform layer (behind) */}
-      {velocityMarkers.map((m, i) => (
-        <div
-          key={`v-${i}`}
-          className="absolute bottom-0 pointer-events-none"
-          style={{
-            left: `${m.position * 100}%`,
-            width: "2px",
-            height: `${m.intensity * 100}%`,
-            background: m.color,
-            transform: "translateX(-50%)",
-          }}
-        />
-      ))}
+      {velocityMarkers.map((m, i) => {
+        const scale = getHoverScale(m.position);
+        const w = 2 * scale;
+        return (
+          <div
+            key={`v-${i}`}
+            className="absolute bottom-0 pointer-events-none"
+            style={{
+              left: `${m.position * 100}%`,
+              width: `${w}px`,
+              height: `${m.intensity * 100}%`,
+              background: m.color,
+              transform: "translateX(-50%)",
+              transition: "width 80ms ease-out",
+            }}
+          />
+        );
+      })}
 
-      {/* Stroke activity bars */}
-      {strokeMarkers.map((m, i) => (
-        <div
-          key={`s-${i}`}
-          className="absolute bottom-0 transition-opacity duration-150 pointer-events-none"
-          style={{
-            left: `${m.position * 100}%`,
-            width: "3px",
-            height: `${m.intensity * 100}%`,
-            background: m.color,
-            borderRadius: "1px 1px 0 0",
-            opacity: 0.85,
-            transform: "translateX(-50%)",
-          }}
-        />
-      ))}
+      {/* Stroke activity bars — color-coded forehand/backhand */}
+      {strokeMarkers.map((m, i) => {
+        const scale = getHoverScale(m.position);
+        const baseW = 3;
+        const w = baseW * scale;
+        return (
+          <div
+            key={`s-${i}`}
+            className="absolute bottom-0 pointer-events-none"
+            style={{
+              left: `${m.position * 100}%`,
+              width: `${w}px`,
+              height: `${m.intensity * 100}%`,
+              background: m.color,
+              borderRadius: `${Math.max(1, w / 3)}px ${Math.max(1, w / 3)}px 0 0`,
+              opacity: 0.9,
+              transform: "translateX(-50%)",
+              transition: "width 80ms ease-out, border-radius 80ms ease-out",
+              boxShadow: scale > 1.5 ? `0 0 4px ${m.color}44` : "none",
+            }}
+          />
+        );
+      })}
 
       {/* Point event markers — full-height accent lines */}
-      {pointMarkers.map((m, i) => (
-        <div
-          key={`p-${i}`}
-          className="absolute top-0 bottom-0 pointer-events-none"
-          style={{
-            left: `${m.position * 100}%`,
-            width: "2px",
-            background: `linear-gradient(180deg, ${m.color}00, ${m.color}88, ${m.color}cc)`,
-            transform: "translateX(-50%)",
-          }}
-        >
-          {/* Diamond marker at top */}
+      {pointMarkers.map((m, i) => {
+        const scale = getHoverScale(m.position);
+        const w = Math.max(2, 2 * scale);
+        return (
           <div
-            className="absolute -top-0.5 left-1/2 -translate-x-1/2 w-1.5 h-1.5 rotate-45"
-            style={{ background: m.color }}
-          />
-        </div>
-      ))}
+            key={`p-${i}`}
+            className="absolute top-0 bottom-0 pointer-events-none"
+            style={{
+              left: `${m.position * 100}%`,
+              width: `${w}px`,
+              background: `linear-gradient(180deg, ${m.color}00, ${m.color}88, ${m.color}cc)`,
+              transform: "translateX(-50%)",
+              transition: "width 80ms ease-out",
+            }}
+          >
+            {/* Diamond marker at top */}
+            <div
+              className="absolute -top-0.5 left-1/2 -translate-x-1/2 rotate-45"
+              style={{
+                background: m.color,
+                width: `${Math.max(6, 6 * Math.min(scale, 2))}px`,
+                height: `${Math.max(6, 6 * Math.min(scale, 2))}px`,
+                transition: "width 80ms ease-out, height 80ms ease-out",
+              }}
+            />
+          </div>
+        );
+      })}
 
       {/* Played region tint */}
       <div
@@ -320,7 +381,7 @@ export const ActivityTimeline = memo(function ActivityTimeline({
         }}
       />
 
-      {/* Playhead — thin white line like ClipSelector */}
+      {/* Playhead — thin white line */}
       <div
         className="absolute top-0 bottom-0 z-10 pointer-events-none"
         style={{
@@ -333,10 +394,32 @@ export const ActivityTimeline = memo(function ActivityTimeline({
         <div className="absolute -top-1 left-1/2 -translate-x-1/2 w-0 h-0 border-l-[3px] border-r-[3px] border-t-[5px] border-transparent border-t-white" />
       </div>
 
-      {/* Hover tooltip zone — render time on hover */}
-      <div className="absolute inset-0 z-20 opacity-0 group-hover:opacity-100 transition-opacity pointer-events-none">
-        {/* The hover effect is handled by CSS cursor — the actual interaction is via onMouseDown */}
-      </div>
+      {/* Hover tooltip */}
+      {hoverX !== null && hoverLabel && (
+        <div
+          className="absolute z-30 pointer-events-none -top-7 px-1.5 py-0.5 rounded text-[9px] font-medium whitespace-nowrap bg-[#282729] text-[#E8E6E3] border border-[#363436] shadow-lg"
+          style={{
+            left: `${hoverX * 100}%`,
+            transform: "translateX(-50%)",
+          }}
+        >
+          {hoverLabel}
+        </div>
+      )}
+
+      {/* Hover time indicator */}
+      {hoverX !== null && (
+        <div
+          className="absolute bottom-0 z-20 pointer-events-none"
+          style={{
+            left: `${hoverX * 100}%`,
+            width: "1px",
+            height: "100%",
+            background: "rgba(255,255,255,0.15)",
+            transform: "translateX(-50%)",
+          }}
+        />
+      )}
     </div>
   );
 });
