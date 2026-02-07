@@ -72,9 +72,13 @@ export function useSession(id: string) {
     refetchInterval: (query) => {
       const data = query.state.data as Session | undefined;
       const status = data?.status;
+      const strokeStatus = data?.stroke_analysis_status;
+      const insightStatus = data?.insight_generation_status;
       const isProcessing =
         status === "processing" ||
-        status === "pending";
+        status === "pending" ||
+        strokeStatus === "processing" ||
+        insightStatus === "generating";
       return isProcessing ? SESSION_POLL_INTERVAL_MS : false;
     },
   });

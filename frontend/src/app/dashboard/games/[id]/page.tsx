@@ -72,6 +72,9 @@ const PLAYER_COLORS = [
   { name: "Player", color: "#9B7B5B", rgb: "155, 123, 91" },
   { name: "Opponent", color: "#5B9B7B", rgb: "91, 155, 123" },
 ];
+const SHOT_FLASH_WINDOW_FRAMES = 5;
+const HEAD_BADGE_SMOOTHING_ALPHA = 0.28;
+const HEAD_BADGE_VERTICAL_OFFSET_PX = 40;
 
 export default function GameViewerPage() {
   const params = useParams();
@@ -132,6 +135,7 @@ export default function GameViewerPage() {
   const [debugFlash, setDebugFlash] = useState<string | null>(null);
   const [debugCopied, setDebugCopied] = useState(false);
   const [isRecomputingAnalytics, setIsRecomputingAnalytics] = useState(false);
+  const [smoothedHeadAnchor, setSmoothedHeadAnchor] = useState<{ x: number; y: number } | null>(null);
 
   useEffect(() => {
     setDebugMode(readStrokeDebugModeSetting());
@@ -184,8 +188,13 @@ export default function GameViewerPage() {
     return raw === "pending" || raw === "running" || raw === "completed" || raw === "failed" ? raw : null;
   }, [strokePipelineDebugStats]);
   const isInsightGenerating =
-    insightStageStatus === "running" ||
-    (sessionInsightGenerating && insightStageStatus !== "completed" && insightStageStatus !== "failed");
+    (shouldPollStrokeProgress && insightStageStatus === "running") ||
+    (
+      sessionInsightGenerating &&
+      (isStrokeRecomputeProcessing || liveStrokeProgress?.status === "processing") &&
+      insightStageStatus !== "completed" &&
+      insightStageStatus !== "failed"
+    );
   const { data: strokeSummary } = useStrokeSummary(gameId, isInsightGenerating);
 
   const hasPose = !!session?.pose_video_path;
@@ -372,6 +381,29 @@ export default function GameViewerPage() {
   const lastStroke = useMemo((): Stroke | null => {
     if (!strokeSummary?.strokes?.length) return null;
     const past = strokeSummary.strokes.filter((s) => s.peak_frame <= currentFrame);
+    return past.length > 0 ? past[past.length - 1] : null;
+  }, [strokeSummary?.strokes, currentFrame]);
+
+  // Highlight only around contact so the label flickers near the hit moment.
+  const shotFlashStroke = useMemo((): Stroke | null => {
+    if (!strokeSummary?.strokes?.length) return null;
+    let best: Stroke | null = null;
+    let bestDist = Number.POSITIVE_INFINITY;
+    for (const stroke of strokeSummary.strokes) {
+      if (stroke.stroke_type !== "forehand" && stroke.stroke_type !== "backhand") continue;
+      const dist = Math.abs(currentFrame - stroke.peak_frame);
+      if (dist <= SHOT_FLASH_WINDOW_FRAMES && dist < bestDist) {
+        best = stroke;
+        bestDist = dist;
+      }
+    }
+    return best;
+  }, [strokeSummary?.strokes, currentFrame]);
+
+  const lastClassifiedStroke = useMemo((): Stroke | null => {
+    if (!strokeSummary?.strokes?.length) return null;
+    const past = strokeSummary.strokes
+      .filter((s) => (s.stroke_type === "forehand" || s.stroke_type === "backhand") && s.peak_frame <= currentFrame);
     return past.length > 0 ? past[past.length - 1] : null;
   }, [strokeSummary?.strokes, currentFrame]);
 
@@ -1114,6 +1146,74 @@ export default function GameViewerPage() {
     return persons;
   }, [hasStoredPose, poseData, currentFrame, videoW, videoH, selectedPlayerCount]);
 
+  const playerPoseForBadge = useMemo((): PersonPose | null => {
+    const source = storedPersonsForFrame.length > 0 ? storedPersonsForFrame : detectedPersons;
+    if (source.length === 0) return null;
+    const preferredPlayerId = selectedPersonIds.length > 0 ? selectedPersonIds[0] : source[0].id;
+    return source.find((p) => p.id === preferredPlayerId) ?? source[0] ?? null;
+  }, [storedPersonsForFrame, detectedPersons, selectedPersonIds]);
+
+  const rawHeadAnchor = useMemo((): { x: number; y: number } | null => {
+    const person = playerPoseForBadge;
+    if (person?.keypoints?.length) {
+      const normalize = (name: string) => name.trim().toLowerCase().replace(/\s+/g, "_");
+      const keypointsByName = new Map(
+        person.keypoints.map((kp) => [normalize(kp.name || ""), kp] as const)
+      );
+      const headNames = ["nose", "head", "forehead", "left_eye", "right_eye", "left_ear", "right_ear"];
+      const points: Array<{ x: number; y: number }> = [];
+      for (const name of headNames) {
+        const kp = keypointsByName.get(name);
+        if (!kp || (kp.conf ?? 0) < 0.2) continue;
+        points.push({ x: kp.x, y: kp.y });
+      }
+      if (points.length > 0) {
+        const avgX = points.reduce((sum, p) => sum + p.x, 0) / points.length;
+        const minY = points.reduce((min, p) => Math.min(min, p.y), Number.POSITIVE_INFINITY);
+        return { x: avgX, y: Number.isFinite(minY) ? minY : points[0].y };
+      }
+      if (Array.isArray(person.bbox) && person.bbox.length === 4) {
+        const [x1, y1, x2] = person.bbox;
+        return { x: (x1 + x2) / 2, y: y1 };
+      }
+    }
+
+    const fallback = segmentedPlayers.find((p) => p.visible);
+    if (fallback) {
+      return { x: fallback.clickX, y: fallback.clickY };
+    }
+
+    return null;
+  }, [playerPoseForBadge, segmentedPlayers]);
+
+  useEffect(() => {
+    if (!rawHeadAnchor) return;
+    setSmoothedHeadAnchor((prev) => {
+      if (!prev) return rawHeadAnchor;
+      return {
+        x: prev.x + (rawHeadAnchor.x - prev.x) * HEAD_BADGE_SMOOTHING_ALPHA,
+        y: prev.y + (rawHeadAnchor.y - prev.y) * HEAD_BADGE_SMOOTHING_ALPHA,
+      };
+    });
+  }, [rawHeadAnchor, currentFrame]);
+
+  useEffect(() => {
+    setSmoothedHeadAnchor(null);
+  }, [videoUrl]);
+
+  const floatingShotBadge = useMemo((): { x: number; y: number } | null => {
+    if (!videoBounds || !smoothedHeadAnchor || videoW <= 0 || videoH <= 0) return null;
+    const nx = smoothedHeadAnchor.x / videoW;
+    const ny = smoothedHeadAnchor.y / videoH;
+    if (!Number.isFinite(nx) || !Number.isFinite(ny)) return null;
+
+    const rawX = videoBounds.left + nx * videoBounds.width;
+    const rawY = videoBounds.top + ny * videoBounds.height - HEAD_BADGE_VERTICAL_OFFSET_PX;
+    const x = Math.max(videoBounds.left + 52, Math.min(videoBounds.right - 52, rawX));
+    const y = Math.max(videoBounds.top + 14, rawY);
+    return { x, y };
+  }, [videoBounds, smoothedHeadAnchor, videoW, videoH]);
+
   // Use stored data when available, otherwise fall back to live detection
   useEffect(() => {
     if (showPoseOverlay && storedPersonsForFrame.length > 0) {
@@ -1491,33 +1591,39 @@ export default function GameViewerPage() {
                   onTipChange={handleTipChange}
                 />
 
-                {/* Live Stroke Indicator - Top-left of video */}
-                {(hasStrokes || poseData?.frames?.length) && (
+                {/* Floating shot label above player's head */}
+                {(hasStrokes || poseData?.frames?.length) && floatingShotBadge && (
                   <div
-                    className="absolute top-1/3 left-4 pointer-events-none"
-                    style={{ zIndex: 100 }}
+                    className="fixed pointer-events-none"
+                    style={{
+                      zIndex: 110,
+                      left: `${floatingShotBadge.x}px`,
+                      top: `${floatingShotBadge.y}px`,
+                      transform: "translate(-50%, -100%)",
+                    }}
                   >
-                    <div className="glass-shot-card px-4 py-2">
-                      <div className="flex items-center gap-2.5">
-                        <div className={cn(
-                          "w-2 h-2 rounded-full shrink-0",
-                          activeStroke
-                            ? activeStroke.stroke_type === "forehand"
-                              ? "bg-[#9B7B5B] animate-pulse"
-                              : "bg-[#5B9B7B] animate-pulse"
-                            : lastStroke
-                              ? lastStroke.stroke_type === "forehand"
-                                ? "bg-[#9B7B5B]"
-                                : "bg-[#5B9B7B]"
-                              : "bg-[#363436]"
-                        )} />
-                        <span className="text-xs font-medium text-[#E8E6E3] leading-tight capitalize whitespace-nowrap">
-                          {activeStroke
-                            ? activeStroke.stroke_type
-                            : lastStroke
-                              ? `Last ${lastStroke.stroke_type}`
-                              : "Ready"
-                          }
+                    <div className="glass-shot-card px-3.5 py-1.5">
+                      <div className="flex items-center gap-2">
+                        <div
+                          className={cn(
+                            "w-2 h-2 rounded-full shrink-0",
+                            shotFlashStroke
+                              ? shotFlashStroke.stroke_type === "forehand"
+                                ? "bg-[#9B7B5B] animate-pulse"
+                                : "bg-[#5B9B7B] animate-pulse"
+                              : lastClassifiedStroke
+                                ? lastClassifiedStroke.stroke_type === "forehand"
+                                  ? "bg-[#9B7B5B]"
+                                  : "bg-[#5B9B7B]"
+                                : "bg-[#4A4947]"
+                          )}
+                        />
+                        <span className="text-[11px] font-medium text-[#E8E6E3] leading-tight capitalize whitespace-nowrap">
+                          {shotFlashStroke
+                            ? shotFlashStroke.stroke_type
+                            : lastClassifiedStroke
+                              ? `Last ${lastClassifiedStroke.stroke_type}`
+                              : "Ready"}
                         </span>
                       </div>
                     </div>
