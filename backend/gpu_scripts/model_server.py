@@ -980,12 +980,78 @@ async def tracknet_track(request: SAM2TrackRequest):
     
     from scipy.spatial import distance
 
+    # === Pre-merge: Physics-based motion validation ===
+    # Reject detections that are physically impossible (teleports to wrong objects)
+    # Ping pong ball max speed ~30-40 m/s, at 1920px width ~= 2m → ~30-60 px/frame at 30fps
+    MAX_BALL_SPEED_PX_PER_FRAME = 80  # Conservative upper bound for 30fps
+
+    def is_physically_plausible(new_pt, prev_pt, prev2_pt, confidence):
+        """Check if detection is physically plausible given recent history."""
+        if new_pt[0] is None or prev_pt[0] is None:
+            return True  # No history to validate against
+
+        # Distance from previous frame
+        dist_from_prev = distance.euclidean(new_pt, prev_pt)
+
+        # Reject obvious teleports (>80px in one frame at 30fps)
+        if dist_from_prev > MAX_BALL_SPEED_PX_PER_FRAME:
+            # Only accept if confidence is very high (0.8+) — might be a smash
+            if confidence < 0.8:
+                return False
+
+        # If we have 2+ history points, check velocity consistency
+        if prev2_pt[0] is not None:
+            # Expected position based on constant velocity
+            pred_x = prev_pt[0] + (prev_pt[0] - prev2_pt[0])
+            pred_y = prev_pt[1] + (prev_pt[1] - prev2_pt[1])
+            pred_pt = (pred_x, pred_y)
+
+            # How far is detection from predicted position?
+            pred_error = distance.euclidean(new_pt, pred_pt)
+
+            # Reject if deviation is too large (ball changed direction impossibly)
+            # Allow more deviation if confidence is high
+            max_deviation = 60 if confidence > 0.7 else 40
+            if pred_error > max_deviation:
+                return False
+
+        return True
+
+    # Validate forward and backward tracks before merging
+    validated_fwd = []
+    validated_bwd = []
+    for i in range(n):
+        fwd_pt = fwd_track[i] if i < len(fwd_track) else (None, None)
+        fc = fwd_conf[i] if i < len(fwd_conf) else 0.0
+        prev_fwd = validated_fwd[i-1] if i > 0 and len(validated_fwd) > i-1 else (None, None)
+        prev2_fwd = validated_fwd[i-2] if i > 1 and len(validated_fwd) > i-2 else (None, None)
+
+        if fwd_pt[0] is not None and not is_physically_plausible(fwd_pt, prev_fwd, prev2_fwd, fc):
+            validated_fwd.append((None, None))
+        else:
+            validated_fwd.append(fwd_pt)
+
+    for i in range(n):
+        bwd_pt = bwd_track[i] if i < len(bwd_track) else (None, None)
+        bc = bwd_conf[i] if i < len(bwd_conf) else 0.0
+        prev_bwd = validated_bwd[i-1] if i > 0 and len(validated_bwd) > i-1 else (None, None)
+        prev2_bwd = validated_bwd[i-2] if i > 1 and len(validated_bwd) > i-2 else (None, None)
+
+        if bwd_pt[0] is not None and not is_physically_plausible(bwd_pt, prev_bwd, prev2_bwd, bc):
+            validated_bwd.append((None, None))
+        else:
+            validated_bwd.append(bwd_pt)
+
+    rejected_fwd = sum(1 for i in range(n) if fwd_track[i][0] is not None and validated_fwd[i][0] is None)
+    rejected_bwd = sum(1 for i in range(n) if bwd_track[i][0] is not None and validated_bwd[i][0] is None)
+    logger.info(f"Motion validation: rejected {rejected_fwd} forward, {rejected_bwd} backward detections")
+
     # === Merge: higher confidence wins, fill gaps from either ===
     ball_track = [(None, None)] * n
     conf_track = [0.0] * n
     for i in range(n):
-        fwd_pt = fwd_track[i] if i < len(fwd_track) else (None, None)
-        bwd_pt = bwd_track[i] if i < len(bwd_track) else (None, None)
+        fwd_pt = validated_fwd[i]  # Use validated tracks
+        bwd_pt = validated_bwd[i]
         fc = fwd_conf[i] if i < len(fwd_conf) else 0.0
         bc = bwd_conf[i] if i < len(bwd_conf) else 0.0
         prev_pt = ball_track[i - 1] if i > 0 else (None, None)
@@ -996,7 +1062,7 @@ async def tracknet_track(request: SAM2TrackRequest):
                 prev_pt[0] + (prev_pt[0] - prev2_pt[0]),
                 prev_pt[1] + (prev_pt[1] - prev2_pt[1]),
             )
-        
+
         if fwd_pt[0] is not None and bwd_pt[0] is not None:
             if pred_pt[0] is not None:
                 df = distance.euclidean(pred_pt, fwd_pt)
