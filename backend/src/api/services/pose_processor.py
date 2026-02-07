@@ -243,13 +243,14 @@ class PoseProcessor:
 
         return preview
 
-    def _find_closest_player(self, results, last_center: Dict[str, float]) -> Optional[int]:
+    def _find_closest_player(self, results, last_center: Dict[str, float], exclude_indices: List[int] = None) -> Optional[int]:
         """
         Find the player closest to the last tracked position.
 
         Args:
             results: Pose detection results
             last_center: Last known center position {"x": float, "y": float}
+            exclude_indices: List of indices to exclude from matching
 
         Returns:
             Index of closest player or None
@@ -257,11 +258,17 @@ class PoseProcessor:
         if results[0].boxes is None or len(results[0].boxes) == 0:
             return None
 
+        if exclude_indices is None:
+            exclude_indices = []
+
         boxes = results[0].boxes
         min_dist = float('inf')
-        closest_idx = 0
+        closest_idx = None
 
         for idx, box in enumerate(boxes):
+            if idx in exclude_indices:
+                continue
+                
             bbox = box.xyxy[0].cpu().numpy()
             center_x = (bbox[0] + bbox[2]) / 2
             center_y = (bbox[1] + bbox[3]) / 2
@@ -353,9 +360,9 @@ class PoseProcessor:
                     
                     if opponent_center and len(keypoints_data) > 1:
                         # Find closest to opponent center (excluding player_idx)
-                        opp_idx = self._find_closest_player(results, opponent_center)
-                        # Make sure we don't track the same person twice
-                        if opp_idx == player_idx:
+                        opp_idx = self._find_closest_player(results, opponent_center, exclude_indices=[player_idx])
+                        if opp_idx is None and len(keypoints_data) > 1:
+                            # Fallback: pick any other person
                             opp_idx = 1 if player_idx == 0 else 0
                     elif len(keypoints_data) > 1:
                         # No opponent selected - pick the other person
@@ -511,9 +518,9 @@ class PoseProcessor:
                                 player_idx = 0
                             
                             if opponent_center and len(keypoints_data) > 1:
-                                opp_idx = self._find_closest_player(results, opponent_center)
-                                # Make sure we don't track the same person twice
-                                if opp_idx == player_idx:
+                                opp_idx = self._find_closest_player(results, opponent_center, exclude_indices=[player_idx])
+                                if opp_idx is None and len(keypoints_data) > 1:
+                                    # Fallback: pick any other person
                                     opp_idx = 1 if player_idx == 0 else 0
                             elif len(keypoints_data) > 1:
                                 opp_idx = 1 if player_idx == 0 else 0
