@@ -1,12 +1,24 @@
 import asyncio
 import os
+import sys
 from datetime import datetime
 from typing import Optional
 
 import httpx
+from supabase import create_client, Client
+import importlib.util
 
-from src.api.database.supabase import get_supabase
-from src.api.services.ittf_service import fetch_ittf_player_data
+SCRIPT_DIR = os.path.dirname(__file__)
+SRC_DIR = os.path.abspath(os.path.join(SCRIPT_DIR, "..", "src"))
+
+ITTF_PATH = os.path.join(SRC_DIR, "api", "services", "ittf_service.py")
+spec = importlib.util.spec_from_file_location("ittf_service", ITTF_PATH)
+ittf_service = importlib.util.module_from_spec(spec) if spec else None
+if not spec or not ittf_service:
+    raise RuntimeError("Unable to load ittf_service module")
+spec.loader.exec_module(ittf_service)
+
+fetch_ittf_player_data = ittf_service.fetch_ittf_player_data
 
 
 PRO_ITTF_IDS = [
@@ -91,7 +103,11 @@ async def seed_ittf_pros() -> None:
     if not coach_id:
         raise ValueError("Set PROVISION_COACH_ID or COACH_ID to seed pro players.")
 
-    supabase = get_supabase()
+    supabase_url = os.getenv("SUPABASE_URL")
+    supabase_key = os.getenv("SUPABASE_SERVICE_ROLE_KEY")
+    if not supabase_url or not supabase_key:
+        raise ValueError("SUPABASE_URL and SUPABASE_SERVICE_ROLE_KEY must be set")
+    supabase: Client = create_client(supabase_url, supabase_key)
 
     for ittf_id in PRO_ITTF_IDS:
         existing = supabase.table("players").select("id").eq("ittf_id", ittf_id).execute()
