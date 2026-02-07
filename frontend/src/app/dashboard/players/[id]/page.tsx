@@ -141,6 +141,8 @@ export default function PlayerProfilePage() {
     setAIChatContext({
       playerId,
       playerName: player.name,
+      playerNationality: player.ittf_data?.nationality,
+      playerAvatar: player.avatar_url,
       sessionId: undefined,
       sessionName: undefined,
       recordings: recordings?.map((r) => ({
@@ -148,6 +150,9 @@ export default function PlayerProfilePage() {
         title: r.title,
         type: r.type,
         session_id: r.session_id,
+        video_path: r.video_path,
+        thumbnail_path: r.thumbnail_path,
+        duration: r.duration,
       })),
       tips: [
         { title: "Forehand acceleration", summary: "Explosive hip rotation and clean wrist snap on fast rallies.", kind: "strength" },

@@ -12,11 +12,21 @@ export interface AIChatContextData {
   /** Player currently being viewed (profile or game analysis) */
   playerId?: string;
   playerName?: string;
+  playerNationality?: string;
+  playerAvatar?: string;
   /** Current game session being viewed */
   sessionId?: string;
   sessionName?: string;
   /** Recordings for the current player */
-  recordings?: Array<{ id: string; title: string; type: string; session_id?: string }>;
+  recordings?: Array<{
+    id: string;
+    title: string;
+    type: string;
+    session_id?: string;
+    video_path?: string;
+    thumbnail_path?: string;
+    duration?: number;
+  }>;
   /** Tips/insights available */
   tips?: Array<{ title: string; summary: string; kind: string }>;
   /** Stroke summary for current session */
@@ -60,7 +70,7 @@ export function useAIChat() {
 const WELCOME_MESSAGE: ChatMessage = {
   role: "assistant",
   content:
-    "I'm your AI coaching analyst. Ask me about technique, form, training tips, or anything about this player's game.",
+    "Ask me anything — technique breakdowns, training plans, match observations, or strategy tips.",
 };
 
 export function AIChatProvider({ children }: { children: ReactNode }) {
