@@ -113,6 +113,7 @@ export interface Player {
   position?: string;
   team?: string;
   notes?: string;
+  description?: string;
   handedness: "left" | "right";
   is_active: boolean;
   ittf_id?: number;
@@ -128,6 +129,7 @@ export interface PlayerCreate {
   position?: string;
   team?: string;
   notes?: string;
+  description?: string;
   is_active?: boolean;
   ittf_id?: number;
 }
@@ -137,6 +139,7 @@ export interface PlayerUpdate {
   position?: string;
   team?: string;
   notes?: string;
+  description?: string;
   handedness?: "left" | "right";
   is_active?: boolean;
   ittf_id?: number;

@@ -5,7 +5,7 @@ import { usePathname } from "next/navigation";
 import { cn } from "@/lib/utils";
 import { Switch } from "@heroui/react";
 import { useTheme } from "next-themes";
-import { Users, Gamepad2, Trophy, Settings, PanelLeftClose, PanelLeftOpen, Sun, Moon } from "lucide-react";
+import { Users, Gamepad2, Trophy, Settings, PanelLeftClose, PanelLeftOpen, Sun, Moon, Swords } from "lucide-react";
 
 interface SidebarProps {
   isOpen: boolean;
@@ -16,6 +16,7 @@ interface SidebarProps {
 
 const navigation = [
   { name: "Players", href: "/dashboard", icon: Users },
+  { name: "Compare", href: "/dashboard/compare", icon: Swords },
   { name: "Teams", href: "/dashboard/teams", icon: Gamepad2 },
   { name: "Tournaments", href: "/dashboard/tournaments", icon: Trophy },
   { name: "Settings", href: "/dashboard/settings", icon: Settings },

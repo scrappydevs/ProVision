@@ -20,6 +20,7 @@ class PlayerResponse(BaseModel):
     position: Optional[str] = None
     team: Optional[str] = None
     notes: Optional[str] = None
+    description: Optional[str] = None
     handedness: str = "right"
     is_active: bool = True
     ittf_id: Optional[int] = None
@@ -35,6 +36,7 @@ class PlayerCreate(BaseModel):
     position: Optional[str] = None
     team: Optional[str] = None
     notes: Optional[str] = None
+    description: Optional[str] = None
     handedness: str = "right"
     is_active: bool = True
     ittf_id: Optional[int] = None
@@ -45,6 +47,7 @@ class PlayerUpdate(BaseModel):
     position: Optional[str] = None
     team: Optional[str] = None
     notes: Optional[str] = None
+    description: Optional[str] = None
     handedness: Optional[str] = None
     is_active: Optional[bool] = None
     ittf_id: Optional[int] = None
@@ -177,6 +180,7 @@ async def create_player(
         "position": player.position,
         "team": player.team,
         "notes": player.notes,
+        "description": player.description,
         "handedness": player.handedness,
         "is_active": player.is_active,
         "ittf_id": player.ittf_id,

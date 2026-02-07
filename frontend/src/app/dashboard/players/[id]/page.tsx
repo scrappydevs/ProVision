@@ -80,6 +80,8 @@ export default function PlayerProfilePage() {
   const [recordingType, setRecordingType] = useState<RecordingType>("match");
   const [recordingDescription, setRecordingDescription] = useState("");
   const [analyzingRecordingId, setAnalyzingRecordingId] = useState<string | null>(null);
+  const [editingDescription, setEditingDescription] = useState(false);
+  const [descriptionDraft, setDescriptionDraft] = useState("");
   const { data: player, isLoading: playerLoading } = usePlayer(playerId);
   const { data: games, isLoading: gamesLoading } = usePlayerGames(playerId, {
     search: searchQuery || undefined,
@@ -144,6 +146,12 @@ export default function PlayerProfilePage() {
     });
     return () => clearAIChatContext();
   }, [player, recordings, playerId, setAIChatContext, clearAIChatContext]);
+
+  useEffect(() => {
+    if (!player) return;
+    setDescriptionDraft(player.description ?? "");
+    setEditingDescription(false);
+  }, [player?.description, player]);
 
   const handleAvatarUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
@@ -443,6 +451,61 @@ export default function PlayerProfilePage() {
                 <span className={player.handedness === "right" ? "text-primary font-semibold" : ""}>Right</span>
               </button>
             </div>
+          </div>
+
+          {/* Player description */}
+          <div className="max-w-[700px] mb-8">
+            <div className="flex items-center justify-between mb-2">
+              <h2 className="text-xs uppercase tracking-[0.3em] text-foreground/50">
+                Player Description
+              </h2>
+              <button
+                onClick={() => setEditingDescription((prev) => !prev)}
+                className="flex items-center gap-1 text-[10px] uppercase tracking-[0.2em] text-foreground/50 hover:text-foreground transition-colors"
+              >
+                <Edit2 className="w-3 h-3" />
+                {editingDescription ? "Close" : "Edit"}
+              </button>
+            </div>
+            {editingDescription ? (
+              <div className="space-y-3">
+                <textarea
+                  value={descriptionDraft}
+                  onChange={(e) => setDescriptionDraft(e.target.value)}
+                  rows={4}
+                  placeholder="Two short paragraphs describing strengths, weaknesses, and playing style."
+                  className="w-full px-3 py-2 bg-background rounded-lg text-foreground placeholder-muted-foreground text-sm focus:outline-none focus:ring-1 focus:ring-primary/50 resize-none"
+                />
+                <div className="flex items-center gap-2">
+                  <Button
+                    size="sm"
+                    onClick={() => {
+                      updatePlayerMutation.mutate({
+                        id: playerId,
+                        data: { description: descriptionDraft.trim() },
+                      });
+                      setEditingDescription(false);
+                    }}
+                  >
+                    Save
+                  </Button>
+                  <Button
+                    size="sm"
+                    variant="ghost"
+                    onClick={() => {
+                      setDescriptionDraft(player.description ?? "");
+                      setEditingDescription(false);
+                    }}
+                  >
+                    Cancel
+                  </Button>
+                </div>
+              </div>
+            ) : (
+              <p className="text-sm text-foreground/70 whitespace-pre-line leading-relaxed">
+                {player.description || "Add a short two-paragraph description covering strengths, weaknesses, and playing style."}
+              </p>
+            )}
           </div>
 
           {/* Tips - two column layout under name */}

@@ -25,6 +25,7 @@ export function PlayerForm({
   const [position, setPosition] = useState(initialData?.position ?? "");
   const [team, setTeam] = useState(initialData?.team ?? "");
   const [notes, setNotes] = useState(initialData?.notes ?? "");
+  const [description, setDescription] = useState(initialData?.description ?? "");
   const [avatarFile, setAvatarFile] = useState<File | null>(null);
   const [avatarPreview, setAvatarPreview] = useState<string | null>(null);
 
@@ -46,6 +47,7 @@ export function PlayerForm({
         position: position.trim() || undefined,
         team: team.trim() || undefined,
         notes: notes.trim() || undefined,
+        description: description.trim() || undefined,
       },
       avatarFile ?? undefined
     );
@@ -153,6 +155,20 @@ export function PlayerForm({
               onChange={(e) => setNotes(e.target.value)}
               placeholder="Optional notes about the player..."
               rows={2}
+              className="w-full px-3 py-2 bg-background border border-border rounded-lg text-foreground placeholder-muted-foreground focus:outline-none focus:border-primary resize-none"
+            />
+          </div>
+
+          {/* Description */}
+          <div>
+            <label className="block text-sm font-medium text-foreground mb-2">
+              Player Description
+            </label>
+            <textarea
+              value={description}
+              onChange={(e) => setDescription(e.target.value)}
+              placeholder="Two short paragraphs covering strengths, weaknesses, and playing style..."
+              rows={4}
               className="w-full px-3 py-2 bg-background border border-border rounded-lg text-foreground placeholder-muted-foreground focus:outline-none focus:border-primary resize-none"
             />
           </div>

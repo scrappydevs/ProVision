@@ -344,6 +344,28 @@ export default function GameViewerPage() {
     return match?.seekTime ?? match?.timestamp ?? null;
   }, [tipParam, videoTips]);
 
+  const strokeMarkers = useMemo(() => {
+    if (!strokeSummary?.strokes?.length) return [];
+    return strokeSummary.strokes.map((stroke) => ({
+      id: stroke.id,
+      time: stroke.peak_frame / fps,
+      type: stroke.stroke_type,
+      formScore: stroke.form_score,
+      frame: stroke.peak_frame,
+    }));
+  }, [strokeSummary?.strokes, fps]);
+
+  const pointMarkers = useMemo(() => {
+    if (!pointEvents.length) return [];
+    return pointEvents.map((evt, index) => ({
+      id: `point-${evt.frame}-${index}`,
+      time: evt.frame / fps,
+      index: index + 1,
+      reason: evt.reason,
+      frame: evt.frame,
+    }));
+  }, [pointEvents, fps]);
+
   const autoSeekTime = startTimeParam ?? tipSeekTime;
   const shouldAutoPlay = startTimeParam !== null && startTimeParam !== undefined;
 
@@ -1226,8 +1248,60 @@ export default function GameViewerPage() {
               <div className="rounded-xl bg-[#282729] p-2.5">
               <div className="flex items-center gap-3 mb-1.5">
                 <span className="text-[10px] text-[#6A6865] w-10">{fmtTime(currentTime)}</span>
-                <input type="range" min={0} max={duration || 100} step={0.01} value={currentTime} onChange={handleSeek}
-                  className="flex-1 h-1 bg-[#363436] rounded-full appearance-none cursor-pointer [&::-webkit-slider-thumb]:appearance-none [&::-webkit-slider-thumb]:w-2.5 [&::-webkit-slider-thumb]:h-2.5 [&::-webkit-slider-thumb]:bg-[#9B7B5B] [&::-webkit-slider-thumb]:rounded-full" />
+                <div className="relative flex-1">
+                  <div className="absolute inset-x-0 -top-1.5 h-2 pointer-events-none">
+                    {duration > 0 && strokeMarkers.map((marker) => {
+                      const pct = Math.min(1, Math.max(0, marker.time / duration));
+                      const isActive = activeStroke?.id === marker.id;
+                      const color = marker.type === "forehand" ? "#9B7B5B"
+                        : marker.type === "backhand" ? "#5B9B7B"
+                        : "#8A8885";
+                      return (
+                        <button
+                          key={marker.id}
+                          onClick={() => {
+                            if (videoRef.current) videoRef.current.currentTime = marker.time;
+                          }}
+                          className={cn(
+                            "absolute top-0 -translate-x-1/2 h-2 w-1 rounded-full pointer-events-auto transition-transform",
+                            isActive ? "scale-125" : "hover:scale-110"
+                          )}
+                          style={{ left: `${pct * 100}%`, backgroundColor: color }}
+                          title={`${marker.type} — Frame ${marker.frame} — Form ${marker.formScore.toFixed(0)}`}
+                          aria-label={`${marker.type} stroke at ${fmtTime(marker.time)}`}
+                        />
+                      );
+                    })}
+                    {duration > 0 && pointMarkers.map((marker) => {
+                      const pct = Math.min(1, Math.max(0, marker.time / duration));
+                      const isActive = activePointEvent?.frame === marker.frame;
+                      return (
+                        <button
+                          key={marker.id}
+                          onClick={() => {
+                            if (videoRef.current) videoRef.current.currentTime = marker.time;
+                          }}
+                          className={cn(
+                            "absolute top-0 -translate-x-1/2 h-2.5 w-1 rounded-full pointer-events-auto transition-transform",
+                            isActive ? "scale-125" : "hover:scale-125"
+                          )}
+                          style={{ left: `${pct * 100}%`, backgroundColor: "#C45C5C" }}
+                          title={`Point ${marker.index} — Frame ${marker.frame} — ${marker.reason.replace(/_/g, " ")}`}
+                          aria-label={`Point ${marker.index} at ${fmtTime(marker.time)}`}
+                        />
+                      );
+                    })}
+                  </div>
+                  <input
+                    type="range"
+                    min={0}
+                    max={duration || 100}
+                    step={0.01}
+                    value={currentTime}
+                    onChange={handleSeek}
+                    className="w-full h-1 bg-[#363436] rounded-full appearance-none cursor-pointer [&::-webkit-slider-thumb]:appearance-none [&::-webkit-slider-thumb]:w-2.5 [&::-webkit-slider-thumb]:h-2.5 [&::-webkit-slider-thumb]:bg-[#9B7B5B] [&::-webkit-slider-thumb]:rounded-full"
+                  />
+                </div>
                 <span className="text-[10px] text-[#6A6865] w-10 text-right">{fmtTime(duration)}</span>
               </div>
               <div className="flex items-center justify-between">
@@ -1499,73 +1573,6 @@ export default function GameViewerPage() {
                                 <span className="text-[#E8E6E3] font-mono">{strokeSummary?.consistency_score?.toFixed(1)}</span>
                               </div>
                             </div>
-
-                            {/* Stroke timeline — each stroke as a mini pill */}
-                            <div>
-                              <p className="text-[10px] text-[#6A6865] uppercase tracking-wider mb-1.5">Stroke Timeline</p>
-                              <div className="flex flex-wrap gap-1">
-                                {strokeSummary?.strokes.map((s, i) => {
-                                  const isActive = activeStroke?.id === s.id;
-                                  const color = s.stroke_type === "forehand" ? "#9B7B5B"
-                                    : s.stroke_type === "backhand" ? "#5B9B7B"
-                                    : "#8A8885";
-                                  return (
-                                    <button
-                                      key={s.id}
-                                      onClick={() => {
-                                        if (videoRef.current) videoRef.current.currentTime = s.peak_frame / fps;
-                                      }}
-                                      className={cn(
-                                        "px-1.5 py-0.5 rounded text-[9px] font-medium transition-all cursor-pointer",
-                                        isActive ? "ring-1 scale-110" : "opacity-70 hover:opacity-100"
-                                      )}
-                                      style={{
-                                        backgroundColor: `${color}20`,
-                                        color,
-                                        ...(isActive ? { ringColor: color } : {}),
-                                      }}
-                                      title={`${s.stroke_type} — Frame ${s.peak_frame} — Form ${s.form_score.toFixed(0)}`}
-                                    >
-                                      {s.stroke_type === "forehand" ? "FH" : s.stroke_type === "backhand" ? "BH" : "?"}
-                                    </button>
-                                  );
-                                })}
-                              </div>
-                            </div>
-
-                            {/* Point timeline — each point as a mini pill */}
-                            {pointEvents.length > 0 && (
-                              <div>
-                                <p className="text-[10px] text-[#6A6865] uppercase tracking-wider mb-1.5">
-                                  Point Timeline ({pointEvents.length})
-                                </p>
-                                <div className="flex flex-wrap gap-1">
-                                  {pointEvents.map((evt, i) => {
-                                    const isActive = activePointEvent?.frame === evt.frame;
-                                    return (
-                                      <button
-                                        key={`${evt.frame}-${i}`}
-                                        onClick={() => {
-                                          if (videoRef.current) videoRef.current.currentTime = evt.frame / fps;
-                                        }}
-                                        className={cn(
-                                          "px-1.5 py-0.5 rounded text-[9px] font-medium transition-all cursor-pointer",
-                                          isActive ? "ring-1 scale-110" : "opacity-70 hover:opacity-100"
-                                        )}
-                                        style={{
-                                          backgroundColor: "#C45C5C20",
-                                          color: "#C45C5C",
-                                          ...(isActive ? { ringColor: "#C45C5C" } : {}),
-                                        }}
-                                        title={`Point — Frame ${evt.frame} — ${evt.reason.replace(/_/g, " ")}`}
-                                      >
-                                        P{i + 1}
-                                      </button>
-                                    );
-                                  })}
-                                </div>
-                              </div>
-                            )}
 
                             {/* All Insights throughout the video */}
                             {videoTips.length > 0 && (
