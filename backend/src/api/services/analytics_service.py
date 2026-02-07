@@ -723,6 +723,177 @@ def compute_correlations(
     }
 
 
+def compute_activity_regions(
+    trajectory_data: Dict[str, Any],
+    stroke_data: List[Dict[str, Any]],
+    rallies: List[Dict[str, Any]],
+    point_events: List[Dict[str, Any]],
+    fps: float = 30.0,
+) -> List[Dict[str, Any]]:
+    """
+    Combine ball speed, strokes, rallies, and point events into scored
+    activity regions that the frontend can display on the timeline.
+
+    Returns a list of dicts:
+      {start_frame, end_frame, start_time, end_time, peak_score, type, label}
+    """
+    velocity = trajectory_data.get("velocity", [])
+    frames_list = trajectory_data.get("frames", [])
+    total_frames = len(velocity) if velocity else (len(frames_list) if frames_list else 0)
+    if total_frames < 2:
+        return []
+
+    import math
+
+    # 1. Build per-frame activity score array
+    scores = [0.0] * total_frames
+
+    # --- Ball speed (weight 0.2) ---
+    if velocity:
+        max_vel = max(velocity) if velocity else 1.0
+        if max_vel > 0:
+            for i, v in enumerate(velocity):
+                if i < total_frames:
+                    scores[i] += 0.2 * (v / max_vel)
+
+    # --- Stroke presence (weight 0.4) ---
+    for stroke in stroke_data:
+        sf = int(stroke.get("start_frame", 0))
+        ef = int(stroke.get("end_frame", sf))
+        pf = int(stroke.get("peak_frame", (sf + ef) // 2))
+        span = max(1, ef - sf)
+        for f in range(max(0, sf), min(total_frames, ef + 1)):
+            peak_t = (pf - sf) / span if span > 0 else 0.5
+            t = (f - sf) / span if span > 0 else 0.5
+            dist = abs(t - peak_t)
+            gaussian = math.exp(-(dist * dist) / 0.08)
+            scores[f] += 0.4 * gaussian
+
+    # --- Rally activity (weight 0.2) ---
+    for rally in rallies:
+        sf = int(rally.get("start_frame", 0))
+        ef = int(rally.get("end_frame", sf))
+        for f in range(max(0, sf), min(total_frames, ef + 1)):
+            scores[f] += 0.2
+
+    # --- Point events (weight 0.2, spike with decay) ---
+    for evt in point_events:
+        pf = int(evt.get("frame", 0))
+        decay_radius = int(fps * 0.5)  # half-second decay
+        for offset in range(-decay_radius, decay_radius + 1):
+            f = pf + offset
+            if 0 <= f < total_frames:
+                decay = math.exp(-(offset * offset) / (2.0 * (decay_radius / 2.5) ** 2))
+                scores[f] += 0.2 * decay
+
+    # 2. Smooth with sliding window (5 frames)
+    window = 5
+    smoothed = [0.0] * total_frames
+    for i in range(total_frames):
+        lo = max(0, i - window // 2)
+        hi = min(total_frames, i + window // 2 + 1)
+        smoothed[i] = sum(scores[lo:hi]) / (hi - lo)
+
+    # 3. Find contiguous regions above threshold
+    threshold = 0.25
+    raw_regions: List[Dict[str, Any]] = []
+    in_region = False
+    region_start = 0
+    region_peak = 0.0
+
+    for i, s in enumerate(smoothed):
+        if s >= threshold:
+            if not in_region:
+                in_region = True
+                region_start = i
+                region_peak = s
+            else:
+                region_peak = max(region_peak, s)
+        else:
+            if in_region:
+                raw_regions.append({
+                    "start_frame": region_start,
+                    "end_frame": i - 1,
+                    "peak_score": round(region_peak, 3),
+                })
+                in_region = False
+    if in_region:
+        raw_regions.append({
+            "start_frame": region_start,
+            "end_frame": total_frames - 1,
+            "peak_score": round(region_peak, 3),
+        })
+
+    # 4. Merge nearby regions (gap < 15 frames)
+    merge_gap = 15
+    merged: List[Dict[str, Any]] = []
+    for r in raw_regions:
+        if merged and r["start_frame"] - merged[-1]["end_frame"] <= merge_gap:
+            merged[-1]["end_frame"] = r["end_frame"]
+            merged[-1]["peak_score"] = max(merged[-1]["peak_score"], r["peak_score"])
+        else:
+            merged.append(dict(r))
+
+    # 5. Classify each region and add time info
+    # Build lookup sets for fast overlap checks
+    point_frames = set(int(evt.get("frame", 0)) for evt in point_events)
+    rally_ranges = [(int(r.get("start_frame", 0)), int(r.get("end_frame", 0))) for r in rallies]
+
+    # Top 20% velocity threshold for "high_speed"
+    sorted_vel = sorted(velocity) if velocity else []
+    high_speed_threshold = sorted_vel[int(len(sorted_vel) * 0.8)] if len(sorted_vel) > 5 else float("inf")
+
+    results: List[Dict[str, Any]] = []
+    for region in merged:
+        sf = region["start_frame"]
+        ef = region["end_frame"]
+        start_time = round(sf / fps, 3)
+        end_time = round(ef / fps, 3)
+
+        # Classify
+        has_point = any(sf <= pf <= ef for pf in point_frames)
+        has_rally = any(
+            not (ef < rs or sf > re) for rs, re in rally_ranges
+        )
+        stroke_count = sum(
+            1 for s in stroke_data
+            if not (ef < int(s.get("start_frame", 0)) or sf > int(s.get("end_frame", 0)))
+        )
+        peak_vel = max(
+            (velocity[f] for f in range(max(0, sf), min(len(velocity), ef + 1))),
+            default=0,
+        )
+
+        if has_point:
+            rtype = "point"
+            label = "Point scored"
+        elif stroke_count >= 2:
+            rtype = "stroke_cluster"
+            label = f"{stroke_count} strokes"
+        elif has_rally:
+            rtype = "rally"
+            label = "Rally"
+        elif peak_vel >= high_speed_threshold:
+            rtype = "high_speed"
+            label = "Fast exchange"
+        else:
+            rtype = "rally"
+            label = "Active play"
+
+        results.append({
+            "start_frame": sf,
+            "end_frame": ef,
+            "start_time": start_time,
+            "end_time": end_time,
+            "peak_score": region["peak_score"],
+            "type": rtype,
+            "label": label,
+        })
+
+    logger.info(f"Activity regions computed: {len(results)} regions from {total_frames} frames")
+    return results
+
+
 async def compute_session_analytics(
     session_id: str,
     trajectory_data: Dict[str, Any],
@@ -771,13 +942,38 @@ async def compute_session_analytics(
         movement_stats.arm_extension_timeline
     )
     
+    # Activity regions — composite scoring of high-activity moments
+    # Fetch stroke data for this session (if available)
+    stroke_data_for_regions: List[Dict[str, Any]] = []
+    try:
+        from ..database.supabase import get_supabase
+        supabase = get_supabase()
+        stroke_result = supabase.table("stroke_analytics") \
+            .select("start_frame, end_frame, peak_frame, stroke_type, form_score, max_velocity") \
+            .eq("session_id", session_id) \
+            .order("start_frame") \
+            .execute()
+        stroke_data_for_regions = stroke_result.data or []
+    except Exception as e:
+        logger.warning(f"Failed to fetch stroke data for activity regions: {e}")
+
+    activity_regions = compute_activity_regions(
+        trajectory_data=trajectory_data,
+        stroke_data=stroke_data_for_regions,
+        rallies=trajectory_stats.rallies,
+        point_events=point_events,
+        fps=fps,
+    )
+
     logger.info(f"Analytics computed: {len(speed_stats.timeline)} speed points, "
                 f"{trajectory_stats.bounce_count} bounces, "
                 f"{len(contact_stats.contact_moments)} contacts, "
-                f"{len(point_events)} point events")
+                f"{len(point_events)} point events, "
+                f"{len(activity_regions)} activity regions")
     
     return {
         "session_id": session_id,
+        "activity_regions": activity_regions,
         "ball_analytics": {
             "speed": {
                 "max": speed_stats.max,

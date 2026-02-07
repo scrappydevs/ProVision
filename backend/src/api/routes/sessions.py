@@ -341,6 +341,101 @@ async def update_session(
         raise HTTPException(status_code=500, detail=f"Failed to update session: {str(e)}")
 
 
+@router.post("/{session_id}/clip")
+async def create_session_clip(
+    session_id: str,
+    title: str = Form("Clip"),
+    clip_start_time: float = Form(...),
+    clip_end_time: float = Form(...),
+    description: Optional[str] = Form(None),
+    user_id: str = Depends(get_current_user_id),
+):
+    """Create a clip from a session's video.
+    
+    Finds or creates a parent 'match' recording for the session,
+    then creates a child 'clip' recording with the given time range.
+    """
+    supabase = get_supabase()
+
+    # Verify session ownership
+    session_result = supabase.table("sessions") \
+        .select("id, video_path, name") \
+        .eq("id", session_id) \
+        .eq("user_id", user_id) \
+        .single() \
+        .execute()
+
+    if not session_result.data:
+        raise HTTPException(status_code=404, detail="Session not found")
+
+    session = session_result.data
+    video_path = session.get("video_path")
+    if not video_path:
+        raise HTTPException(status_code=400, detail="Session has no video")
+
+    if clip_start_time >= clip_end_time:
+        raise HTTPException(status_code=400, detail="Start time must be less than end time")
+
+    # Find the player linked to this session (first one)
+    gp_result = supabase.table("game_players") \
+        .select("player_id") \
+        .eq("game_id", session_id) \
+        .limit(1) \
+        .execute()
+
+    player_id = gp_result.data[0]["player_id"] if gp_result.data else None
+
+    if not player_id:
+        raise HTTPException(status_code=400, detail="Session has no linked player. Link a player first to create clips.")
+
+    # Find or create a parent 'match' recording for this session
+    existing = supabase.table("recordings") \
+        .select("id") \
+        .eq("session_id", session_id) \
+        .eq("coach_id", user_id) \
+        .eq("type", "match") \
+        .limit(1) \
+        .execute()
+
+    if existing.data:
+        source_recording_id = existing.data[0]["id"]
+    else:
+        source_id = str(uuid.uuid4())
+        supabase.table("recordings").insert({
+            "id": source_id,
+            "session_id": session_id,
+            "player_id": player_id,
+            "coach_id": user_id,
+            "title": session.get("name", "Match"),
+            "video_path": video_path,
+            "type": "match",
+        }).execute()
+        source_recording_id = source_id
+
+    # Create the clip recording
+    clip_id = str(uuid.uuid4())
+    clip_data = {
+        "id": clip_id,
+        "session_id": session_id,
+        "player_id": player_id,
+        "coach_id": user_id,
+        "title": title,
+        "description": description,
+        "video_path": video_path,
+        "type": "clip",
+        "source_recording_id": source_recording_id,
+        "clip_start_time": clip_start_time,
+        "clip_end_time": clip_end_time,
+        "duration": round(clip_end_time - clip_start_time, 3),
+    }
+
+    try:
+        result = supabase.table("recordings").insert(clip_data).execute()
+        return result.data[0]
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Failed to create clip: {str(e)}")
+
+
 @router.delete("/{session_id}")
 async def delete_session(session_id: str, user_id: str = Depends(get_current_user_id)):
     """Delete a session and its associated files."""

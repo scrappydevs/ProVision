@@ -12,7 +12,7 @@ import { Button } from "@/components/ui/button";
 import {
   ArrowLeft, Crosshair, Loader2, ChevronRight, Play, Pause,
   SkipBack, SkipForward, Volume2, VolumeX, Activity, LayoutGrid,
-  Users, BarChart3, Bug, Copy, Check, RefreshCw,
+  Users, BarChart3, Bug, Copy, Check, RefreshCw, Scissors, X,
 } from "lucide-react";
 import Link from "next/link";
 import dynamic from "next/dynamic";
@@ -28,10 +28,13 @@ import {
   Stroke,
   getDebugFrame,
   getSessionAnalytics,
+  createSessionClip,
+  ActivityRegion,
 } from "@/lib/api";
 import { generateTipsFromStrokes } from "@/lib/tipGenerator";
 import { PlayerSelection, PlayerSelectionOverlays } from "@/components/viewer/PlayerSelection";
 import { VideoTips, type VideoTip } from "@/components/viewer/VideoTips";
+import { ActivityTimeline } from "@/components/viewer/ActivityTimeline";
 import { useAIChat } from "@/contexts/AIChatContext";
 
 const BirdEyeView = dynamic(
@@ -46,6 +49,11 @@ const ShotCard = dynamic(
 
 const AnalyticsDashboard = dynamic(
   () => import("@/components/analytics/AnalyticsDashboard").then((m) => m.AnalyticsDashboard),
+  { ssr: false }
+);
+
+const ClipSelector = dynamic(
+  () => import("@/components/players/ClipSelector"),
   { ssr: false }
 );
 
@@ -108,6 +116,10 @@ export default function GameViewerPage() {
   const [showPlayerSelection, setShowPlayerSelection] = useState(false);
   const playerSelectionAutoOpened = useRef(false);
   const hasAutoSeeked = useRef(false);
+
+  // Clip selector state
+  const [showClipSelector, setShowClipSelector] = useState(false);
+  const [clipLoading, setClipLoading] = useState(false);
 
   // Debug mode state
   const [debugMode, setDebugMode] = useState(false);
@@ -395,27 +407,7 @@ export default function GameViewerPage() {
     return match?.seekTime ?? match?.timestamp ?? null;
   }, [tipParam, videoTips]);
 
-  const strokeMarkers = useMemo(() => {
-    if (!strokeSummary?.strokes?.length) return [];
-    return strokeSummary.strokes.map((stroke) => ({
-      id: stroke.id,
-      time: stroke.peak_frame / fps,
-      type: stroke.stroke_type,
-      formScore: stroke.form_score,
-      frame: stroke.peak_frame,
-    }));
-  }, [strokeSummary?.strokes, fps]);
-
-  const pointMarkers = useMemo(() => {
-    if (!pointEvents.length) return [];
-    return pointEvents.map((evt, index) => ({
-      id: `point-${evt.frame}-${index}`,
-      time: evt.frame / fps,
-      index: index + 1,
-      reason: evt.reason,
-      frame: evt.frame,
-    }));
-  }, [pointEvents, fps]);
+  // strokeMarkers and pointMarkers removed — ActivityTimeline handles visualization directly
 
   const autoSeekTime = startTimeParam ?? tipSeekTime;
   const shouldAutoPlay = startTimeParam !== null && startTimeParam !== undefined;
@@ -1099,7 +1091,7 @@ export default function GameViewerPage() {
   }, [detectionResult, currentFrame, trackMutation, queryClient, gameId]);
 
   const togglePlay = useCallback(() => { if (isPlaying) videoRef.current?.pause(); else videoRef.current?.play(); setIsPlaying((p) => !p); }, [isPlaying]);
-  const handleSeek = useCallback((e: React.ChangeEvent<HTMLInputElement>) => { const t = parseFloat(e.target.value); if (videoRef.current) videoRef.current.currentTime = t; setCurrentTime(t); }, []);
+  // handleSeek removed — ActivityTimeline handles seeking via onSeek callback
   const skipFrames = useCallback((n: number) => { const t = Math.max(0, Math.min(duration, currentTime + n / fps)); if (videoRef.current) videoRef.current.currentTime = t; }, [duration, currentTime, fps]);
   const fmtTime = (t: number) => `${Math.floor(t / 60)}:${Math.floor(t % 60).toString().padStart(2, "0")}`;
   const handleAnalyticsSeek = useCallback((targetTime: number) => {
@@ -1118,6 +1110,44 @@ export default function GameViewerPage() {
     videoRef.current.pause();
     setIsPlaying(false);
   }, []);
+
+  // Smart clip pre-fill: find highest-scoring activity region near current time
+  const clipPrefill = useMemo(() => {
+    const regions = analytics?.activity_regions;
+    if (!regions || regions.length === 0) return { startTime: currentTime, endTime: Math.min(currentTime + 10, duration) };
+    // Find region with highest peak_score within 30s of current time
+    const nearbyRadius = 30; // seconds
+    let best: ActivityRegion | null = null;
+    for (const r of regions) {
+      const regionMid = (r.start_time + r.end_time) / 2;
+      if (Math.abs(regionMid - currentTime) <= nearbyRadius) {
+        if (!best || r.peak_score > best.peak_score) best = r;
+      }
+    }
+    if (best) {
+      // Add some padding (0.5s before, 1s after), clamp to video bounds
+      const pad = 0.5;
+      return {
+        startTime: Math.max(0, best.start_time - pad),
+        endTime: Math.min(duration, best.end_time + pad * 2),
+      };
+    }
+    return { startTime: currentTime, endTime: Math.min(currentTime + 10, duration) };
+  }, [analytics?.activity_regions, currentTime, duration]);
+
+  // Handle clip creation from ClipSelector
+  const handleClipSelect = useCallback(async (startTime: number, endTime: number) => {
+    if (!gameId) return;
+    setClipLoading(true);
+    try {
+      await createSessionClip(gameId, startTime, endTime, `Clip ${new Date().toLocaleTimeString()}`);
+      setShowClipSelector(false);
+    } catch (e) {
+      console.error("Failed to create clip:", e);
+    } finally {
+      setClipLoading(false);
+    }
+  }, [gameId]);
 
   const handleTabClick = useCallback((tabId: TabId) => {
     setActiveTab(tabId);
@@ -1400,83 +1430,53 @@ export default function GameViewerPage() {
             {/* Controls */}
             <div className="mx-auto mt-2 shrink-0 w-full" style={videoDisplayWidth ? { width: `${videoDisplayWidth}px` } : undefined}>
               <div className="rounded-xl bg-[#282729] p-2.5">
-              <div className="flex items-center gap-3 mb-1.5">
-                <span className="text-[10px] text-[#6A6865] w-10">{fmtTime(currentTime)}</span>
-                <div className="relative flex-1">
-                  <div className="absolute inset-x-0 -top-1.5 h-2 pointer-events-none">
-                    {duration > 0 && strokeMarkers.map((marker) => {
-                      const pct = Math.min(1, Math.max(0, marker.time / duration));
-                      const isActive = activeStroke?.id === marker.id;
-                      const color = marker.type === "forehand" ? "#9B7B5B"
-                        : marker.type === "backhand" ? "#5B9B7B"
-                        : "#8A8885";
-                      return (
-                        <button
-                          key={marker.id}
-                          onClick={() => {
-                            if (videoRef.current) videoRef.current.currentTime = marker.time;
-                          }}
-                          className={cn(
-                            "absolute top-0 -translate-x-1/2 h-3 w-1.5 rounded-full pointer-events-auto transition-transform",
-                            isActive ? "scale-125" : "hover:scale-125"
-                          )}
-                          style={{ left: `${pct * 100}%`, backgroundColor: color }}
-                          title={`${marker.type} — Frame ${marker.frame} — Form ${marker.formScore.toFixed(0)}`}
-                          aria-label={`${marker.type} stroke at ${fmtTime(marker.time)}`}
-                        />
-                      );
-                    })}
-                    {duration > 0 && pointMarkers.map((marker) => {
-                      const pct = Math.min(1, Math.max(0, marker.time / duration));
-                      const isActive = activePointEvent?.frame === marker.frame;
-                      return (
-                        <button
-                          key={marker.id}
-                          onClick={() => {
-                            if (videoRef.current) videoRef.current.currentTime = marker.time;
-                          }}
-                          className={cn(
-                            "absolute top-0 -translate-x-1/2 h-3 w-1.5 rounded-full pointer-events-auto transition-transform",
-                            isActive ? "scale-125" : "hover:scale-125"
-                          )}
-                          style={{ left: `${pct * 100}%`, backgroundColor: "#C45C5C" }}
-                          title={`Point ${marker.index} — Frame ${marker.frame} — ${marker.reason.replace(/_/g, " ")}`}
-                          aria-label={`Point ${marker.index} at ${fmtTime(marker.time)}`}
-                        />
-                      );
-                    })}
-                  </div>
-                  <input
-                    type="range"
-                    min={0}
-                    max={duration || 100}
-                    step={0.01}
-                    value={currentTime}
-                    onChange={handleSeek}
-                    className="w-full h-1 bg-[#363436] rounded-full appearance-none cursor-pointer [&::-webkit-slider-thumb]:appearance-none [&::-webkit-slider-thumb]:w-2.5 [&::-webkit-slider-thumb]:h-2.5 [&::-webkit-slider-thumb]:bg-[#9B7B5B] [&::-webkit-slider-thumb]:rounded-full"
-                  />
-                </div>
-                <span className="text-[10px] text-[#6A6865] w-10 text-right">{fmtTime(duration)}</span>
-              </div>
-              <div className="flex items-center justify-between">
+              {/* Activity Timeline — waveform seek bar */}
+              <ActivityTimeline
+                currentTime={currentTime}
+                duration={duration}
+                strokes={strokeSummary?.strokes ?? []}
+                velocities={session?.trajectory_data?.velocity}
+                pointEvents={pointEvents}
+                activityRegions={analytics?.activity_regions}
+                fps={fps}
+                totalFrames={Math.floor(duration * fps)}
+                onSeek={(time) => {
+                  if (videoRef.current) videoRef.current.currentTime = time;
+                  setCurrentTime(time);
+                  setCurrentFrame(frameFromTime(time));
+                }}
+              />
+              {/* Time labels + controls */}
+              <div className="flex items-center justify-between mt-1.5">
                 <div className="flex items-center gap-1">
+                  <span className="text-[10px] text-[#6A6865] w-10 tabular-nums">{fmtTime(currentTime)}</span>
                   <Button variant="ghost" size="icon" className="h-7 w-7" onClick={() => skipFrames(-10)}><SkipBack className="w-3 h-3" /></Button>
                   <Button variant="ghost" size="icon" className="h-7 w-7" onClick={togglePlay}>{isPlaying ? <Pause className="w-3.5 h-3.5" /> : <Play className="w-3.5 h-3.5" />}</Button>
                   <Button variant="ghost" size="icon" className="h-7 w-7" onClick={() => skipFrames(10)}><SkipForward className="w-3 h-3" /></Button>
                 </div>
-                <span className="text-[10px] text-[#6A6865]">Frame {currentFrame}</span>
-                <button
-                  onClick={() => {
-                    const rates = [0.25, 0.5, 1, 1.5, 2];
-                    const next = rates[(rates.indexOf(playbackRate) + 1) % rates.length];
-                    setPlaybackRate(next);
-                    if (videoRef.current) videoRef.current.playbackRate = next;
-                  }}
-                  className="text-[10px] px-1.5 py-0.5 rounded text-[#9B7B5B] hover:bg-[#2D2C2E] transition-colors font-mono"
-                >
-                  {playbackRate}x
-                </button>
-                <Button variant="ghost" size="icon" className="h-7 w-7" onClick={() => setIsMuted((m) => !m)}>{isMuted ? <VolumeX className="w-3 h-3" /> : <Volume2 className="w-3 h-3" />}</Button>
+                <span className="text-[10px] text-[#6A6865] tabular-nums">Frame {currentFrame}</span>
+                <div className="flex items-center gap-1">
+                  <button
+                    onClick={() => setShowClipSelector(true)}
+                    className="p-1 rounded text-[#9B7B5B] hover:bg-[#2D2C2E] transition-colors"
+                    title="Create clip"
+                  >
+                    <Scissors className="w-3.5 h-3.5" />
+                  </button>
+                  <button
+                    onClick={() => {
+                      const rates = [0.25, 0.5, 1, 1.5, 2];
+                      const next = rates[(rates.indexOf(playbackRate) + 1) % rates.length];
+                      setPlaybackRate(next);
+                      if (videoRef.current) videoRef.current.playbackRate = next;
+                    }}
+                    className="text-[10px] px-1.5 py-0.5 rounded text-[#9B7B5B] hover:bg-[#2D2C2E] transition-colors font-mono"
+                  >
+                    {playbackRate}x
+                  </button>
+                  <Button variant="ghost" size="icon" className="h-7 w-7" onClick={() => setIsMuted((m) => !m)}>{isMuted ? <VolumeX className="w-3 h-3" /> : <Volume2 className="w-3 h-3" />}</Button>
+                  <span className="text-[10px] text-[#6A6865] w-10 text-right tabular-nums">{fmtTime(duration)}</span>
+                </div>
               </div>
             </div>
             </div>
@@ -1831,6 +1831,42 @@ export default function GameViewerPage() {
               <button onClick={() => { setDetectionResult(null); setTrackingMode(true); }} className="flex-1 py-2 rounded-lg text-xs text-[#E8E6E3] border border-[#363436] hover:border-[#9B7B5B] transition-colors">
                 Click Manually
               </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Clip Selector Modal */}
+      {showClipSelector && session?.video_path && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-sm">
+          <div className="relative w-full max-w-3xl mx-4 rounded-2xl bg-[#1C1A19] border border-[#363436] shadow-2xl overflow-hidden">
+            {/* Header */}
+            <div className="flex items-center justify-between px-4 py-3 border-b border-[#363436]">
+              <div className="flex items-center gap-2">
+                <Scissors className="w-4 h-4 text-[#9B7B5B]" />
+                <span className="text-sm font-medium text-[#E8E6E3]">Create Clip</span>
+              </div>
+              <button
+                onClick={() => setShowClipSelector(false)}
+                className="p-1 rounded hover:bg-[#2D2C2E] transition-colors"
+              >
+                <X className="w-4 h-4 text-[#8A8885]" />
+              </button>
+            </div>
+            {/* Clip selector body */}
+            <div className="p-4">
+              <ClipSelector
+                videoUrl={session.video_path}
+                duration={duration}
+                initialStartTime={clipPrefill.startTime}
+                initialEndTime={clipPrefill.endTime}
+                onClipSelect={handleClipSelect}
+                onAnalyze={(start, end) => handleClipSelect(start, end)}
+                onCancel={() => setShowClipSelector(false)}
+                maxClipDuration={45}
+                mode="both"
+                clipLoading={clipLoading}
+              />
             </div>
           </div>
         </div>

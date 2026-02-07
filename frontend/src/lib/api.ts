@@ -587,6 +587,38 @@ export const analyzeRecording = (recordingId: string, data: FormData) =>
     headers: { "Content-Type": "multipart/form-data" },
   });
 
+// Session clip creation (bridges sessions -> recordings)
+export interface SessionClipResponse {
+  id: string;
+  session_id: string;
+  coach_id: string;
+  title: string;
+  description?: string;
+  video_path?: string;
+  type: string;
+  source_recording_id?: string;
+  clip_start_time: number;
+  clip_end_time: number;
+  duration: number;
+}
+
+export const createSessionClip = (
+  sessionId: string,
+  clipStartTime: number,
+  clipEndTime: number,
+  title?: string,
+  description?: string,
+) => {
+  const data = new FormData();
+  data.append("clip_start_time", clipStartTime.toString());
+  data.append("clip_end_time", clipEndTime.toString());
+  if (title) data.append("title", title);
+  if (description) data.append("description", description);
+  return api.post<SessionClipResponse>(`/api/sessions/${sessionId}/clip`, data, {
+    headers: { "Content-Type": "multipart/form-data" },
+  });
+};
+
 // Tournament types
 export type TournamentLevel = "local" | "regional" | "national" | "international" | "world";
 export type TournamentStatus = "upcoming" | "ongoing" | "completed" | "cancelled";
@@ -754,12 +786,23 @@ export interface RunpodDashboardData {
   remote?: Record<string, unknown>;
 }
 
+export interface ActivityRegion {
+  start_frame: number;
+  end_frame: number;
+  start_time: number;
+  end_time: number;
+  peak_score: number;
+  type: "rally" | "point" | "stroke_cluster" | "high_speed";
+  label: string;
+}
+
 export interface AnalyticsData {
   session_id: string;
   session_name: string;
   fps: number;
   video_info: { width: number; height: number; fps: number };
   pose_frame_count: number;
+  activity_regions?: ActivityRegion[];
   ball_analytics: {
     speed: {
       max: number;
