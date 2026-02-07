@@ -405,7 +405,7 @@ export default function PlayerProfilePage() {
         </div>
 
         {/* Left: tips summary */}
-        <div className="absolute left-10 bottom-24 w-[480px] flex flex-col gap-2">
+        <div className="absolute left-10 bottom-36 w-[480px] h-[calc(100vh-340px)] overflow-y-auto overflow-x-visible flex flex-col gap-2">
           {recordingsLoading ? (
             <div className="flex items-center justify-center h-20 bg-content1/30 backdrop-blur-xl rounded-xl">
               <Loader2 className="w-3 h-3 text-primary animate-spin" />
