@@ -1,5 +1,5 @@
 import { useQuery } from "@tanstack/react-query";
-import api, { TrajectoryPoint } from "@/lib/api";
+import { api, TrajectoryPoint } from "@/lib/api";
 
 export interface PlayerHeatmapGame {
   session_id: string;

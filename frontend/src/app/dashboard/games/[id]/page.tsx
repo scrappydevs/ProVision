@@ -151,7 +151,8 @@ export default function GameViewerPage() {
   const [videoBounds, setVideoBounds] = useState<{ top: number; left: number; right: number; width: number; height: number } | null>(null);
   const [videoReady, setVideoReady] = useState(false);
   const isResizing = useRef(false);
-  const [, setActiveTip] = useState<VideoTip | null>(null);
+  const [activeTip, setActiveTip] = useState<VideoTip | null>(null);
+  const [showShotCard, setShowShotCard] = useState(true);
 
   const [showPlayerSelection, setShowPlayerSelection] = useState(false);
   const playerSelectionAutoOpened = useRef(false);
@@ -358,6 +359,12 @@ export default function GameViewerPage() {
     [strokeSummary?.strokes]
   );
 
+  // Max velocity across all strokes — used by ShotCard speed bar
+  const sessionMaxVelocity = useMemo(() => {
+    if (!strokeSummary?.strokes?.length) return 0;
+    return Math.max(...strokeSummary.strokes.map((s) => s.max_velocity));
+  }, [strokeSummary?.strokes]);
+
   // Whether any AI insights exist (to decide if we show AI vs rule-based tips)
   const hasAiInsights = aiInsightStrokes.length > 0;
 
@@ -459,6 +466,15 @@ export default function GameViewerPage() {
     return past.length > 0 ? past[past.length - 1] : null;
   }, [strokeSummary?.strokes, currentFrame]);
 
+  // Re-show the ShotCard whenever a *new* stroke flashes (after user dismissed a previous one)
+  const prevShotFlashId = useRef<string | null>(null);
+  useEffect(() => {
+    if (shotFlashStroke && shotFlashStroke.id !== prevShotFlashId.current) {
+      prevShotFlashId.current = shotFlashStroke.id;
+      setShowShotCard(true);
+    }
+    if (!shotFlashStroke) prevShotFlashId.current = null;
+  }, [shotFlashStroke]);
 
 
   const computedTrajectoryFps = useMemo(() => {
@@ -964,6 +980,11 @@ export default function GameViewerPage() {
   }, [session?.trajectory_data]);
 
   // Draw ball tracking overlay (mask/bbox)
+  // IMPORTANT: We read video.currentTime directly at draw time instead of relying
+  // solely on the React-state `currentFrame`. The setState → render → useEffect
+  // pipeline introduces ~1-2 frames of visual lag vs the video element, so the
+  // overlay would always trail behind the actual ball. Reading the live video time
+  // here and adding a small lookahead during playback compensates for this delay.
   useEffect(() => {
     const canvas = canvasRef.current;
     if (!canvas) return;
@@ -994,12 +1015,22 @@ export default function GameViewerPage() {
       }
     }
 
-    // Lookup current frame's trajectory point — find closest match if no exact hit
-    let cp = trajectoryFrameMap.get(currentFrame);
+    // Compute a fresh frame number from the live video time to compensate for
+    // the React state pipeline delay. During playback the video advances while
+    // the state update → render → effect chain runs, so the React `currentFrame`
+    // is typically 1-2 frames stale. Reading currentTime here gives us the most
+    // up-to-date position. We also add +1 frame lookahead during playback to
+    // account for the remaining compositor lag.
+    const liveTime = videoRef.current.currentTime;
+    const PLAYBACK_LOOKAHEAD = isPlaying ? 1 : 0;
+    const liveFrame = Math.max(0, Math.round(liveTime * fps) + PLAYBACK_LOOKAHEAD);
+
+    // Lookup trajectory point using the live (non-stale) frame number
+    let cp = trajectoryFrameMap.get(liveFrame);
     if (!cp && trajectoryFrameMap.size > 0) {
       let minDiff = Infinity;
       for (const [frame, point] of trajectoryFrameMap) {
-        const diff = Math.abs(frame - currentFrame);
+        const diff = Math.abs(frame - liveFrame);
         if (diff < minDiff && diff <= 3) {
           minDiff = diff;
           cp = point;
@@ -1056,7 +1087,7 @@ export default function GameViewerPage() {
         ctx.stroke();
       }
     }
-  }, [visibleTrajectoryPoints, trajectoryFrameMap, currentFrame, hasTrajectory, jumpThreshold]);
+  }, [visibleTrajectoryPoints, trajectoryFrameMap, currentFrame, hasTrajectory, jumpThreshold, isPlaying, fps]);
 
   // Draw player markers on video
   useEffect(() => {
@@ -1717,6 +1748,21 @@ export default function GameViewerPage() {
                   </div>
                 )}
 
+                {/* Liquid Glass ShotCard — floats on video when a stroke is active */}
+                <AnimatePresence>
+                  {showShotCard && shotFlashStroke && (
+                    <ShotCard
+                      stroke={shotFlashStroke}
+                      index={
+                        (strokeSummary?.strokes?.findIndex((s) => s.id === shotFlashStroke.id) ?? -1) + 1
+                      }
+                      totalStrokes={strokeSummary?.strokes?.length ?? 0}
+                      sessionMaxVelocity={sessionMaxVelocity}
+                      onDismiss={() => setShowShotCard(false)}
+                    />
+                  )}
+                </AnimatePresence>
+
                 {/* Tracking in-progress overlay */}
                 {isTracking && videoBounds && (
                   <div
@@ -2196,6 +2242,57 @@ export default function GameViewerPage() {
                                     {opponentStrokeCount} opponent stroke{opponentStrokeCount === 1 ? "" : "s"} excluded from this breakdown.
                                   </p>
                                 )}
+                              </div>
+                            )}
+
+                            {/* Live Insights — the same tips shown on the video overlay */}
+                            {videoTips.length > 0 && (
+                              <div className="shrink-0">
+                                <p className="text-[11px] text-[#6A6865] uppercase tracking-wider mb-1.5">
+                                  Live Insights ({videoTips.length})
+                                </p>
+                                <div className="space-y-1">
+                                  {videoTips.map((tip) => {
+                                    const isActive = activeTip?.id === tip.id;
+                                    const tipTime = tip.timestamp;
+                                    return (
+                                      <button
+                                        key={tip.id}
+                                        onClick={() => {
+                                          if (videoRef.current) {
+                                            const seekTo = tip.seekTime ?? tip.timestamp;
+                                            videoRef.current.currentTime = seekTo;
+                                            videoRef.current.pause();
+                                            setIsPlaying(false);
+                                          }
+                                        }}
+                                        className={cn(
+                                          "w-full text-left px-2.5 py-2 rounded-lg transition-all",
+                                          isActive
+                                            ? "bg-[#9B7B5B]/15 ring-1 ring-[#9B7B5B]/40"
+                                            : "bg-[#2D2C2E]/30 hover:bg-[#2D2C2E]"
+                                        )}
+                                      >
+                                        <div className="flex items-center gap-2">
+                                          <span className="text-[11px] font-mono shrink-0 text-[#6A6865]">
+                                            {fmtTime(tipTime)}
+                                          </span>
+                                          {isActive && (
+                                            <div className="w-1.5 h-1.5 rounded-full bg-[#9B7B5B] animate-pulse shrink-0" />
+                                          )}
+                                          <span className="text-[11px] font-medium text-[#E8E6E3] truncate">
+                                            {tip.title}
+                                          </span>
+                                        </div>
+                                        {tip.message && (
+                                          <p className="text-[10px] mt-1 line-clamp-2 leading-relaxed text-[#8A8885]">
+                                            {tip.message}
+                                          </p>
+                                        )}
+                                      </button>
+                                    );
+                                  })}
+                                </div>
                               </div>
                             )}
 
