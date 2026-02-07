@@ -1704,12 +1704,6 @@ export default function GameViewerPage() {
           )}
         </div>
 
-        {(isTracking || isDetecting) && (
-          <div className="glass-context p-3.5 flex items-center gap-3 mt-2 shrink-0 bg-[#9B7B5B]/10">
-            <Loader2 className="w-4 h-4 text-[#9B7B5B] animate-spin" />
-            <span className="text-sm text-[#E8E6E3] font-medium">Tracking ball...</span>
-          </div>
-        )}
       </div>
       {/* YOLO Detection result modal */}
       {detection && (

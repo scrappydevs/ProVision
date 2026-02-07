@@ -102,6 +102,7 @@ def process_pose_analysis(session_id: str, video_path: str, video_url: str, targ
                 "session_id": session_id,
                 "frame_number": pose_dict['frame_number'],
                 "timestamp": pose_dict['timestamp'],
+                "person_id": pose_dict['person_id'],
                 "keypoints": pose_dict['keypoints'],
                 "joint_angles": pose_dict['joint_angles'],
                 "body_metrics": pose_dict['body_metrics']
@@ -492,10 +493,11 @@ async def get_pose_summary(
     if not session_result.data:
         raise HTTPException(status_code=404, detail="Session not found")
 
-    # Get all pose analysis data for statistics
+    # Get all pose analysis data for statistics (player only)
     pose_result = supabase.table("pose_analysis")\
         .select("joint_angles, body_metrics")\
         .eq("session_id", session_id)\
+        .eq("person_id", 0)\
         .execute()
 
     if not pose_result.data or len(pose_result.data) == 0:
@@ -552,6 +554,7 @@ async def get_strokes(
     pose_result = supabase.table("pose_analysis")\
         .select("frame_number, timestamp, keypoints, joint_angles")\
         .eq("session_id", session_id)\
+        .eq("person_id", 0)\
         .order("timestamp")\
         .execute()
 
@@ -591,6 +594,7 @@ async def get_match_analytics(
     pose_result = supabase.table("pose_analysis")\
         .select("frame_number, timestamp, keypoints, joint_angles, body_metrics")\
         .eq("session_id", session_id)\
+        .eq("person_id", 0)\
         .order("timestamp")\
         .execute()
 

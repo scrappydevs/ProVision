@@ -1,7 +1,7 @@
 "use client";
 
 import { useState, useEffect } from "react";
-import { Loader2, Check, X, RefreshCw, Users } from "lucide-react";
+import { Loader2, Check, X, RefreshCw } from "lucide-react";
 import {
   getPlayerPreview,
   selectPlayer,
@@ -86,10 +86,23 @@ export function PlayerSelection({
   const isVideoOverlay = !isModal && videoRef && videoViewportRef;
   
   const { previewData, selectedPlayers, setSelectedPlayers, setPreviewData } = usePlayerSelectionStore(sessionId);
+  const requiresOpponent = (previewData?.players.length ?? 0) > 1;
   const selectedPlayer = selectedPlayers.find((p) => p.role === "player");
   const selectedOpponent = selectedPlayers.find((p) => p.role === "opponent");
   const currentStep: "player" | "opponent" | "done" =
-    selectedPlayer ? (selectedOpponent ? "done" : "opponent") : "player";
+    selectedPlayer ? (requiresOpponent ? (selectedOpponent ? "done" : "opponent") : "done") : "player";
+  const hoverAccentClass =
+    currentStep === "opponent"
+      ? "hover:border-[#5B9B7B]/70 hover:bg-[#5B9B7B]/10"
+      : currentStep === "player"
+        ? "hover:border-[#9B7B5B]/70 hover:bg-[#9B7B5B]/10"
+        : "hover:border-[#4A4849] hover:bg-[#2A292B]";
+  const groupHoverAccentClass =
+    currentStep === "opponent"
+      ? "group-hover:border-[#5B9B7B] group-hover:bg-[#5B9B7B]/10"
+      : currentStep === "player"
+        ? "group-hover:border-[#9B7B5B] group-hover:bg-[#9B7B5B]/10"
+        : "group-hover:border-[#E8E6E3]/40 group-hover:bg-[#2A292B]";
 
   const loadPreview = async () => {
     setLoading(true);
@@ -161,7 +174,7 @@ export function PlayerSelection({
   };
 
   const handleConfirm = async () => {
-    if (!selectedPlayer) return;
+    if (!selectedPlayer || (requiresOpponent && !selectedOpponent)) return;
 
     setSubmitting(true);
     try {
@@ -242,12 +255,16 @@ export function PlayerSelection({
               <div className="flex items-center justify-between gap-2">
                 <div>
                   <p className="text-[10px] text-[#8A8885] uppercase tracking-wider">
-                    {currentStep === "player" ? "Step 1 of 2" : currentStep === "opponent" ? "Step 2 of 2" : "Ready"}
+                    {currentStep === "player" ? "Step 1 of 2" : "Step 2 of 2"}
                   </p>
                   <p className="text-xs text-[#E8E6E3] font-medium">
-                    {currentStep === "player" && "Pick the Player"}
-                    {currentStep === "opponent" && "Pick the Opponent"}
-                    {currentStep === "done" && "Players selected"}
+                    {currentStep === "player" && "Click a box to set the Player"}
+                    {currentStep === "opponent" && "Click a box to set the Opponent"}
+                    {currentStep === "done" && (
+                      requiresOpponent
+                        ? "Opponent set. Click Change Opponent, then click a box to update."
+                        : "Player set. Click Confirm to proceed."
+                    )}
                   </p>
                 </div>
                 {selectedPlayer && currentStep !== "player" && (
@@ -286,11 +303,9 @@ export function PlayerSelection({
 
               {/* Player Cards - Click once per step */}
               <div className="space-y-2">
-                <p className="text-[10px] text-[#8A8885] uppercase tracking-wider">
-                  {currentStep === "player" && "Click a detected player to set Player"}
-                  {currentStep === "opponent" && "Click a detected player to set Opponent"}
-                  {currentStep === "done" && "Selection complete"}
-                </p>
+                  <p className="text-[10px] text-[#8A8885] uppercase tracking-wider">
+                    Click a box on the video to choose
+                  </p>
                 {previewData.players.map((player) => {
                   const selection = selectedPlayers.find((p) => p.player.player_idx === player.player_idx);
                   const isSelected = !!selection;
@@ -306,26 +321,24 @@ export function PlayerSelection({
                           ? "border-[#9B7B5B] bg-[#9B7B5B]/10"
                           : role === "opponent"
                             ? "border-[#5B9B7B] bg-[#5B9B7B]/10"
-                            : "border-[#363436] bg-[#282729] hover:border-[#9B7B5B]/40"
+                            : cn("border-[#363436] bg-[#282729]", hoverAccentClass)
                       )}
                     >
                       <div className="flex items-center justify-between">
                         <span className="text-xs text-[#E8E6E3]">
                           Detected #{player.player_idx + 1}
                         </span>
-                        {role && (
-                          <span
-                            className={cn(
-                              "text-[10px] px-2 py-0.5 rounded font-semibold",
-                              role === "player"
-                                ? "bg-[#9B7B5B] text-[#1E1D1F]"
-                                : "bg-[#5B9B7B] text-[#1E1D1F]"
-                            )}
-                          >
-                            {role === "player" ? "Player" : "Opponent"}
-                          </span>
-                        )}
                       </div>
+                      {role && (
+                        <div
+                          className={cn(
+                            "text-[10px] mt-1 font-semibold",
+                            role === "player" ? "text-[#9B7B5B]" : "text-[#5B9B7B]"
+                          )}
+                        >
+                          {role === "player" ? "Player" : "Opponent"}
+                        </div>
+                      )}
                       <div className="text-[10px] text-[#8A8885] mt-1">
                         {(player.confidence * 100).toFixed(0)}% confidence
                       </div>
@@ -349,7 +362,7 @@ export function PlayerSelection({
 
               <button
                 onClick={handleConfirm}
-                disabled={!selectedPlayer || submitting}
+                disabled={!selectedPlayer || (requiresOpponent && !selectedOpponent) || submitting}
                 className="ml-auto text-xs px-4 py-2 rounded-lg bg-[#9B7B5B] hover:bg-[#8A6B4B] text-[#1E1D1F] font-medium transition-colors disabled:opacity-50 disabled:cursor-not-allowed flex items-center gap-2"
               >
                 {submitting ? (
@@ -386,10 +399,17 @@ export function PlayerSelectionOverlays({
   sessionId: string;
 }) {
   const { previewData, selectedPlayers, setSelectedPlayers } = usePlayerSelectionStore(sessionId);
+  const requiresOpponent = (previewData?.players.length ?? 0) > 1;
   const selectedPlayer = selectedPlayers.find((p) => p.role === "player");
   const selectedOpponent = selectedPlayers.find((p) => p.role === "opponent");
   const currentStep: "player" | "opponent" | "done" =
-    selectedPlayer ? (selectedOpponent ? "done" : "opponent") : "player";
+    selectedPlayer ? (requiresOpponent ? (selectedOpponent ? "done" : "opponent") : "done") : "player";
+  const groupHoverAccentClass =
+    currentStep === "opponent"
+      ? "group-hover:border-[#5B9B7B] group-hover:bg-[#5B9B7B]/10"
+      : currentStep === "player"
+        ? "group-hover:border-[#9B7B5B] group-hover:bg-[#9B7B5B]/10"
+        : "group-hover:border-[#E8E6E3]/40 group-hover:bg-[#2A292B]";
 
   if (!previewData) return null;
   const video = videoRef.current;
@@ -467,7 +487,7 @@ export function PlayerSelectionOverlays({
         return (
           <div
             key={player.player_idx}
-            className="absolute cursor-pointer"
+            className="absolute cursor-pointer group"
             onClick={handleOverlayClick}
             style={{
               left: `${left}px`,
@@ -484,7 +504,7 @@ export function PlayerSelectionOverlays({
                   ? selection?.role === "player"
                     ? "border-[#9B7B5B] bg-[#9B7B5B]/10"
                     : "border-[#5B9B7B] bg-[#5B9B7B]/10"
-                  : "border-[#E8E6E3]/30"
+                  : cn("border-[#E8E6E3]/30", groupHoverAccentClass)
               )}
             />
             {isSelected && (

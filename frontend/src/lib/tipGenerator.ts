@@ -153,13 +153,13 @@ function generateStrokeTip(
 
   // Priority 1: If form is excellent, give positive reinforcement with opponent context
   if (form_score > 85) {
-    const baseMessage = `Great kinetic chain coordination - you're efficiently transferring energy from legs through core to racket`;
+    const baseMessage = `Great kinetic chain coordination - efficiently transferring energy from legs through core to racket`;
     const contextualMessage = oppContext.hasOpponent
-      ? `${baseMessage}. Opponent positioned at ${oppContext.opponentPosition} - good shot placement`
+      ? `${baseMessage}. Opponent at ${oppContext.opponentPosition} - good shot placement`
       : baseMessage;
 
     return {
-      title: `Excellent ${strokeName}`,
+      title: `Your ${strokeName} - Excellent`,
       message: contextualMessage,
     };
   }
