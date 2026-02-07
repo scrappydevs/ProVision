@@ -1,6 +1,6 @@
-# PROVISION
+# ProVision
 
-Over 800 million people watch table tennis, but while football and basketball are drowning in analytics, table tennis coaches still spend hours scrubbing through video by hand. ProVision changes that by turning ordinary 2D match footage into live ball trajectories, 3D biomechanics, and Moneyball-grade analytics in minutes instead of hours.
+Over 800 million people watch table tennis, but while football and basketball are drowning in analytics, table tennis coaches still spend hours scrubbing through video by hand. ProVision is AI Moneyball for Table Tennis. It transforms match film and tournament footage captured by 2D camera into actionable insights backed by tracked ball trajectories, 3D biomechanics, and Moneyball-grade analytics in minutes.
 
 <p align="center">
   <img src="assets/Lin Yun Stats.png" alt="Compare Stats" width="800"/>
