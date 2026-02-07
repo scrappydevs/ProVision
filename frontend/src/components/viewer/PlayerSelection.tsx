@@ -32,7 +32,7 @@ export function PlayerSelection({
 }: PlayerSelectionProps) {
   const [loading, setLoading] = useState(false);
   const [previewData, setPreviewData] = useState<PlayerPreviewResponse | null>(null);
-  const [selectedPlayer, setSelectedPlayer] = useState<DetectedPlayer | null>(null);
+  const [selectedPlayers, setSelectedPlayers] = useState<DetectedPlayer[]>([]);
   const [error, setError] = useState<string | null>(null);
   const [submitting, setSubmitting] = useState(false);
   const imageRef = useRef<HTMLImageElement>(null);
@@ -41,16 +41,17 @@ export function PlayerSelection({
   const loadPreview = async () => {
     setLoading(true);
     setError(null);
-    setSelectedPlayer(null);
+    setSelectedPlayers([]);
     try {
       console.log("[PlayerSelection] Loading preview for session:", sessionId);
       const response = await getPlayerPreview(sessionId);
       console.log("[PlayerSelection] Preview loaded:", response.data);
       setPreviewData(response.data);
-      
-      // Auto-select if only one player
-      if (response.data.players.length === 1) {
-        setSelectedPlayer(response.data.players[0]);
+
+      // Auto-select up to 2 players (for player vs opponent analysis)
+      if (response.data.players.length > 0) {
+        const toSelect = response.data.players.slice(0, Math.min(2, response.data.players.length));
+        setSelectedPlayers(toSelect);
       }
     } catch (err: any) {
       console.error("[PlayerSelection] Error loading preview:", err);
@@ -73,33 +74,47 @@ export function PlayerSelection({
   useEffect(() => {
     if (isModal && !isOpen) {
       setPreviewData(null);
-      setSelectedPlayer(null);
+      setSelectedPlayers([]);
       setError(null);
     }
   }, [isOpen, isModal]);
 
   const handlePlayerClick = (player: DetectedPlayer) => {
-    setSelectedPlayer(player);
+    setSelectedPlayers((prev) => {
+      const isCurrentlySelected = prev.some(p => p.player_idx === player.player_idx);
+
+      if (isCurrentlySelected) {
+        // Deselect
+        return prev.filter(p => p.player_idx !== player.player_idx);
+      } else {
+        // Select (max 2 players)
+        if (prev.length >= 2) {
+          // Replace the oldest selection
+          return [...prev.slice(1), player];
+        }
+        return [...prev, player];
+      }
+    });
   };
 
   const handleConfirm = async () => {
-    if (!selectedPlayer) return;
+    if (selectedPlayers.length === 0) return;
 
     setSubmitting(true);
     try {
-      // Save player selection
-      await selectPlayer(sessionId, selectedPlayer);
-      
+      // Save primary player selection (first selected)
+      await selectPlayer(sessionId, selectedPlayers[0]);
+
       // Start pose analysis (backend will skip if already done)
       const response = await analyzePose(sessionId);
-      
+
       if (response.data?.status === "already_complete") {
         // Pose already exists, just close
         onAnalysisStarted();
         onClose?.();
         return;
       }
-      
+
       onAnalysisStarted();
       onClose?.();
     } catch (err: unknown) {
@@ -202,24 +217,27 @@ export function PlayerSelection({
               {previewData.players.map((player) => {
                 const img = imageRef.current;
                 if (!img) return null;
-                
+
                 const videoWidth = previewData.video_info.width;
                 const videoHeight = previewData.video_info.height;
-                
+
                 const leftPct = (player.bbox.x / videoWidth) * 100;
                 const topPct = (player.bbox.y / videoHeight) * 100;
                 const widthPct = (player.bbox.width / videoWidth) * 100;
                 const heightPct = (player.bbox.height / videoHeight) * 100;
 
-                const isSelected = selectedPlayer?.player_idx === player.player_idx;
+                const isSelected = selectedPlayers.some(p => p.player_idx === player.player_idx);
+                const selectionIndex = selectedPlayers.findIndex(p => p.player_idx === player.player_idx);
+                const isPrimary = selectionIndex === 0;
+                const isOpponent = selectionIndex === 1;
 
                 return (
                   <button
                     key={player.player_idx}
                     onClick={() => handlePlayerClick(player)}
                     className={`absolute rounded transition-all cursor-pointer ${
-                      isSelected 
-                        ? "border-2 border-[#9B7B5B] bg-[#9B7B5B]/10" 
+                      isSelected
+                        ? "border-2 border-[#9B7B5B] bg-[#9B7B5B]/10"
                         : "border border-[#E8E6E3]/30 hover:border-[#9B7B5B]/50"
                     }`}
                     style={{
@@ -232,7 +250,7 @@ export function PlayerSelection({
                     {isSelected && (
                       <div className="absolute -top-6 left-1/2 -translate-x-1/2 bg-[#9B7B5B] text-[#1E1D1F] px-2 py-0.5 rounded text-[10px] font-medium whitespace-nowrap">
                         <Check className="w-2.5 h-2.5 inline mr-0.5" />
-                        Selected
+                        {isPrimary ? "Player" : isOpponent ? "Opponent" : "Selected"}
                       </div>
                     )}
                   </button>
@@ -243,19 +261,26 @@ export function PlayerSelection({
             {/* Player list */}
             <div className="flex flex-wrap gap-2 px-3">
               {previewData.players.map((player) => {
-                const isSelected = selectedPlayer?.player_idx === player.player_idx;
+                const isSelected = selectedPlayers.some(p => p.player_idx === player.player_idx);
+                const selectionIndex = selectedPlayers.findIndex(p => p.player_idx === player.player_idx);
+                const isPrimary = selectionIndex === 0;
+                const isOpponent = selectionIndex === 1;
+
                 return (
                   <button
                     key={player.player_idx}
                     onClick={() => handlePlayerClick(player)}
-                    className={`text-[10px] px-2.5 py-1.5 rounded-lg transition-all font-medium ${
+                    className={`text-[10px] px-2.5 py-1.5 rounded-lg transition-all font-medium flex items-center gap-1.5 ${
                       isSelected
                         ? "bg-[#9B7B5B] text-[#1E1D1F]"
                         : "text-[#E8E6E3]/70 hover:text-[#9B7B5B] hover:bg-[#9B7B5B]/10"
                     }`}
                   >
+                    {isSelected && <Check className="w-3 h-3" />}
                     Player {player.player_idx + 1}
-                    <span className="ml-1.5 opacity-60">
+                    {isPrimary && <span className="text-[9px] opacity-70">(P)</span>}
+                    {isOpponent && <span className="text-[9px] opacity-70">(O)</span>}
+                    <span className="ml-0.5 opacity-60">
                       {(player.confidence * 100).toFixed(0)}%
                     </span>
                   </button>

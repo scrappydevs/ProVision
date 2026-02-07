@@ -320,7 +320,7 @@ function drawBallProjection(
   // Draw "projected landing" label
   ctx.fillStyle = "rgba(255, 255, 255, 0.95)";
   ctx.font = "bold 16px Inter";
-  ctx.fillText("Ball landing ↓", landingPoint.x - 50, landingPoint.y + 45);
+  ctx.fillText("Ball landing", landingPoint.x - 50, landingPoint.y + 45);
 }
 
 function drawAngleArc(

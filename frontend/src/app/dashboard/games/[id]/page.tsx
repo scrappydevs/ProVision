@@ -1137,20 +1137,18 @@ export default function GameViewerPage() {
                       </div>
                     </div>
                   ) : (
-                    <div className="text-center py-6">
+                    <div className="text-center py-8">
                       {isProcessing ? (
                         <>
-                          <Loader2 className="w-5 h-5 text-[#9B7B5B] mx-auto mb-2 animate-spin" />
-                          <p className="text-xs text-[#8A8885]">Auto-tracking in progress...</p>
-                          <p className="text-[10px] text-[#6A6865] mt-1">Ball trajectory will appear when ready</p>
+                          <Loader2 className="w-6 h-6 text-[#9B7B5B] mx-auto mb-3 animate-spin" />
+                          <p className="text-sm text-[#E8E6E3] font-medium">Tracking ball...</p>
+                          <p className="text-[10px] text-[#8A8885] mt-1.5">Trajectory will appear when ready</p>
                         </>
                       ) : (
                         <>
-                          <Crosshair className="w-5 h-5 text-[#363436] mx-auto mb-2" />
-                          <p className="text-xs text-[#6A6865] mb-3">Click Track to detect ball trajectory</p>
-                          <button onClick={handleAutoDetect} className="text-[10px] text-[#8A8885] hover:text-[#9B7B5B] transition-colors underline">
-                            Manual detect (YOLO+SAM2)
-                          </button>
+                          <Crosshair className="w-7 h-7 text-[#9B7B5B] mx-auto mb-3" />
+                          <p className="text-sm text-[#E8E6E3] font-medium mb-1">Ready to track</p>
+                          <p className="text-xs text-[#8A8885]">Click Track in the toolbar to detect ball trajectory</p>
                         </>
                       )}
                     </div>
@@ -1681,9 +1679,9 @@ export default function GameViewerPage() {
         </div>
 
         {(isTracking || isDetecting) && (
-          <div className="glass-context p-3 flex items-center gap-3 mt-2 shrink-0">
+          <div className="glass-context p-3.5 flex items-center gap-3 mt-2 shrink-0 bg-[#9B7B5B]/10">
             <Loader2 className="w-4 h-4 text-[#9B7B5B] animate-spin" />
-            <span className="text-xs text-[#8A8885]">{isDetecting ? "Detecting balls with YOLO..." : "Tracking ball with TrackNet..."}</span>
+            <span className="text-sm text-[#E8E6E3] font-medium">Tracking ball...</span>
           </div>
         )}
       </div>
