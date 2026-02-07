@@ -233,31 +233,17 @@ async def upload_avatar(
         raise HTTPException(status_code=500, detail=f"Failed to upload avatar: {str(e)}")
 
 
-def _get_game_counts_by_player(supabase, player_ids: list[str]) -> dict[str, int]:
-    """Fetch game counts for all players in a single query."""
-    if not player_ids:
-        return {}
-    gp_result = supabase.table("game_players").select("player_id").in_("player_id", player_ids).execute()
-    counts: dict[str, int] = {pid: 0 for pid in player_ids}
-    for row in gp_result.data or []:
-        pid = row.get("player_id")
-        if pid:
-            counts[pid] = counts.get(pid, 0) + 1
-    return counts
-
-
 @router.get("", response_model=List[PlayerResponse])
 async def list_players(user_id: str = Depends(get_current_user_id)):
     supabase = get_supabase()
 
     try:
         result = supabase.table("players").select("*").eq("coach_id", user_id).order("created_at", desc=True).execute()
-        player_ids = [p["id"] for p in result.data]
-        game_counts = _get_game_counts_by_player(supabase, player_ids)
 
         players = []
         for player in result.data:
-            player["game_count"] = game_counts.get(player["id"], 0)
+            count_result = supabase.table("game_players").select("id", count="exact").eq("player_id", player["id"]).execute()
+            player["game_count"] = count_result.count if count_result.count is not None else 0
             players.append(PlayerResponse(**player))
 
         return players
@@ -274,7 +260,8 @@ async def get_player(player_id: str, user_id: str = Depends(get_current_user_id)
         if not result.data:
             raise HTTPException(status_code=404, detail="Player not found")
 
-        result.data["game_count"] = _get_game_counts_by_player(supabase, [player_id]).get(player_id, 0)
+        count_result = supabase.table("game_players").select("id", count="exact").eq("player_id", player_id).execute()
+        result.data["game_count"] = count_result.count if count_result.count is not None else 0
 
         return PlayerResponse(**result.data)
     except HTTPException:
@@ -363,7 +350,8 @@ async def sync_ittf_data(
         result = supabase.table("players").update(update).eq("id", player_id).execute()
         data = result.data[0]
 
-        data["game_count"] = _get_game_counts_by_player(supabase, [player_id]).get(player_id, 0)
+        count_result = supabase.table("game_players").select("id", count="exact").eq("player_id", player_id).execute()
+        data["game_count"] = count_result.count if count_result.count is not None else 0
 
         return PlayerResponse(**data)
     except HTTPException:
@@ -432,22 +420,15 @@ async def get_player_games(
             search_lower = search.lower()
             games = [g for g in games if search_lower in g["name"].lower()]
 
-        # Batch fetch game_players and players (avoid N+1)
-        gp_all = supabase.table("game_players").select("game_id, player_id").in_("game_id", [g["id"] for g in games]).execute()
-        game_players_map: dict[str, list[str]] = {}
-        for row in gp_all.data or []:
-            game_players_map.setdefault(row["game_id"], []).append(row["player_id"])
-
-        all_player_ids = list({pid for pids in game_players_map.values() for pid in pids})
-        player_info_map: dict[str, dict] = {}
-        if all_player_ids:
-            players_result = supabase.table("players").select("id, name, avatar_url").in_("id", all_player_ids).execute()
-            player_info_map = {p["id"]: p for p in players_result.data}
-
         game_list = []
         for game in games:
-            player_ids = game_players_map.get(game["id"], [])
-            player_info = [player_info_map[pid] for pid in player_ids if pid in player_info_map]
+            gp_for_game = supabase.table("game_players").select("player_id").eq("game_id", game["id"]).execute()
+            player_ids = [gp["player_id"] for gp in gp_for_game.data]
+
+            player_info = []
+            if player_ids:
+                players_result = supabase.table("players").select("id, name, avatar_url").in_("id", player_ids).execute()
+                player_info = players_result.data
 
             game_list.append(GamePlayerInfo(
                 id=game["id"],

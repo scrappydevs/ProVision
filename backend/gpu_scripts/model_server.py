@@ -60,6 +60,10 @@ class ServerConfig:
         self.sam3d_path = os.getenv("SAM3D_MODEL_PATH", "/workspace/checkpoints/sam3d/")
         self.tracknet_path = os.getenv("TRACKNET_MODEL_PATH", "/workspace/checkpoints/tracknet_tennis.pt")
         self.tracknet_dir = os.getenv("TRACKNET_DIR", "/workspace/provision/tracknet")
+        self.ttnet_path = os.getenv("TTNET_MODEL_PATH", "/workspace/checkpoints/ttnet_3rd_phase.pth")
+        self.ttnet_dir = os.getenv("TTNET_DIR", "/workspace/provision/ttnet")
+        self.ttnet_input_size = (320, 128)  # (w, h) as per TTNet paper
+        self.ttnet_num_frames = 9  # 9 consecutive frames
         
         # Working directories
         self.sam2_dir = os.getenv("SAM2_WORKING_DIR", "/workspace/codes/sam2")
@@ -198,6 +202,7 @@ def load_tracknet_model(model_path: str, tracknet_dir: str):
         from model import BallTrackerNet
         
         device = "cuda:0" if torch.cuda.is_available() else "cpu"
+        registry.device = device  # Update global device for inference
         model = BallTrackerNet()
         model.load_state_dict(torch.load(model_path, map_location=device))
         model = model.to(device)
@@ -214,6 +219,64 @@ def load_tracknet_model(model_path: str, tracknet_dir: str):
     
     except Exception as e:
         logger.error(f"Failed to load TrackNet: {e}")
+        raise
+
+
+def load_ttnet_model(model_path: str, ttnet_dir: str):
+    """Load TTNet model for table-tennis-specific ball tracking.
+    
+    TTNet (CVPR 2020) uses 9 consecutive frames and a two-stage architecture:
+    - Global stage: coarse ball position from full frame
+    - Local stage: refined position from cropped region
+    Also supports event spotting (bounce/net) and segmentation.
+    
+    Setup:
+        git clone https://github.com/maudzung/TTNet-Real-time-Analysis-System-for-Table-Tennis-Pytorch /workspace/provision/ttnet
+        # Download pretrained weights to /workspace/checkpoints/ttnet_3rd_phase.pth
+    """
+    logger.info(f"Loading TTNet from {model_path}")
+    start_time = time.time()
+    
+    try:
+        sys.path.insert(0, os.path.join(ttnet_dir, "src"))
+        sys.path.insert(0, os.path.join(ttnet_dir, "src", "models"))
+        sys.path.insert(0, ttnet_dir)
+        import torch
+        from TTNet import TTNet
+        
+        device = "cuda:0" if torch.cuda.is_available() else "cpu"
+        
+        # Load model with global + local stages for best ball detection
+        tasks = ["global", "local", "event"]
+        model = TTNet(
+            dropout_p=0.5,
+            tasks=tasks,
+            input_size=config.ttnet_input_size,
+            thresh_ball_pos_mask=0.01,
+            num_frames_sequence=config.ttnet_num_frames,
+        )
+        
+        checkpoint = torch.load(model_path, map_location=device)
+        if "state_dict" in checkpoint:
+            model.load_state_dict(checkpoint["state_dict"])
+        else:
+            model.load_state_dict(checkpoint)
+        
+        model = model.to(device)
+        model.eval()
+        
+        # Warm up
+        dummy = torch.rand(1, 27, 128, 320).to(device)  # 9 frames * 3 channels
+        dummy_pos = torch.tensor([[-1.0, -1.0]]).to(device)
+        with torch.no_grad():
+            model(dummy, dummy_pos)
+        
+        load_time = time.time() - start_time
+        logger.info(f"TTNet loaded in {load_time:.2f}s on {device}")
+        return model, load_time
+    
+    except Exception as e:
+        logger.error(f"Failed to load TTNet: {e}")
         raise
 
 
@@ -748,6 +811,13 @@ async def lifespan(app: FastAPI):
                 )
                 registry.set("tracknet", model, load_time)
             
+            elif model_name == "ttnet":
+                model, load_time = load_ttnet_model(
+                    config.ttnet_path,
+                    config.ttnet_dir
+                )
+                registry.set("ttnet", model, load_time)
+            
             elif model_name == "sam3d":
                 model, load_time = load_sam3d_model(
                     config.sam3d_path,
@@ -813,27 +883,33 @@ async def sam2_init(request: SAM2InitRequest):
 
 def _run_tracknet_pass(frame_list, model, device, postprocess_fn):
     """Run TrackNet inference on a sequence of frames (forward or backward).
-    Returns (ball_track, conf_track, dists)."""
+    Returns (ball_track, conf_track, dists).
+    
+    Optimized: pre-resize all frames once, pre-convert to float32/GPU tensors.
+    """
     import cv2
     import numpy as np
     import torch
     from scipy.spatial import distance
     
     TN_W, TN_H = 640, 360
+    n = len(frame_list)
     ball_track = [(None, None)] * 2
     conf_track = [0.0, 0.0]
     dists = [-1] * 2
     
+    # Pre-resize all frames once (avoids 3x redundant resize per iteration)
+    resized = []
+    for f in frame_list:
+        r = cv2.resize(f, (TN_W, TN_H)).astype(np.float32) / 255.0
+        resized.append(np.rollaxis(r, 2, 0))  # (3, H, W)
+    
     with torch.no_grad():
-        for num in range(2, len(frame_list)):
-            img = cv2.resize(frame_list[num], (TN_W, TN_H))
-            img_prev = cv2.resize(frame_list[num - 1], (TN_W, TN_H))
-            img_preprev = cv2.resize(frame_list[num - 2], (TN_W, TN_H))
-            imgs = np.concatenate((img, img_prev, img_preprev), axis=2)
-            imgs = imgs.astype(np.float32) / 255.0
-            imgs = np.rollaxis(imgs, 2, 0)
-            inp = np.expand_dims(imgs, axis=0)
-            out = model(torch.from_numpy(inp).float().to(device), testing=True)
+        for num in range(2, n):
+            # Stack 3 pre-resized frames: (9, H, W)
+            imgs = np.concatenate((resized[num], resized[num-1], resized[num-2]), axis=0)
+            inp = torch.from_numpy(imgs).unsqueeze(0).float().to(device)
+            out = model(inp, testing=True)
             output = out.argmax(dim=1).detach().cpu().numpy()
             x_pred, y_pred, conf_pred = postprocess_fn(output)
             ball_track.append((x_pred, y_pred))
@@ -935,7 +1011,14 @@ async def tracknet_track(request: SAM2TrackRequest):
         if ball_track[i][0] is not None and ball_track[i-1][0] is not None:
             dists[i] = distance.euclidean(ball_track[i], ball_track[i-1])
     
-    ball_track = remove_outliers(ball_track, dists)
+    # Outlier removal with tighter threshold for ping pong (reduce jitter from false detections)
+    ball_track = remove_outliers(ball_track, dists, max_dist=100)
+    
+    # Second pass: confidence-based filtering (remove low-confidence detections that cause jitter)
+    for i in range(n):
+        if ball_track[i][0] is not None and conf_track[i] < 0.15:
+            ball_track[i] = (None, None)
+    
     subtracks = split_track(ball_track)
     
     # Bridge segments across hit events before interpolation
@@ -947,6 +1030,19 @@ async def tracknet_track(request: SAM2TrackRequest):
         ball_subtrack = ball_track[r[0]:r[1]]
         ball_subtrack = interpolation(ball_subtrack)
         ball_track[r[0]:r[1]] = ball_subtrack
+    
+    # === Exponential Moving Average Smoothing (reduce jitter) ===
+    # Apply EMA to smooth out small jitters while preserving actual motion
+    alpha = 0.3  # Smoothing factor (0 = no smoothing, 1 = no smoothing)
+    for i in range(1, n):
+        if ball_track[i][0] is not None and ball_track[i-1][0] is not None:
+            # Only smooth if positions are close (< 50px) - don't smooth across large jumps
+            dist = distance.euclidean(ball_track[i], ball_track[i-1])
+            if dist < 50:
+                ball_track[i] = (
+                    alpha * ball_track[i][0] + (1 - alpha) * ball_track[i-1][0],
+                    alpha * ball_track[i][1] + (1 - alpha) * ball_track[i-1][1]
+                )
     
     # === YOLO Recovery: fill remaining gaps ===
     yolo_model = registry.get("yolo")
@@ -979,9 +1075,17 @@ async def tracknet_track(request: SAM2TrackRequest):
         logger.info(f"YOLO recovered {yolo_recovered} gap frames")
     
     # === Convert to output trajectory ===
+    MIN_CONFIDENCE = 0.2  # Don't output detections below this threshold (reduces jitter)
+    
     trajectory = []
     for frame_idx, (x, y) in enumerate(ball_track):
         if x is not None and y is not None:
+            real_conf = conf_track[frame_idx] if frame_idx < len(conf_track) else 0.5
+            
+            # Skip low-confidence detections (likely false positives causing jitter)
+            if real_conf < MIN_CONFIDENCE:
+                continue
+            
             px = float(x) * (orig_w / 1280.0)
             py = float(y) * (orig_h / 720.0)
             ball_half = 10 * (orig_w / 1280.0)
@@ -989,17 +1093,144 @@ async def tracknet_track(request: SAM2TrackRequest):
                 max(0, int(px - ball_half)), max(0, int(py - ball_half)),
                 min(orig_w, int(px + ball_half)), min(orig_h, int(py + ball_half)),
             ]
-            real_conf = conf_track[frame_idx] if frame_idx < len(conf_track) else 0.5
+            
             trajectory.append({
                 "frame": frame_idx,
                 "x": round(px, 1),
                 "y": round(py, 1),
-                "confidence": round(max(real_conf, 0.01), 3),
+                "confidence": round(real_conf, 3),
                 "bbox": bbox,
             })
     
     detected = len(trajectory)
     logger.info(f"TrackNet complete: {detected}/{n} frames tracked (bidir+bridge+yolo)")
+    
+    return {
+        "status": "completed",
+        "trajectory": trajectory,
+        "total_frames": n,
+        "tracked_frames": detected,
+        "video_info": {"width": orig_w, "height": orig_h, "fps": fps},
+    }
+
+
+class TTNetTrackRequest(BaseModel):
+    session_id: str
+    video_path: str
+    frame: int = 0
+
+
+@app.post("/ttnet/track")
+async def ttnet_track(request: TTNetTrackRequest):
+    """Track ball through entire video using TTNet (table tennis specific).
+    
+    TTNet uses 9 consecutive frames for temporal context and a two-stage
+    (global + local refinement) architecture trained on table tennis data.
+    Much better than TrackNet for ping pong ball detection.
+    
+    Output format matches TrackNet for drop-in compatibility.
+    """
+    import cv2
+    import numpy as np
+    import torch
+    
+    ttnet_model = registry.get("ttnet")
+    if ttnet_model is None:
+        raise HTTPException(status_code=503, detail="TTNet model not loaded. Start server with --models ttnet")
+    
+    device = registry.device
+    
+    cap = cv2.VideoCapture(request.video_path)
+    if not cap.isOpened():
+        raise HTTPException(status_code=400, detail=f"Cannot open video: {request.video_path}")
+    
+    orig_w = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
+    orig_h = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
+    fps = cap.get(cv2.CAP_PROP_FPS)
+    
+    # Read all frames
+    frames = []
+    while cap.isOpened():
+        ret, frame = cap.read()
+        if not ret:
+            break
+        frames.append(frame)
+    cap.release()
+    
+    n = len(frames)
+    logger.info(f"TTNet tracking: {n} frames, {orig_w}x{orig_h} @ {fps:.1f}fps")
+    
+    w_resize, h_resize = config.ttnet_input_size  # (320, 128)
+    num_seq = config.ttnet_num_frames  # 9
+    
+    # Resize all frames to TTNet input size
+    resized_frames = []
+    for frame in frames:
+        resized = cv2.resize(frame, (w_resize, h_resize))
+        resized = cv2.cvtColor(resized, cv2.COLOR_BGR2RGB)
+        resized_frames.append(resized)
+    
+    trajectory = []
+    
+    with torch.no_grad():
+        for i in range(num_seq - 1, n):
+            # Build input: 9 consecutive frames concatenated along channel dim
+            # Shape: (1, 27, 128, 320)
+            frame_batch = []
+            for j in range(num_seq):
+                idx = i - (num_seq - 1) + j
+                frame_batch.append(resized_frames[idx])
+            
+            # Stack frames: (9, H, W, 3) -> (1, 27, H, W)
+            inp = np.stack(frame_batch, axis=0)  # (9, 128, 320, 3)
+            inp = inp.transpose(0, 3, 1, 2)  # (9, 3, 128, 320)
+            inp = inp.reshape(1, num_seq * 3, h_resize, w_resize)  # (1, 27, 128, 320)
+            inp = torch.from_numpy(inp).float().to(device)
+            
+            # Dummy ball position (not needed for inference)
+            dummy_pos = torch.tensor([[-1.0, -1.0]]).to(device)
+            
+            pred_global, pred_local, pred_events, pred_seg, _ = ttnet_model(inp, dummy_pos)
+            
+            # Extract ball position from prediction
+            # pred_global shape: (1, 448) -> first 320 values = x distribution, next 128 = y distribution
+            pred = pred_local if pred_local is not None else pred_global
+            pred_np = pred[0].cpu().numpy()
+            
+            x_pred = pred_np[:w_resize]
+            y_pred = pred_np[w_resize:]
+            
+            x_conf = float(np.max(x_pred))
+            y_conf = float(np.max(y_pred))
+            conf = min(x_conf, y_conf)
+            
+            if conf > 0.05:  # Detection threshold
+                x_pos = float(np.argmax(x_pred))
+                y_pos = float(np.argmax(y_pred))
+                
+                # Scale from TTNet coords to original video coords
+                px = x_pos * (orig_w / w_resize)
+                py = y_pos * (orig_h / h_resize)
+                
+                ball_half = 10 * (orig_w / 1280.0)
+                bbox = [
+                    max(0, int(px - ball_half)), max(0, int(py - ball_half)),
+                    min(orig_w, int(px + ball_half)), min(orig_h, int(py + ball_half)),
+                ]
+                
+                trajectory.append({
+                    "frame": i,
+                    "x": round(px, 1),
+                    "y": round(py, 1),
+                    "confidence": round(conf, 3),
+                    "bbox": bbox,
+                })
+            
+            if i % 50 == 0:
+                logger.info(f"TTNet progress: {i}/{n}")
+    
+    detected = len(trajectory)
+    logger.info(f"TTNet complete: {detected}/{n} frames tracked")
     
     return {
         "status": "completed",

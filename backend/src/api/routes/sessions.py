@@ -14,8 +14,9 @@ logger = logging.getLogger(__name__)
 
 
 async def _run_tracknet_background(session_id: str, video_url: str):
-    """Background task: run TrackNet ball tracking on newly uploaded video."""
+    """Background task: run ball tracking on newly uploaded video."""
     try:
+        logger.info(f"[TrackNet] Starting ball tracking for session: {session_id}")
         from ..services.sam2_service import sam2_service
         supabase = get_supabase()
 
@@ -40,9 +41,9 @@ async def _run_tracknet_background(session_id: str, video_url: str):
             "status": "ready",
         }).eq("id", session_id).execute()
 
-        logger.info(f"TrackNet auto-tracking complete: session={session_id}, frames={len(trajectory_data.frames)}")
+        logger.info(f"[TrackNet] Auto-tracking complete: session={session_id}, frames={len(trajectory_data.frames)}")
     except Exception as e:
-        logger.error(f"TrackNet auto-tracking failed for {session_id}: {e}")
+        logger.error(f"[TrackNet] Auto-tracking failed for {session_id}: {e}", exc_info=True)
         try:
             supabase = get_supabase()
             supabase.table("sessions").update({"status": "failed"}).eq("id", session_id).execute()
@@ -51,7 +52,7 @@ async def _run_tracknet_background(session_id: str, video_url: str):
 
 
 async def _run_pose_background(session_id: str, video_url: str):
-    """Background task: run YOLO-pose on sampled frames and store in pose_analysis table."""
+    """Background task: run pose detection on sampled frames and store in pose_analysis table."""
     try:
         from ..services.sam2_service import sam2_service
         supabase = get_supabase()
@@ -119,6 +120,7 @@ class SessionResponse(BaseModel):
     selected_player: Optional[dict] = None
     trajectory_data: Optional[dict] = None
     pose_data: Optional[dict] = None
+    camera_facing: str = "auto"
     status: str
     created_at: str
     players: Optional[List[PlayerBrief]] = None
@@ -134,6 +136,11 @@ async def create_session(
     user_id: str = Depends(get_current_user_id),
 ):
     """Create a new analysis session with video upload."""
+    import traceback
+    print(f"[DEBUG] Creating session for user: {user_id}")
+    print(f"[DEBUG] Video filename: {video.filename}")
+    print(f"[DEBUG] Session name: {name}")
+
     supabase = get_supabase()
     session_id = str(uuid.uuid4())
 
@@ -141,12 +148,18 @@ async def create_session(
     video_ext = os.path.splitext(video.filename or "video.mp4")[1]
     video_path = f"{user_id}/{session_id}/original{video_ext}"
 
+    print(f"[DEBUG] Video path: {video_path}")
+
     try:
         supabase.storage.from_("provision-videos").upload(video_path, video_content)
+        print(f"[DEBUG] Video uploaded successfully")
     except Exception as e:
+        print(f"[ERROR] Failed to upload video: {str(e)}")
+        print(f"[ERROR] Traceback: {traceback.format_exc()}")
         raise HTTPException(status_code=500, detail=f"Failed to upload video: {str(e)}")
 
     video_url = supabase.storage.from_("provision-videos").get_public_url(video_path)
+    print(f"[DEBUG] Video URL: {video_url}")
 
     session_data = {
         "id": session_id,
@@ -158,8 +171,11 @@ async def create_session(
         "created_at": datetime.utcnow().isoformat(),
     }
 
+    print(f"[DEBUG] Session data: {session_data}")
+
     try:
         result = supabase.table("sessions").insert(session_data).execute()
+        print(f"[DEBUG] Session created successfully: {result.data}")
 
         # Link players if provided (comma-separated UUIDs)
         linked_players: List[PlayerBrief] = []
@@ -177,22 +193,40 @@ async def create_session(
                         "player_id": pid,
                     }).execute()
                 except Exception as link_err:
-                    logger.warning("Failed to link player %s: %s", pid, link_err)
+                    print(f"[WARNING] Failed to link player {pid}: {str(link_err)}")
 
             if pid_list:
                 players_result = supabase.table("players").select("id, name, avatar_url").in_("id", pid_list).execute()
                 linked_players = [PlayerBrief(**p) for p in players_result.data]
 
+        # Pose analysis disabled for debugging — can be re-enabled later
+        # from ..routes.pose import process_pose_analysis
+        # from ..utils.video_utils import extract_video_path_from_url
+        # try:
+        #     video_storage_path = extract_video_path_from_url(video_url)
+        #     background_tasks.add_task(process_pose_analysis, session_id, video_storage_path, video_url)
+        # except Exception as e:
+        #     print(f"[WARNING] Failed to queue pose analysis: {str(e)}")
+        # Auto-trigger ball tracking in background
         try:
-            background_tasks.add_task(_run_tracknet_background, session_id, video_url)
-            background_tasks.add_task(_run_pose_background, session_id, video_url)
+            background_tasks.add_task(
+                _run_tracknet_background,
+                session_id, video_url
+            )
+            background_tasks.add_task(
+                _run_pose_background,
+                session_id, video_url
+            )
+            print(f"[DEBUG] TrackNet + Pose queued for session {session_id}")
         except Exception as e:
-            logger.warning("Failed to queue background tasks: %s", e)
+            print(f"[WARNING] Failed to queue background tasks: {str(e)}")
 
         response_data = result.data[0]
         response_data["players"] = [p.model_dump() for p in linked_players]
         return SessionResponse(**response_data)
     except Exception as e:
+        print(f"[ERROR] Failed to create session in DB: {str(e)}")
+        print(f"[ERROR] Traceback: {traceback.format_exc()}")
         raise HTTPException(status_code=500, detail=f"Failed to create session: {str(e)}")
 
 
@@ -253,6 +287,35 @@ async def get_session(session_id: str, user_id: str = Depends(get_current_user_i
         raise
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Failed to fetch session: {str(e)}")
+
+
+class SessionUpdate(BaseModel):
+    camera_facing: Optional[str] = None
+
+
+@router.patch("/{session_id}", response_model=SessionResponse)
+async def update_session(
+    session_id: str,
+    body: SessionUpdate,
+    user_id: str = Depends(get_current_user_id),
+):
+    """Update session settings (e.g. camera_facing)."""
+    supabase = get_supabase()
+
+    result = supabase.table("sessions").select("*").eq("id", session_id).eq("user_id", user_id).single().execute()
+    if not result.data:
+        raise HTTPException(status_code=404, detail="Session not found")
+
+    update_data = {k: v for k, v in body.model_dump().items() if v is not None}
+    if not update_data:
+        raise HTTPException(status_code=400, detail="No fields to update")
+
+    try:
+        updated = supabase.table("sessions").update(update_data).eq("id", session_id).execute()
+        session_data = updated.data[0]
+        return SessionResponse(**session_data)
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Failed to update session: {str(e)}")
 
 
 @router.delete("/{session_id}")

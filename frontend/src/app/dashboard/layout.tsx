@@ -36,7 +36,7 @@ export default function DashboardLayout({
 
   return (
     <div className="min-h-screen bg-background">
-      <Header onMenuClick={() => setSidebarOpen(!sidebarOpen)} />
+      <Header />
       <div className="flex pt-16">
         <Sidebar
           isOpen={sidebarOpen}
@@ -45,7 +45,7 @@ export default function DashboardLayout({
           onToggleCollapse={() => setSidebarCollapsed((c) => !c)}
         />
         <main className="flex-1 min-w-0">
-          <div className="p-4 md:p-5">{children}</div>
+          <div className="p-6">{children}</div>
         </main>
       </div>
     </div>

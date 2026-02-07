@@ -2,22 +2,15 @@
 
 import { useAuth } from "@/hooks/useAuth";
 import { Button } from "@/components/ui/button";
-import { Menu, LogOut, User } from "lucide-react";
+import { LogOut, User } from "lucide-react";
 
-interface HeaderProps {
-  onMenuClick: () => void;
-}
-
-export function Header({ onMenuClick }: HeaderProps) {
+export function Header() {
   const { user, signOut } = useAuth();
 
   return (
     <header className="h-16 border-b border-border bg-background fixed top-0 left-0 right-0 z-40">
-      <div className="h-full px-4 md:px-5 flex items-center justify-between">
+      <div className="h-full px-6 flex items-center justify-between">
         <div className="flex items-center gap-4">
-          <Button variant="ghost" size="icon" onClick={onMenuClick}>
-            <Menu className="w-5 h-5" />
-          </Button>
           <span className="text-sm font-medium tracking-wide text-foreground">ProVision</span>
         </div>
 

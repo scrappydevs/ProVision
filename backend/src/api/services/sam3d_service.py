@@ -1,12 +1,12 @@
 """
-SAM3D Service for 3D point cloud segmentation.
+3D segmentation service.
 
 Pipeline:
-1. Get SAM2 masks for tracked object
-2. Estimate depth using MiDaS
+1. Get masks for tracked object
+2. Estimate depth
 3. Project 2D masks to 3D point clouds
-4. Merge point clouds using SAM3D bidirectional merging
-5. Upload result to Supabase and return URL
+4. Merge point clouds
+5. Upload result and return URL
 """
 
 import os
@@ -22,7 +22,7 @@ logger = logging.getLogger(__name__)
 
 
 class SAM3DJob:
-    """Represents a SAM3D processing job."""
+    """Represents a 3D processing job."""
     
     def __init__(
         self,
@@ -54,11 +54,11 @@ class SAM3DJob:
 
 
 class SAM3DService:
-    """Service for SAM3D 3D point cloud segmentation."""
+    """Service for 3D point cloud segmentation."""
     
     def __init__(self, remote_runner: Optional[RemoteEngineRunner] = None):
         """
-        Initialize SAM3D service.
+        Initialize 3D segmentation service.
         
         Args:
             remote_runner: Remote engine runner for GPU execution.
@@ -89,13 +89,13 @@ class SAM3DService:
         end_frame: Optional[int] = None
     ) -> str:
         """
-        Start SAM3D 3D segmentation job.
+        Start 3D segmentation job.
         
         Args:
             session_id: Session identifier
             object_id: Tracked object identifier
             video_path: Path to video (can be Supabase URL or remote path)
-            masks_dir: Directory containing SAM2 masks (optional, will generate if not provided)
+            masks_dir: Directory containing masks (optional, will generate if not provided)
             start_frame: Starting frame for processing
             end_frame: Ending frame (None for all frames)
         
@@ -127,7 +127,7 @@ class SAM3DService:
         start_frame: int,
         end_frame: Optional[int]
     ):
-        """Internal method to process SAM3D segmentation."""
+        """Internal method to process 3D segmentation."""
         try:
             logger.info(f"Starting SAM3D job {job.job_id} for session {job.session_id}")
             
@@ -142,7 +142,7 @@ class SAM3DService:
                 if masks_dir is None:
                     masks_dir = f"{config.REMOTE_RESULTS_DIR}/{job.session_id}/sam2"
                 
-                # Run SAM3D on GPU server
+                # Run 3D segmentation on GPU server
                 result = await self.remote_runner.run_sam3d_segmentation(
                     session_id=job.session_id,
                     object_id=job.object_id,
@@ -170,7 +170,7 @@ class SAM3DService:
         start_frame: int,
         end_frame: Optional[int]
     ) -> Dict[str, Any]:
-        """Generate mock SAM3D results for development."""
+        """Generate mock results for development."""
         import random
         
         # Simulate processing time
@@ -201,7 +201,7 @@ class SAM3DService:
     
     async def get_result(self, session_id: str, object_id: str) -> Optional[Dict[str, Any]]:
         """
-        Get SAM3D result for a session and object.
+        Get result for a session and object.
         
         Args:
             session_id: Session identifier
@@ -246,7 +246,7 @@ _sam3d_service: Optional[SAM3DService] = None
 
 
 def get_sam3d_service() -> SAM3DService:
-    """Get or create the global SAM3D service instance."""
+    """Get or create the global service instance."""
     global _sam3d_service
     if _sam3d_service is None:
         _sam3d_service = SAM3DService()

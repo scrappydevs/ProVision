@@ -12,24 +12,6 @@ logger = logging.getLogger(__name__)
 router = APIRouter()
 
 
-def _get_matchup_stats_by_tournament(supabase, tournament_ids: list[str]) -> dict[str, dict]:
-    """Fetch matchup counts and win/loss stats for all tournaments in a single query."""
-    if not tournament_ids:
-        return {}
-    result = supabase.table("tournament_matchups").select("tournament_id, result").in_("tournament_id", tournament_ids).execute()
-    stats: dict[str, dict] = {tid: {"matchup_count": 0, "win_count": 0, "loss_count": 0} for tid in tournament_ids}
-    for row in result.data or []:
-        tid = row.get("tournament_id")
-        if tid and tid in stats:
-            stats[tid]["matchup_count"] += 1
-            r = row.get("result")
-            if r == "win":
-                stats[tid]["win_count"] += 1
-            elif r == "loss":
-                stats[tid]["loss_count"] += 1
-    return stats
-
-
 class TournamentCreate(BaseModel):
     name: str
     location: Optional[str] = None
@@ -172,15 +154,13 @@ async def list_tournaments(
         if status:
             query = query.eq("status", status)
         result = query.execute()
-        tournament_ids = [t["id"] for t in result.data]
-        stats = _get_matchup_stats_by_tournament(supabase, tournament_ids)
 
         tournaments = []
         for t in result.data:
-            s = stats.get(t["id"], {})
-            t["matchup_count"] = s.get("matchup_count", 0)
-            t["win_count"] = s.get("win_count", 0)
-            t["loss_count"] = s.get("loss_count", 0)
+            matchups = supabase.table("tournament_matchups").select("result").eq("tournament_id", t["id"]).execute()
+            t["matchup_count"] = len(matchups.data)
+            t["win_count"] = sum(1 for m in matchups.data if m.get("result") == "win")
+            t["loss_count"] = sum(1 for m in matchups.data if m.get("result") == "loss")
             tournaments.append(TournamentResponse(**t))
 
         return tournaments
@@ -203,15 +183,13 @@ async def list_upcoming_tournaments(
             .order("start_date", desc=False)
             .execute()
         )
-        tournament_ids = [t["id"] for t in result.data]
-        stats = _get_matchup_stats_by_tournament(supabase, tournament_ids)
 
         tournaments = []
         for t in result.data:
-            s = stats.get(t["id"], {})
-            t["matchup_count"] = s.get("matchup_count", 0)
-            t["win_count"] = s.get("win_count", 0)
-            t["loss_count"] = s.get("loss_count", 0)
+            matchups = supabase.table("tournament_matchups").select("result").eq("tournament_id", t["id"]).execute()
+            t["matchup_count"] = len(matchups.data)
+            t["win_count"] = sum(1 for m in matchups.data if m.get("result") == "win")
+            t["loss_count"] = sum(1 for m in matchups.data if m.get("result") == "loss")
             tournaments.append(TournamentResponse(**t))
 
         return tournaments
@@ -234,15 +212,13 @@ async def list_past_tournaments(
             .order("start_date", desc=True)
             .execute()
         )
-        tournament_ids = [t["id"] for t in result.data]
-        stats = _get_matchup_stats_by_tournament(supabase, tournament_ids)
 
         tournaments = []
         for t in result.data:
-            s = stats.get(t["id"], {})
-            t["matchup_count"] = s.get("matchup_count", 0)
-            t["win_count"] = s.get("win_count", 0)
-            t["loss_count"] = s.get("loss_count", 0)
+            matchups = supabase.table("tournament_matchups").select("result").eq("tournament_id", t["id"]).execute()
+            t["matchup_count"] = len(matchups.data)
+            t["win_count"] = sum(1 for m in matchups.data if m.get("result") == "win")
+            t["loss_count"] = sum(1 for m in matchups.data if m.get("result") == "loss")
             tournaments.append(TournamentResponse(**t))
 
         return tournaments
@@ -269,6 +245,34 @@ async def get_ittf_calendar(
 
 class ITTFImportRequest(BaseModel):
     events: List[dict]
+
+
+@router.post("/sync-wtt")
+async def sync_wtt_tournaments(
+    user_id: str = Depends(get_current_user_id),
+):
+    from ..services.wtt_tournament_seeder import seed_real_wtt_tournaments
+
+    supabase = get_supabase()
+    try:
+        results = await seed_real_wtt_tournaments(user_id, supabase)
+        return {"message": f"Synced {len(results)} tournaments", "tournaments": results}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"WTT sync failed: {str(e)}")
+
+
+@router.post("/backfill-videos")
+async def backfill_tournament_videos(
+    user_id: str = Depends(get_current_user_id),
+):
+    from ..services.wtt_tournament_seeder import backfill_videos
+
+    supabase = get_supabase()
+    try:
+        stats = await backfill_videos(user_id, supabase)
+        return {"message": f"Searched {stats['searched']}, found {stats['found']}", **stats}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Video backfill failed: {str(e)}")
 
 
 @router.post("/import-ittf", response_model=List[TournamentResponse])
@@ -329,10 +333,10 @@ async def get_tournament(
         if not result.data:
             raise HTTPException(status_code=404, detail="Tournament not found")
 
-        s = _get_matchup_stats_by_tournament(supabase, [tournament_id]).get(tournament_id, {})
-        result.data["matchup_count"] = s.get("matchup_count", 0)
-        result.data["win_count"] = s.get("win_count", 0)
-        result.data["loss_count"] = s.get("loss_count", 0)
+        matchups = supabase.table("tournament_matchups").select("result").eq("tournament_id", tournament_id).execute()
+        result.data["matchup_count"] = len(matchups.data)
+        result.data["win_count"] = sum(1 for m in matchups.data if m.get("result") == "win")
+        result.data["loss_count"] = sum(1 for m in matchups.data if m.get("result") == "loss")
 
         return TournamentResponse(**result.data)
     except HTTPException:
@@ -374,10 +378,10 @@ async def update_tournament(
         result = supabase.table("tournaments").update(update_data).eq("id", tournament_id).execute()
         row = result.data[0]
 
-        s = _get_matchup_stats_by_tournament(supabase, [tournament_id]).get(tournament_id, {})
-        row["matchup_count"] = s.get("matchup_count", 0)
-        row["win_count"] = s.get("win_count", 0)
-        row["loss_count"] = s.get("loss_count", 0)
+        matchups = supabase.table("tournament_matchups").select("result").eq("tournament_id", tournament_id).execute()
+        row["matchup_count"] = len(matchups.data)
+        row["win_count"] = sum(1 for m in matchups.data if m.get("result") == "win")
+        row["loss_count"] = sum(1 for m in matchups.data if m.get("result") == "loss")
 
         return TournamentResponse(**row)
     except Exception as e:
@@ -479,15 +483,16 @@ async def list_matchups(
     try:
         result = supabase.table("tournament_matchups").select("*").eq("tournament_id", tournament_id).order("scheduled_at", desc=False).execute()
 
-        player_ids = list({m["player_id"] for m in result.data if m.get("player_id")})
-        player_names: dict[str, str] = {}
-        if player_ids:
-            players = supabase.table("players").select("id, name").in_("id", player_ids).execute()
-            player_names = {p["id"]: p.get("name") for p in players.data}
-
         matchups = []
         for m in result.data:
-            m["player_name"] = player_names.get(m["player_id"]) if m.get("player_id") else None
+            if m.get("player_id"):
+                try:
+                    player = supabase.table("players").select("name").eq("id", m["player_id"]).single().execute()
+                    m["player_name"] = player.data.get("name") if player.data else None
+                except Exception:
+                    m["player_name"] = None
+            else:
+                m["player_name"] = None
             matchups.append(MatchupResponse(**m))
 
         return matchups

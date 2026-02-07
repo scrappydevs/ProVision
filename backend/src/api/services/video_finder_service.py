@@ -5,12 +5,14 @@ using yt-dlp's ytsearch. Targets the official WTT channel first, then general se
 
 import logging
 from typing import Optional
-from datetime import datetime
 
 logger = logging.getLogger(__name__)
 
 WTT_CHANNEL_URL = "https://www.youtube.com/@WTTGlobal"
 WTT_CHANNEL_ID = "UC9ckyA_A3MfXUa0ttxMoIZw"
+
+ITTF_CHANNEL_URL = "https://www.youtube.com/@ITTFWorld"
+ITTF_CHANNEL_ID = "UCa2SNlpTOL4F0NeHPFMVKdw"
 
 
 def search_match_video(
@@ -21,6 +23,7 @@ def search_match_video(
 ) -> Optional[dict]:
     """
     Search YouTube for a match video using yt-dlp ytsearch.
+    Searches @ITTFWorld first, then @WTTGlobal, then general YouTube.
     Returns the best match as {url, title, thumbnail_url, duration, channel, youtube_video_id}.
     """
     try:
@@ -34,7 +37,12 @@ def search_match_video(
         query += f" {tournament_name}"
     query += " table tennis"
 
-    # First: search within the WTT channel
+    # First: search within the @ITTFWorld channel
+    result = _search_youtube(query, max_results=max_results, channel_filter=ITTF_CHANNEL_ID)
+    if result:
+        return result
+
+    # Second: search within the @WTTGlobal channel
     result = _search_youtube(query, max_results=max_results, channel_filter=WTT_CHANNEL_ID)
     if result:
         return result
@@ -114,68 +122,3 @@ def _format_duration(seconds: int) -> str:
     return f"{minutes}:{secs:02d}"
 
 
-async def auto_enrich_tournament_videos(tournament_uuid: str, supabase) -> dict:
-    """
-    For all matches in a tournament that don't have a video_url,
-    search YouTube and populate the video_url field.
-    Returns stats: {searched, found, errors}.
-    """
-    stats = {"searched": 0, "found": 0, "errors": 0}
-
-    try:
-        # Get tournament name
-        t_result = supabase.table("wtt_tournaments").select("name").eq("id", tournament_uuid).single().execute()
-        tournament_name = t_result.data.get("name", "") if t_result.data else ""
-
-        # Get matches without video
-        matches = (
-            supabase.table("wtt_matches")
-            .select("id, player_1_id, player_2_id, video_url")
-            .eq("tournament_id", tournament_uuid)
-            .is_("video_url", "null")
-            .eq("status", "finished")
-            .execute()
-        )
-
-        if not matches.data:
-            return stats
-
-        # Build player name lookup
-        player_ids = set()
-        for m in matches.data:
-            if m.get("player_1_id"):
-                player_ids.add(m["player_1_id"])
-            if m.get("player_2_id"):
-                player_ids.add(m["player_2_id"])
-
-        player_names: dict[str, str] = {}
-        if player_ids:
-            ids_list = list(player_ids)
-            players = supabase.table("wtt_players").select("id, name").in_("id", ids_list).execute()
-            for p in players.data:
-                player_names[p["id"]] = p["name"]
-
-        # Search for each match
-        for m in matches.data:
-            stats["searched"] += 1
-            p1_name = player_names.get(m.get("player_1_id", ""), "Player 1")
-            p2_name = player_names.get(m.get("player_2_id", ""), "Player 2")
-
-            try:
-                result = search_match_video(p1_name, p2_name, tournament_name)
-                if result and result.get("url"):
-                    supabase.table("wtt_matches").update({
-                        "video_url": result["url"],
-                        "updated_at": datetime.utcnow().isoformat(),
-                    }).eq("id", m["id"]).execute()
-                    stats["found"] += 1
-                    logger.info(f"Found video for {p1_name} vs {p2_name}: {result['url']}")
-            except Exception as e:
-                stats["errors"] += 1
-                logger.error(f"Video search error for match {m['id']}: {e}")
-
-    except Exception as e:
-        logger.error(f"Auto-enrich failed for tournament {tournament_uuid}: {e}")
-        stats["errors"] += 1
-
-    return stats

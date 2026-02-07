@@ -5,7 +5,7 @@ import { usePathname } from "next/navigation";
 import { cn } from "@/lib/utils";
 import { Switch } from "@heroui/react";
 import { useTheme } from "next-themes";
-import { Users, Gamepad2, Trophy, Settings, PanelLeftClose, PanelLeftOpen, Sun, Moon, Database, BarChart3, Activity, Compass } from "lucide-react";
+import { Users, Gamepad2, Trophy, Settings, PanelLeftClose, PanelLeftOpen, Sun, Moon } from "lucide-react";
 
 interface SidebarProps {
   isOpen: boolean;
@@ -18,10 +18,6 @@ const navigation = [
   { name: "Players", href: "/dashboard", icon: Users },
   { name: "Teams", href: "/dashboard/teams", icon: Gamepad2 },
   { name: "Tournaments", href: "/dashboard/tournaments", icon: Trophy },
-  { name: "Stats", href: "/dashboard/stats", icon: BarChart3 },
-  { name: "Activity", href: "/dashboard/activity", icon: Activity },
-  { name: "Explore", href: "/dashboard/explore", icon: Compass },
-  { name: "WTT Database", href: "/dashboard/wtt", icon: Database },
   { name: "Settings", href: "/dashboard/settings", icon: Settings },
 ];
 
@@ -48,7 +44,7 @@ export function Sidebar({ isOpen, collapsed, onClose, onToggleCollapse }: Sideba
         )}
       >
         {/* Nav items */}
-        <nav className={cn("flex-1 space-y-0.5", collapsed ? "p-2" : "p-2.5")}>
+        <nav className={cn("flex-1 space-y-1", collapsed ? "p-2" : "p-3")}>
           {navigation.map((item) => {
             const isActive =
               item.href === "/dashboard"

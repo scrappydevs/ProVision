@@ -56,8 +56,8 @@ export default function DashboardPage() {
 
   return (
     <div>
-      <div className="flex items-center justify-between mb-4">
-        <h1 className="text-xl font-light text-foreground">Your Roster</h1>
+      <div className="flex items-center justify-between mb-8">
+        <h1 className="text-2xl font-light text-foreground">Your Roster</h1>
         <div className="flex items-center gap-2">
           <Button
             variant="outline"
@@ -81,7 +81,7 @@ export default function DashboardPage() {
             initial={{ opacity: 0, height: 0 }}
             animate={{ opacity: 1, height: "auto" }}
             exit={{ opacity: 0, height: 0 }}
-            className="overflow-hidden mb-4"
+            className="overflow-hidden mb-6"
           >
             <div className="bg-card rounded-xl border border-border p-4">
               <div className="flex items-center justify-between mb-3">
@@ -160,7 +160,7 @@ export default function DashboardPage() {
           <Loader2 className="w-8 h-8 text-primary animate-spin" />
         </div>
       ) : players && players.length > 0 ? (
-        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-4 auto-rows-fr">
+        <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-4 xl:grid-cols-5 2xl:grid-cols-6 gap-4 auto-rows-fr">
           {players.map((player, i) => (
             <motion.div
               key={player.id}
@@ -189,14 +189,14 @@ export default function DashboardPage() {
           ))}
         </div>
       ) : (
-        <div className="flex flex-col items-center justify-center py-16">
-          <div className="w-16 h-16 rounded-xl bg-card flex items-center justify-center mb-4">
+        <div className="flex flex-col items-center justify-center py-24">
+          <div className="w-20 h-20 rounded-2xl bg-card flex items-center justify-center mb-6">
             <Users className="w-10 h-10 text-primary/60" />
           </div>
-          <h3 className="text-lg font-light text-foreground mb-1.5">
+          <h3 className="text-xl font-light text-foreground mb-2">
             Build your roster
           </h3>
-          <p className="text-sm text-muted-foreground mb-4 text-center max-w-sm">
+          <p className="text-sm text-muted-foreground mb-6 text-center max-w-sm">
             Add players to start uploading game footage, tracking performance, and generating analytics.
           </p>
           <Button onClick={() => setFormOpen(true)} className="gap-2 h-11 px-6">

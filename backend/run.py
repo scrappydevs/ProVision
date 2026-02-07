@@ -43,13 +43,10 @@ sys.path.insert(0, os.path.join(SCRIPT_DIR, "src"))
 
 if __name__ == "__main__":
     reload = "--reload" in sys.argv or os.getenv("DEBUG", "false").lower() == "true"
-    workers = 1 if reload else int(os.getenv("UVICORN_WORKERS", "1"))
 
     uvicorn.run(
         "api.main:app",
         host=os.getenv("API_HOST", "0.0.0.0"),
         port=int(os.getenv("API_PORT", "8000")),
         reload=reload,
-        workers=workers,
-        forwarded_allow_ips="*",
     )

@@ -8,85 +8,6 @@ logger = logging.getLogger(__name__)
 
 ITTF_PROFILE_URL = "https://results.ittf.link/index.php"
 ITTF_HEADSHOT_BASE = "https://wttsimfiles.blob.core.windows.net/wtt-media/photos/400px"
-ITTF_SEARCH_URL = "https://results.ittf.link/index.php"
-
-
-async def search_ittf_players(name: str) -> list[dict]:
-    """Search ITTF database by player name. Returns list of matching players."""
-    params = {
-        "option": "com_fabrik",
-        "view": "list",
-        "listid": "60",
-        "Itemid": "391",
-        "resetfilters": "1",
-        "fabrik_list_filter_all": name,
-    }
-
-    try:
-        async with httpx.AsyncClient(timeout=20.0, follow_redirects=True) as client:
-            resp = await client.get(ITTF_SEARCH_URL, params=params)
-            resp.raise_for_status()
-    except Exception as e:
-        logger.error(f"ITTF search failed for '{name}': {e}")
-        return []
-
-    soup = BeautifulSoup(resp.text, "html.parser")
-    players: list[dict] = []
-
-    rows = soup.select("table.fabrikList tbody tr, .fabrik_row, [class*='fabrik_row']")
-    for row in rows[:20]:
-        cells = row.find_all("td")
-        if len(cells) < 2:
-            continue
-
-        row_text = row.get_text(separator=" ", strip=True)
-
-        player: dict = {}
-
-        id_match = re.search(r"#(\d{4,})", row_text)
-        if id_match:
-            player["ittf_id"] = int(id_match.group(1))
-
-        name_match = re.search(r"([A-Z]{2,}\s+[\w\s-]+?)(?:\s*\(|\s*#|\s*$)", row_text)
-        if name_match:
-            player["name"] = name_match.group(1).strip()
-
-        nat_match = re.search(r"\b(CHN|JPN|KOR|GER|SWE|FRA|BRA|TPE|HKG|ENG|IND|USA|AUT|ROU|ESP|CRO|SGP|NGA|POL|CZE|HUN|SVK|THA|MAS|POR|EGY|LBN|AUS|CAN|NED|BEL|DEN|FIN|NOR|TUR|IRN|QAT|PRK)\b", row_text)
-        if nat_match:
-            player["nationality"] = nat_match.group(1)
-
-        ranking_match = re.search(r"(?:Rank|#)\s*:?\s*(\d{1,4})\b", row_text)
-        if ranking_match:
-            player["ranking"] = int(ranking_match.group(1))
-
-        link = row.find("a", href=True)
-        if link and "player_id" in str(link.get("href", "")):
-            pid_match = re.search(r"player_id.*?(\d{4,})", str(link["href"]))
-            if pid_match and "ittf_id" not in player:
-                player["ittf_id"] = int(pid_match.group(1))
-
-        if player.get("ittf_id") or player.get("name"):
-            players.append(player)
-
-    if not players:
-        text = soup.get_text(separator="\n", strip=True)
-        for line in text.split("\n"):
-            entry: dict = {}
-            id_m = re.search(r"#(\d{4,})", line)
-            name_m = re.search(r"([A-Z]{2,}\s+[\w\s-]+)", line)
-            if id_m:
-                entry["ittf_id"] = int(id_m.group(1))
-            if name_m:
-                entry["name"] = name_m.group(1).strip()
-            if entry.get("ittf_id") or entry.get("name"):
-                nat_m = re.search(r"\b(CHN|JPN|KOR|GER|SWE|FRA|BRA|TPE|HKG|ENG|IND|USA|AUT)\b", line)
-                if nat_m:
-                    entry["nationality"] = nat_m.group(1)
-                players.append(entry)
-                if len(players) >= 20:
-                    break
-
-    return players
 
 
 async def fetch_ittf_player_data(ittf_id: int) -> Optional[dict]:
@@ -212,3 +133,53 @@ async def fetch_ittf_player_data(ittf_id: int) -> Optional[dict]:
         return None
 
     return data
+
+
+async def search_ittf_players(query: str) -> list[dict]:
+    """Search ITTF results site for players matching a name query."""
+    params = {
+        "option": "com_fabrik",
+        "view": "list",
+        "listid": "60",
+        "Itemid": "391",
+        "resetfilters": "1",
+        "vw_profiles___player_name": query,
+    }
+
+    try:
+        async with httpx.AsyncClient(timeout=20.0, follow_redirects=True) as client:
+            resp = await client.get(ITTF_PROFILE_URL, params=params)
+            resp.raise_for_status()
+    except Exception as e:
+        logger.error(f"ITTF search failed for '{query}': {e}")
+        return []
+
+    soup = BeautifulSoup(resp.text, "html.parser")
+    results: list[dict] = []
+
+    rows = soup.select("table.fabrikList tbody tr")
+    for row in rows[:20]:
+        cells = row.find_all("td")
+        if len(cells) < 3:
+            continue
+
+        name_tag = cells[0].find("a") or cells[0]
+        name = name_tag.get_text(strip=True)
+        if not name:
+            continue
+
+        ittf_id_match = re.search(r"player_id[^=]*=(\d+)", str(cells[0]))
+        nationality = cells[1].get_text(strip=True) if len(cells) > 1 else None
+        ranking_text = cells[2].get_text(strip=True) if len(cells) > 2 else None
+
+        entry: dict = {"name": name}
+        if ittf_id_match:
+            entry["ittf_id"] = int(ittf_id_match.group(1))
+        if nationality:
+            entry["nationality"] = nationality
+        if ranking_text and ranking_text.isdigit():
+            entry["ranking"] = int(ranking_text)
+
+        results.append(entry)
+
+    return results

@@ -36,6 +36,14 @@ export default function LandingPage() {
     }
   };
 
+  const handleAnalyticsClick = () => {
+    if (user) {
+      router.push("/dashboard");
+      return;
+    }
+    signInWithGoogle();
+  };
+
   if (!mounted) {
     return (
       <main className="min-h-screen bg-background text-foreground dark">
@@ -46,6 +54,20 @@ export default function LandingPage() {
 
   return (
     <main className="min-h-screen bg-background text-foreground dark">
+      <div className="fixed top-4 right-4 md:top-6 md:right-8 z-[60]">
+        <div className="glass-toolbar flex items-center px-1.5 py-1.5">
+          <button
+            type="button"
+            onClick={handleAnalyticsClick}
+            disabled={isLoading}
+            className="glass-tab px-3 md:px-4 text-[11px] md:text-xs"
+          >
+            <BarChart3 className="w-3.5 h-3.5" />
+            {isLoading ? "Loading..." : "Analytics"}
+          </button>
+        </div>
+      </div>
+
       {/* Navigation */}
       <motion.nav 
         initial={{ opacity: 0 }}

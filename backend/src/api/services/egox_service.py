@@ -1,13 +1,13 @@
 """
-EgoX Service - Handles exocentric to egocentric video generation.
+Video generation service for exocentric to egocentric conversion.
 
-EgoX requires:
+Requirements:
 - A100 80GB GPU
 - CUDA 12.1+
 - Pre-processed depth maps
 - Camera parameters
 
-For hackathon: Use pre-rendered ego videos for demo.
+For demo: Use pre-rendered videos.
 """
 
 import os
@@ -35,7 +35,7 @@ class EgoXJob(BaseModel):
 
 
 class EgoXService:
-    """Service for EgoX video generation via RunPod."""
+    """Service for egocentric video generation via GPU."""
     
     def __init__(self):
         self.runpod_host = os.getenv("RUNPOD_EGOX_HOST", "")
@@ -44,7 +44,7 @@ class EgoXService:
         # In-memory job tracking (use Redis in production)
         self._jobs: dict[str, EgoXJob] = {}
         
-        # Pre-rendered demo videos (for hackathon)
+        # Pre-rendered demo videos
         self.demo_videos = {
             "pingpong_demo_1": "https://example.com/demo/ego_pingpong_1.mp4",
             "pingpong_demo_2": "https://example.com/demo/ego_pingpong_2.mp4",
@@ -60,7 +60,7 @@ class EgoXService:
         video_path: str,
         use_demo: bool = True,
     ) -> EgoXJob:
-        """Start EgoX generation job."""
+        """Start generation job."""
         import uuid
         job_id = str(uuid.uuid4())
         
@@ -74,16 +74,16 @@ class EgoXService:
         self._jobs[job_id] = job
         
         if use_demo or not self.is_available:
-            # Use pre-rendered demo for hackathon
+            # Use pre-rendered demo
             asyncio.create_task(self._simulate_generation(job_id))
         else:
-            # Real EgoX generation (requires RunPod setup)
+            # Real generation (requires GPU setup)
             asyncio.create_task(self._run_egox_generation(job_id, video_path))
         
         return job
     
     async def _simulate_generation(self, job_id: str):
-        """Simulate EgoX generation with progress updates."""
+        """Simulate generation with progress updates."""
         job = self._jobs.get(job_id)
         if not job:
             return
@@ -104,7 +104,7 @@ class EgoXService:
         
         # Generation phase
         job.status = EgoXStatus.GENERATING
-        job.message = "Running EgoX model..."
+        job.message = "Running model..."
         
         for i in range(7):
             job.progress = 0.3 + (i * 0.1)
@@ -118,19 +118,19 @@ class EgoXService:
         job.ego_video_url = self.demo_videos.get("pingpong_demo_1", "")
     
     async def _run_egox_generation(self, job_id: str, video_path: str):
-        """Run actual EgoX generation on RunPod."""
-        # TODO: Implement real EgoX pipeline
+        """Run actual generation on GPU."""
+        # TODO: Implement real generation pipeline
         # 1. Download video from Supabase
         # 2. Run MiDaS depth estimation
         # 3. Estimate camera parameters
-        # 4. Run EgoX inference
+        # 4. Run model inference
         # 5. Upload result to Supabase
         
         # For now, fall back to simulation
         await self._simulate_generation(job_id)
     
     def get_job_status(self, job_id: str) -> Optional[EgoXJob]:
-        """Get status of an EgoX job."""
+        """Get status of a job."""
         return self._jobs.get(job_id)
     
     def get_session_jobs(self, session_id: str) -> list[EgoXJob]:

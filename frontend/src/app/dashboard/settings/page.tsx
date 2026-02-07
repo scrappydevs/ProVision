@@ -11,13 +11,13 @@ export default function SettingsPage() {
   const [notifications, setNotifications] = useState(true);
 
   return (
-    <div>
-      <div className="mb-4">
-        <h1 className="text-xl font-light text-foreground">Settings</h1>
+    <div className="w-full max-w-2xl mx-auto">
+      <div className="mb-8">
+        <h1 className="text-2xl font-light text-foreground">Settings</h1>
         <p className="text-sm text-muted-foreground">Manage your account and preferences</p>
       </div>
 
-      <div className="space-y-4 max-w-2xl">
+      <div className="space-y-6">
         {/* Profile Section */}
         <Card>
           <CardHeader>

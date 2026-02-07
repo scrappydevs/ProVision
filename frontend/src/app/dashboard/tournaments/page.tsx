@@ -10,27 +10,20 @@ import {
   MapPin,
   Swords,
   TrendingUp,
-  Clock,
   ChevronRight,
   Search,
-  Globe,
-  Download,
-  X,
-  Check,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
-import { Tournament, TournamentCreate, getITTFCalendar, importITTFTournaments, ITTFCalendarEvent } from "@/lib/api";
+import { Tournament, TournamentCreate } from "@/lib/api";
 import {
   useTournaments,
   useTournamentStats,
   useCreateTournament,
 } from "@/hooks/useTournaments";
-import { useQueryClient } from "@tanstack/react-query";
-import { tournamentKeys } from "@/hooks/useTournaments";
 import { TournamentForm } from "@/components/tournaments/TournamentForm";
 import { TournamentDetail } from "@/components/tournaments/TournamentDetail";
 
-type TabKey = "all" | "upcoming" | "past";
+type TabKey = "all" | "past";
 
 const levelLabels: Record<string, string> = {
   local: "Local",
@@ -61,63 +54,18 @@ export default function TournamentsPage() {
   const [activeTab, setActiveTab] = useState<TabKey>("all");
   const [selectedTournament, setSelectedTournament] = useState<Tournament | null>(null);
   const [search, setSearch] = useState("");
-  const [ittfImportOpen, setIttfImportOpen] = useState(false);
-  const [ittfEvents, setIttfEvents] = useState<ITTFCalendarEvent[]>([]);
-  const [ittfLoading, setIttfLoading] = useState(false);
-  const [selectedEvents, setSelectedEvents] = useState<Set<number>>(new Set());
-  const [importing, setImporting] = useState(false);
 
   const { data: tournaments, isLoading } = useTournaments();
   const { data: stats } = useTournamentStats();
   const createMutation = useCreateTournament();
-  const queryClient = useQueryClient();
-
-  const handleOpenITTFImport = async () => {
-    setIttfImportOpen(true);
-    setIttfLoading(true);
-    setSelectedEvents(new Set());
-    try {
-      const response = await getITTFCalendar();
-      setIttfEvents(response.data.events);
-    } catch {
-      setIttfEvents([]);
-    } finally {
-      setIttfLoading(false);
-    }
-  };
-
-  const handleImportSelected = async () => {
-    const eventsToImport = Array.from(selectedEvents).map((i) => ittfEvents[i]);
-    if (!eventsToImport.length) return;
-    setImporting(true);
-    try {
-      await importITTFTournaments(eventsToImport);
-      queryClient.invalidateQueries({ queryKey: tournamentKeys.lists() });
-      queryClient.invalidateQueries({ queryKey: tournamentKeys.stats() });
-      setIttfImportOpen(false);
-    } catch {
-      // error handled silently
-    } finally {
-      setImporting(false);
-    }
-  };
-
-  const toggleEvent = (index: number) => {
-    setSelectedEvents((prev) => {
-      const next = new Set(prev);
-      if (next.has(index)) next.delete(index);
-      else next.add(index);
-      return next;
-    });
-  };
 
   const filteredTournaments = useMemo(() => {
     if (!tournaments) return [];
-    let filtered = tournaments;
+    let filtered = tournaments.filter(
+      (t) => (t.matchup_count ?? 0) > 0 || t.status !== "upcoming"
+    );
 
-    if (activeTab === "upcoming") {
-      filtered = filtered.filter((t) => t.status === "upcoming" || t.status === "ongoing");
-    } else if (activeTab === "past") {
+    if (activeTab === "past") {
       filtered = filtered.filter((t) => t.status === "completed" || t.status === "cancelled");
     }
 
@@ -133,8 +81,7 @@ export default function TournamentsPage() {
     return filtered;
   }, [tournaments, activeTab, search]);
 
-  const upcomingCount = tournaments?.filter((t) => t.status === "upcoming" || t.status === "ongoing").length ?? 0;
-  const pastCount = tournaments?.filter((t) => t.status === "completed" || t.status === "cancelled").length ?? 0;
+  const pastCount = filteredTournaments.filter((t) => t.status === "completed" || t.status === "cancelled").length;
 
   const handleCreate = async (data: TournamentCreate) => {
     await createMutation.mutateAsync(data);
@@ -151,22 +98,14 @@ export default function TournamentsPage() {
   }
 
   return (
-    <div className="space-y-4">
+    <div className="space-y-6">
       {/* Header */}
-      <div className="flex items-center justify-between gap-4">
+      <div className="flex items-center justify-between">
         <div>
-          <h1 className="text-xl font-light text-foreground">Tournaments</h1>
+          <h1 className="text-lg font-light text-foreground">Tournaments</h1>
           <p className="text-xs text-muted-foreground mt-0.5">Track events, matchups, and results</p>
         </div>
         <div className="flex items-center gap-2">
-          <Button
-            variant="outline"
-            onClick={handleOpenITTFImport}
-            className="text-sm gap-1.5"
-          >
-            <Globe className="w-4 h-4" />
-            Import from ITTF
-          </Button>
           <Button
             onClick={() => setFormOpen(true)}
             className="bg-[#9B7B5B] hover:bg-[#8A6B4B] text-primary-foreground text-sm gap-1.5"
@@ -179,18 +118,15 @@ export default function TournamentsPage() {
 
       {/* Stats Bar */}
       {stats && (
-        <div className="grid grid-cols-2 sm:grid-cols-4 gap-2">
-          <div className="rounded-xl bg-card border border-border p-3">
+        <div className="grid grid-cols-2 sm:grid-cols-3 gap-3">
+          <div className="rounded-xl bg-card border border-border p-3.5">
             <div className="flex items-center gap-2 mb-1.5">
               <Trophy className="w-3.5 h-3.5 text-[#9B7B5B]" />
               <span className="text-[10px] text-muted-foreground uppercase tracking-wider">Tournaments</span>
             </div>
             <p className="text-xl font-light text-foreground">{stats.total_tournaments}</p>
-            <p className="text-[10px] text-muted-foreground mt-0.5">
-              {stats.upcoming_tournaments} upcoming
-            </p>
           </div>
-          <div className="rounded-xl bg-card border border-border p-3">
+          <div className="rounded-xl bg-card border border-border p-3.5">
             <div className="flex items-center gap-2 mb-1.5">
               <Swords className="w-3.5 h-3.5 text-[#9B7B5B]" />
               <span className="text-[10px] text-muted-foreground uppercase tracking-wider">Matches</span>
@@ -200,7 +136,7 @@ export default function TournamentsPage() {
               {stats.pending_matchups} pending
             </p>
           </div>
-          <div className="rounded-xl bg-card border border-border p-3">
+          <div className="rounded-xl bg-card border border-border p-3.5">
             <div className="flex items-center gap-2 mb-1.5">
               <TrendingUp className="w-3.5 h-3.5 text-green-400" />
               <span className="text-[10px] text-muted-foreground uppercase tracking-wider">Win Rate</span>
@@ -210,28 +146,15 @@ export default function TournamentsPage() {
               {stats.wins}W – {stats.losses}L
             </p>
           </div>
-          <div className="rounded-xl bg-card border border-border p-3">
-            <div className="flex items-center gap-2 mb-1.5">
-              <Clock className="w-3.5 h-3.5 text-blue-400" />
-              <span className="text-[10px] text-muted-foreground uppercase tracking-wider">Next Up</span>
-            </div>
-            <p className="text-sm font-light text-foreground truncate">
-              {tournaments?.find((t) => t.status === "upcoming")?.name || "—"}
-            </p>
-            <p className="text-[10px] text-muted-foreground mt-0.5 truncate">
-              {formatDate(tournaments?.find((t) => t.status === "upcoming")?.start_date) || "No upcoming"}
-            </p>
-          </div>
         </div>
       )}
 
       {/* Tabs + Search */}
-      <div className="flex items-center gap-3">
+      <div className="flex items-center gap-4">
         <div className="flex items-center bg-card rounded-lg border border-border p-0.5">
           {(
             [
-              { key: "all", label: "All", count: tournaments?.length ?? 0 },
-              { key: "upcoming", label: "Upcoming", count: upcomingCount },
+              { key: "all", label: "All", count: filteredTournaments.length },
               { key: "past", label: "Past", count: pastCount },
             ] as const
           ).map((tab) => (
@@ -268,8 +191,8 @@ export default function TournamentsPage() {
           <Loader2 className="w-8 h-8 text-[#9B7B5B] animate-spin" />
         </div>
       ) : !filteredTournaments.length ? (
-        <div className="flex flex-col items-center justify-center py-12">
-          <div className="w-14 h-14 rounded-xl bg-card flex items-center justify-center mb-3">
+        <div className="flex flex-col items-center justify-center py-16">
+          <div className="w-16 h-16 rounded-2xl bg-card flex items-center justify-center mb-4">
             <Trophy className="w-8 h-8 text-[#9B7B5B]/40" />
           </div>
           <h3 className="text-base font-light text-foreground mb-1">
@@ -278,7 +201,7 @@ export default function TournamentsPage() {
           <p className="text-xs text-muted-foreground mb-4 text-center max-w-sm">
             {search
               ? "Try a different search term"
-              : "Create tournaments to track upcoming events, matchups, and results."}
+              : "Create tournaments to track events, matchups, and results."}
           </p>
           {!search && (
             <Button
@@ -291,7 +214,7 @@ export default function TournamentsPage() {
           )}
         </div>
       ) : (
-        <div className="space-y-1.5">
+        <div className="space-y-2">
           {filteredTournaments.map((tournament, i) => (
             <motion.div
               key={tournament.id}
@@ -299,7 +222,7 @@ export default function TournamentsPage() {
               animate={{ opacity: 1, y: 0 }}
               transition={{ delay: i * 0.03 }}
               onClick={() => setSelectedTournament(tournament)}
-              className="rounded-xl bg-card border border-border hover:border-primary/30 p-3 cursor-pointer transition-all group"
+              className="rounded-xl bg-card border border-border hover:border-primary/30 p-4 cursor-pointer transition-all group"
             >
               <div className="flex items-center justify-between">
                 <div className="min-w-0 flex-1">
@@ -336,16 +259,7 @@ export default function TournamentsPage() {
 
                 <div className="flex items-center gap-4 shrink-0">
                   <div className="text-right">
-                    <div className="flex items-center gap-2 text-xs">
-                      <span className="text-muted-foreground">{tournament.matchup_count ?? 0} matches</span>
-                      {(tournament.win_count ?? 0) + (tournament.loss_count ?? 0) > 0 && (
-                        <span>
-                          <span className="text-green-400">{tournament.win_count}W</span>
-                          <span className="text-muted-foreground mx-0.5">–</span>
-                          <span className="text-red-400">{tournament.loss_count}L</span>
-                        </span>
-                      )}
-                    </div>
+                    <span className="text-xs text-muted-foreground">{tournament.matchup_count ?? 0} matches</span>
                   </div>
                   <ChevronRight className="w-4 h-4 text-border group-hover:text-[#9B7B5B] transition-colors" />
                 </div>
@@ -362,130 +276,6 @@ export default function TournamentsPage() {
             onClose={() => setFormOpen(false)}
             isPending={createMutation.isPending}
           />
-        )}
-
-        {ittfImportOpen && (
-          <motion.div
-            initial={{ opacity: 0 }}
-            animate={{ opacity: 1 }}
-            exit={{ opacity: 0 }}
-            className="fixed inset-0 bg-black/60 z-50 flex items-center justify-center p-4"
-            onClick={() => setIttfImportOpen(false)}
-          >
-            <motion.div
-              initial={{ scale: 0.95, opacity: 0 }}
-              animate={{ scale: 1, opacity: 1 }}
-              exit={{ scale: 0.95, opacity: 0 }}
-              className="bg-card border border-border rounded-xl w-full max-w-xl overflow-hidden max-h-[80vh] flex flex-col"
-              onClick={(e) => e.stopPropagation()}
-            >
-              <div className="flex items-center justify-between p-4 border-b border-border">
-                <div className="flex items-center gap-2">
-                  <Globe className="w-4 h-4 text-[#9B7B5B]" />
-                  <h2 className="text-sm font-medium text-foreground">Import from ITTF Calendar</h2>
-                </div>
-                <button onClick={() => setIttfImportOpen(false)}>
-                  <X className="w-4 h-4 text-muted-foreground hover:text-foreground" />
-                </button>
-              </div>
-
-              <div className="flex-1 overflow-y-auto p-4">
-                {ittfLoading ? (
-                  <div className="flex items-center justify-center py-12">
-                    <Loader2 className="w-5 h-5 text-[#9B7B5B] animate-spin" />
-                    <span className="ml-2 text-xs text-muted-foreground">Fetching WTT events...</span>
-                  </div>
-                ) : ittfEvents.length === 0 ? (
-                  <div className="text-center py-12">
-                    <Calendar className="w-8 h-8 text-border mx-auto mb-2" />
-                    <p className="text-sm text-muted-foreground">No events found</p>
-                    <p className="text-xs text-muted-foreground mt-0.5">Could not fetch WTT calendar data</p>
-                  </div>
-                ) : (
-                  <div className="space-y-2">
-                    {ittfEvents.map((event, i) => (
-                      <button
-                        key={i}
-                        onClick={() => toggleEvent(i)}
-                        className={`w-full text-left rounded-lg border p-3 transition-all ${
-                          selectedEvents.has(i)
-                            ? "border-[#9B7B5B] bg-[#9B7B5B]/5"
-                            : "border-border hover:border-[#9B7B5B]/30"
-                        }`}
-                      >
-                        <div className="flex items-center justify-between">
-                          <div className="min-w-0 flex-1">
-                            <p className="text-sm font-medium text-foreground truncate">
-                              {event.name}
-                            </p>
-                            <div className="flex items-center gap-3 mt-1 text-[10px] text-muted-foreground">
-                              {event.location && (
-                                <span className="flex items-center gap-1">
-                                  <MapPin className="w-3 h-3" />
-                                  {event.location}
-                                </span>
-                              )}
-                              {event.date_text && (
-                                <span className="flex items-center gap-1">
-                                  <Calendar className="w-3 h-3" />
-                                  {event.date_text}
-                                </span>
-                              )}
-                              {event.level && (
-                                <span className="px-1.5 py-0.5 rounded text-[9px] font-medium text-[#9B7B5B] bg-[#9B7B5B]/10">
-                                  {event.level}
-                                </span>
-                              )}
-                            </div>
-                          </div>
-                          <div className={`w-5 h-5 rounded-full border-2 flex items-center justify-center shrink-0 ml-3 transition-colors ${
-                            selectedEvents.has(i)
-                              ? "border-[#9B7B5B] bg-[#9B7B5B]"
-                              : "border-border"
-                          }`}>
-                            {selectedEvents.has(i) && (
-                              <Check className="w-3 h-3 text-[#1E1D1F]" />
-                            )}
-                          </div>
-                        </div>
-                      </button>
-                    ))}
-                  </div>
-                )}
-              </div>
-
-              {ittfEvents.length > 0 && (
-                <div className="flex items-center justify-between p-4 border-t border-border">
-                  <span className="text-xs text-muted-foreground">
-                    {selectedEvents.size} event{selectedEvents.size !== 1 ? "s" : ""} selected
-                  </span>
-                  <div className="flex items-center gap-2">
-                    <Button
-                      variant="ghost"
-                      size="sm"
-                      onClick={() => setIttfImportOpen(false)}
-                      className="text-xs"
-                    >
-                      Cancel
-                    </Button>
-                    <Button
-                      size="sm"
-                      onClick={handleImportSelected}
-                      disabled={selectedEvents.size === 0 || importing}
-                      className="bg-[#9B7B5B] hover:bg-[#8A6B4B] text-[#1E1D1F] text-xs gap-1"
-                    >
-                      {importing ? (
-                        <Loader2 className="w-3 h-3 animate-spin" />
-                      ) : (
-                        <Download className="w-3 h-3" />
-                      )}
-                      Import Selected
-                    </Button>
-                  </div>
-                </div>
-              )}
-            </motion.div>
-          </motion.div>
         )}
       </AnimatePresence>
     </div>

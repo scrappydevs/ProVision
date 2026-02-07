@@ -95,6 +95,15 @@ class RemoteEngineConfig:
         self.SSH_KEY_BASE64 = os.getenv("SSH_KEY_BASE64")
         self.SSH_PORT = int(os.getenv("SSH_PORT", "22"))
         
+        # Expand ~ to home directory, then resolve relative paths
+        if self.SSH_KEY_FILE:
+            self.SSH_KEY_FILE = os.path.expanduser(self.SSH_KEY_FILE)
+        if self.SSH_KEY_FILE and not os.path.isabs(self.SSH_KEY_FILE):
+            # Resolve relative to project root (2 levels up from backend/src)
+            project_root = os.path.abspath(os.path.join(os.path.dirname(__file__), "../.."))
+            self.SSH_KEY_FILE = os.path.join(project_root, self.SSH_KEY_FILE)
+            logger.info(f"Resolved SSH_KEY_FILE to absolute path: {self.SSH_KEY_FILE}")
+        
         # If SSH_KEY_BASE64 is provided, decode it and write to temp file
         if self.SSH_KEY_BASE64 and not self.SSH_KEY_FILE:
             try:
@@ -247,7 +256,7 @@ class RemoteEngineRunner:
         with self.ssh_session() as ssh:
             # Use curl via SSH to call the model server
             payload_json = json.dumps(payload)
-            cmd = f'''curl -s -X POST "http://localhost:{self.config.MODEL_SERVER_PORT}{endpoint}" \
+            cmd = f'''curl -s -m {timeout} -X POST "http://localhost:{self.config.MODEL_SERVER_PORT}{endpoint}" \
                 -H "Content-Type: application/json" \
                 -d '{payload_json}' '''
             
@@ -306,14 +315,14 @@ class RemoteEngineRunner:
         detection_box: Optional[List[float]] = None,
     ) -> Dict[str, Any]:
         """
-        Run SAM2 object tracking on a video.
+        Run object tracking on a video.
         
         Args:
             session_id: Session identifier
             video_path: Path to video on GPU server
             init_point: Initial click point {"x": float, "y": float}
             frame: Frame number for initialization
-            detection_box: Optional YOLO bbox [x1,y1,x2,y2] for direct box prompt
+            detection_box: Optional detection bbox [x1,y1,x2,y2] for direct box prompt
         
         Returns:
             Tracking results with masks and trajectory
@@ -340,7 +349,7 @@ class RemoteEngineRunner:
         init_point: Dict[str, float],
         frame: int
     ) -> Dict[str, Any]:
-        """Run SAM2 via script execution (fallback method)."""
+        """Run tracking via script execution (fallback method)."""
         output_dir = f"{self.config.REMOTE_RESULTS_DIR}/{session_id}/sam2"
         
         cmd = RemoteCommandBuilder.with_conda_env(
@@ -379,13 +388,13 @@ class RemoteEngineRunner:
         end_frame: Optional[int] = None
     ) -> Dict[str, Any]:
         """
-        Run SAM3D 3D point cloud segmentation.
+        Run 3D point cloud segmentation.
         
         Args:
             session_id: Session identifier
             object_id: Tracked object identifier
             video_path: Path to video on GPU server
-            masks_dir: Directory containing SAM2 masks
+            masks_dir: Directory containing masks
             start_frame: Starting frame
             end_frame: Ending frame (None for all)
         
@@ -417,7 +426,7 @@ class RemoteEngineRunner:
         start_frame: int,
         end_frame: Optional[int]
     ) -> Dict[str, Any]:
-        """Run SAM3D via script execution (fallback method)."""
+        """Run 3D segmentation via script execution (fallback method)."""
         output_dir = f"{self.config.REMOTE_RESULTS_DIR}/{session_id}/sam3d/{object_id}"
         
         end_frame_arg = f"--end-frame {end_frame}" if end_frame else ""

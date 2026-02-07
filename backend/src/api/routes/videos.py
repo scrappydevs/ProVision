@@ -216,21 +216,29 @@ async def delete_video(
         raise HTTPException(status_code=500, detail=f"Failed to delete video: {str(e)}")
 
 
-def _analyze_youtube_background(video_id: str, url: str, user_id: str, player_id: Optional[str] = None):
-    """Background task: download YouTube video, upload to storage, create session, run analysis."""
+def _analyze_youtube_background(
+    video_id: str,
+    session_id: str,
+    url: str,
+    user_id: str,
+    player_id: Optional[str] = None,
+    start_time: Optional[float] = None,
+    end_time: Optional[float] = None,
+):
+    """Background task: download YouTube video, upload to storage, populate session."""
     from ..services.youtube_service import download_youtube_video
 
     supabase = get_supabase()
 
     try:
-        logger.info(f"[VideoAnalyze] Starting download for video {video_id}: {url}")
-        local_path = download_youtube_video(url, max_duration=600)
+        logger.info(f"[VideoAnalyze] Starting download for video {video_id}: {url} (clip: {start_time}-{end_time})")
+        local_path = download_youtube_video(url, max_duration=600, start_time=start_time, end_time=end_time)
         if not local_path:
             logger.error(f"[VideoAnalyze] Download failed for {url}")
+            supabase.table("sessions").update({"status": "failed"}).eq("id", session_id).execute()
             supabase.table("videos").update({"metadata": {"analysis_status": "download_failed"}}).eq("id", video_id).execute()
             return
 
-        session_id = str(uuid.uuid4())
         ext = os.path.splitext(local_path)[1] or ".mp4"
         storage_path = f"{user_id}/{session_id}/original{ext}"
 
@@ -240,15 +248,10 @@ def _analyze_youtube_background(video_id: str, url: str, user_id: str, player_id
 
         video_url = supabase.storage.from_("provision-videos").get_public_url(storage_path)
 
-        session_data = {
-            "id": session_id,
-            "user_id": user_id,
-            "name": f"YouTube Analysis - {video_id[:8]}",
+        supabase.table("sessions").update({
             "video_path": video_url,
-            "status": "pending",
-            "created_at": datetime.utcnow().isoformat(),
-        }
-        supabase.table("sessions").insert(session_data).execute()
+            "status": "processing",
+        }).eq("id", session_id).execute()
 
         if player_id:
             try:
@@ -259,12 +262,7 @@ def _analyze_youtube_background(video_id: str, url: str, user_id: str, player_id
             except Exception as e:
                 logger.warning(f"[VideoAnalyze] Failed to link player: {e}")
 
-        supabase.table("videos").update({
-            "session_id": session_id,
-            "updated_at": datetime.utcnow().isoformat(),
-        }).eq("id", video_id).execute()
-
-        logger.info(f"[VideoAnalyze] Session created: {session_id}, triggering analysis")
+        logger.info(f"[VideoAnalyze] Session {session_id} ready for analysis")
 
         try:
             os.unlink(local_path)
@@ -275,6 +273,7 @@ def _analyze_youtube_background(video_id: str, url: str, user_id: str, player_id
     except Exception as e:
         logger.error(f"[VideoAnalyze] Failed for video {video_id}: {e}")
         try:
+            supabase.table("sessions").update({"status": "failed"}).eq("id", session_id).execute()
             supabase.table("videos").update({
                 "metadata": {"analysis_status": "failed", "error": str(e)},
             }).eq("id", video_id).execute()
@@ -282,10 +281,16 @@ def _analyze_youtube_background(video_id: str, url: str, user_id: str, player_id
             pass
 
 
+class AnalyzeRequest(BaseModel):
+    start_time: Optional[float] = None
+    end_time: Optional[float] = None
+
+
 @router.post("/{video_id}/analyze")
 async def analyze_video(
     video_id: str,
     background_tasks: BackgroundTasks,
+    body: Optional[AnalyzeRequest] = None,
     user_id: str = Depends(get_current_user_id),
 ):
     supabase = get_supabase()
@@ -303,12 +308,38 @@ async def analyze_video(
     if video_data.get("session_id"):
         return {"message": "Already analyzed", "session_id": video_data["session_id"]}
 
+    start_time = body.start_time if body else None
+    end_time = body.end_time if body else None
+
+    clip_label = ""
+    if start_time is not None and end_time is not None:
+        clip_label = f" ({int(start_time)}s-{int(end_time)}s)"
+
+    session_id = str(uuid.uuid4())
+    now = datetime.utcnow().isoformat()
+
+    supabase.table("sessions").insert({
+        "id": session_id,
+        "user_id": user_id,
+        "name": f"YouTube Analysis - {video_id[:8]}{clip_label}",
+        "status": "pending",
+        "created_at": now,
+    }).execute()
+
+    supabase.table("videos").update({
+        "session_id": session_id,
+        "updated_at": now,
+    }).eq("id", video_id).execute()
+
     background_tasks.add_task(
         _analyze_youtube_background,
         video_id=video_id,
+        session_id=session_id,
         url=video_data["url"],
         user_id=user_id,
         player_id=video_data.get("player_id"),
+        start_time=start_time,
+        end_time=end_time,
     )
 
-    return {"message": "Analysis started", "video_id": video_id}
+    return {"message": "Analysis started", "video_id": video_id, "session_id": session_id}

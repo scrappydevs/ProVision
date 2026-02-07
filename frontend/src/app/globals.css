@@ -191,14 +191,13 @@
 
 /* ========================================
    LIQUID GLASS UI - Dark Bronze Theme
-   Adapted from Yumi's glass system
    ======================================== */
 
 /* Glass Toolbar — floating pill container */
 /* Glass toolbar adapts to light/dark theme */
 .glass-toolbar {
-  backdrop-filter: blur(30px) saturate(180%);
-  -webkit-backdrop-filter: blur(30px) saturate(180%);
+  backdrop-filter: blur(48px) saturate(180%);
+  -webkit-backdrop-filter: blur(48px) saturate(180%);
   border-radius: 9999px;
   position: relative;
   overflow: hidden;
@@ -212,9 +211,9 @@
   box-shadow: inset 0 0 20px -6px rgba(155, 123, 91, 0.08), 0 8px 32px rgba(0, 0, 0, 0.4);
 }
 :is(.light) .glass-toolbar {
-  background: rgba(250, 247, 242, 0.75);
-  border: 0.5px solid rgba(138, 107, 75, 0.12);
-  box-shadow: inset 0 0 18px -6px rgba(138, 107, 75, 0.05), 0 8px 28px rgba(0, 0, 0, 0.08);
+  background: rgba(255, 255, 255, 0.85);
+  border: 0.5px solid rgba(138, 107, 75, 0.25);
+  box-shadow: inset 0 0 20px -4px rgba(138, 107, 75, 0.12), 0 10px 40px rgba(0, 0, 0, 0.15), 0 4px 16px rgba(0, 0, 0, 0.1);
 }
 
 /* Specular highlight — top light reflection */
@@ -225,10 +224,17 @@
   left: 0;
   right: 0;
   height: 50%;
-  background: linear-gradient(180deg, rgba(155, 123, 91, 0.06), transparent);
   border-radius: inherit;
   pointer-events: none;
   z-index: 1;
+}
+
+:is(.dark) .glass-toolbar::before {
+  background: linear-gradient(180deg, rgba(155, 123, 91, 0.06), transparent);
+}
+
+:is(.light) .glass-toolbar::before {
+  background: linear-gradient(180deg, rgba(255, 255, 255, 0.8), transparent);
 }
 
 /* Gradient border mask */
@@ -258,7 +264,6 @@
   border-radius: 9999px;
   font-size: 12px;
   font-weight: 500;
-  color: rgba(138, 136, 133, 0.9);
   background: transparent;
   border: none;
   cursor: pointer;
@@ -266,19 +271,48 @@
   white-space: nowrap;
 }
 
+:is(.dark) .glass-tab {
+  color: rgba(200, 198, 195, 1);
+}
+
+:is(.light) .glass-tab {
+  color: rgba(50, 50, 50, 0.8);
+}
+
 .glass-tab:hover {
-  color: var(--heroui-foreground, #E8E6E3);
   background: rgba(155, 123, 91, 0.08);
 }
 
-.glass-tab-active {
+:is(.dark) .glass-tab:hover {
   color: var(--heroui-foreground, #E8E6E3);
+}
+
+:is(.light) .glass-tab:hover {
+  color: rgba(35, 35, 35, 1);
+  background: rgba(155, 123, 91, 0.12);
+}
+
+.glass-tab-active {
   background: rgba(155, 123, 91, 0.15);
   box-shadow: inset 0 0 12px -4px rgba(155, 123, 91, 0.2), 0 2px 8px rgba(0, 0, 0, 0.15);
 }
 
+:is(.dark) .glass-tab-active {
+  color: var(--heroui-foreground, #E8E6E3);
+}
+
+:is(.light) .glass-tab-active {
+  color: rgba(25, 25, 25, 1);
+  background: rgba(155, 123, 91, 0.2);
+  box-shadow: inset 0 0 14px -4px rgba(155, 123, 91, 0.25), 0 2px 8px rgba(0, 0, 0, 0.12);
+}
+
 .glass-tab-active:hover {
   background: rgba(155, 123, 91, 0.2);
+}
+
+:is(.light) .glass-tab-active:hover {
+  background: rgba(155, 123, 91, 0.25);
 }
 
 /* Animated shimmer sweep */

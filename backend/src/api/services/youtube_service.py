@@ -59,7 +59,12 @@ def get_youtube_metadata(url: str) -> Optional[dict]:
         return None
 
 
-def download_youtube_video(url: str, max_duration: int = 300) -> Optional[str]:
+def download_youtube_video(
+    url: str,
+    max_duration: int = 600,
+    start_time: Optional[float] = None,
+    end_time: Optional[float] = None,
+) -> Optional[str]:
     try:
         import yt_dlp
 
@@ -82,15 +87,55 @@ def download_youtube_video(url: str, max_duration: int = 300) -> Optional[str]:
         with yt_dlp.YoutubeDL(ydl_opts) as ydl:
             ydl.download([url])
 
-        if os.path.exists(output_path):
-            return output_path
+        downloaded = _find_downloaded_file(temp_dir, output_path)
+        if not downloaded:
+            logger.error("Download completed but no video file found")
+            return None
 
-        for f in os.listdir(temp_dir):
-            if f.endswith((".mp4", ".webm", ".mkv")):
-                return os.path.join(temp_dir, f)
+        # Clip to the requested time range using ffmpeg
+        if start_time is not None and end_time is not None:
+            clipped = _clip_with_ffmpeg(downloaded, temp_dir, start_time, end_time)
+            if clipped:
+                return clipped
+            logger.warning("ffmpeg clip failed, returning full video")
 
-        logger.error("Download completed but no video file found")
-        return None
+        return downloaded
     except Exception as e:
         logger.error(f"Failed to download YouTube video {url}: {e}")
         return None
+
+
+def _find_downloaded_file(temp_dir: str, expected_path: str) -> Optional[str]:
+    if os.path.exists(expected_path):
+        return expected_path
+    for f in os.listdir(temp_dir):
+        if f.endswith((".mp4", ".webm", ".mkv")):
+            return os.path.join(temp_dir, f)
+    return None
+
+
+def _clip_with_ffmpeg(
+    input_path: str, temp_dir: str, start: float, end: float
+) -> Optional[str]:
+    """Clip a video to [start, end] seconds using ffmpeg (fast seek)."""
+    import subprocess
+
+    clipped_path = os.path.join(temp_dir, "clipped.mp4")
+    duration = end - start
+    cmd = [
+        "ffmpeg", "-y",
+        "-ss", str(start),
+        "-i", input_path,
+        "-t", str(duration),
+        "-c", "copy",
+        "-avoid_negative_ts", "make_zero",
+        clipped_path,
+    ]
+    try:
+        subprocess.run(cmd, check=True, capture_output=True, timeout=120)
+        if os.path.exists(clipped_path) and os.path.getsize(clipped_path) > 0:
+            os.unlink(input_path)
+            return clipped_path
+    except Exception as e:
+        logger.warning(f"ffmpeg clip failed, returning full video: {e}")
+    return None

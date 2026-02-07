@@ -28,17 +28,17 @@ async def generate_ego_video(
     request: GenerateRequest,
     user_id: str = Depends(get_current_user_id),
 ):
-    """Start EgoX ego video generation."""
+    """Start egocentric video generation."""
     supabase = get_supabase()
     
     result = supabase.table("sessions").select("*").eq("id", request.session_id).eq("user_id", user_id).single().execute()
     if not result.data:
         raise HTTPException(status_code=404, detail="Session not found")
     
-    # TODO: Start EgoX generation on RunPod
+    # TODO: Start generation on GPU
     # 1. Download video from Supabase Storage
     # 2. Run preprocessing (depth maps, camera params)
-    # 3. Run EgoX inference
+    # 3. Run model inference
     # 4. Upload generated ego video to Storage
     # 5. Update session with ego_video_path
     
@@ -47,7 +47,7 @@ async def generate_ego_video(
     return {
         "status": "started",
         "session_id": request.session_id,
-        "message": "EgoX generation started",
+        "message": "Generation started",
     }
 
 
@@ -56,7 +56,7 @@ async def get_ego_status(
     session_id: str,
     user_id: str = Depends(get_current_user_id),
 ):
-    """Check EgoX generation status."""
+    """Check generation status."""
     supabase = get_supabase()
     
     result = supabase.table("sessions").select("*").eq("id", session_id).eq("user_id", user_id).single().execute()
@@ -71,7 +71,7 @@ async def get_ego_status(
     
     if session["status"] == "processing":
         progress = 0.5
-        message = "Processing with EgoX..."
+        message = "Processing..."
     elif session["status"] == "completed":
         progress = 1.0
         message = "Generation complete"
